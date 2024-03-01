@@ -1,5 +1,5 @@
 import * as fs from "fs-extra"
-import { toSharp } from "../src/conversion"
+import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 
 async function getNoteBuffer(): Promise<Buffer> {
@@ -25,10 +25,10 @@ describe("smoke", () => {
 
   it("convert a note to png pages", async () => {
     let sn = new SupernoteX(await getNoteBuffer())
-    let images = await toSharp(sn)
+    let images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await image.toFile(`tests/output/${index}.png`)
+      await image.save(`tests/output/${index}.png`)
     }
   }, 30000)
 })

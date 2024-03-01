@@ -1,58 +1,68 @@
 import { ILayer, ISupernote } from "./format"
-import sharp, { OverlayOptions, SharpOptions } from "sharp"
+import { Image, ColorModel } from 'image-js';
 import Color from "color"
 
+type Pixel = [number, number, number, number]; // Define type for pixel data (alpha, red, green, blue)
+
+async function compositeImages(sourceImage: Image, destinationImage: Image) {
+  if (sourceImage.width !== destinationImage.width || sourceImage.height !== destinationImage.height) {
+    throw new Error('Images must have the same dimensions for compositing.');
+  }
+
+  for (let y = 0; y < destinationImage.height; y++) {
+    for (let x = 0; x < destinationImage.width; x++) {
+      const sourcePixel = sourceImage.getPixelXY(x, y) as Pixel; // Explicitly cast for type safety
+      const destinationPixel = destinationImage.getPixelXY(x, y) as Pixel;
+
+      const blendedPixel = blendPixelOverlay(sourcePixel, destinationPixel);
+      destinationImage.setPixelXY(x, y, blendedPixel);
+    }
+  }
+}
+
+function blendPixelOverlay(sourcePixel: Pixel, destinationPixel: Pixel): Pixel {
+  const [sourceA, sourceR, sourceG, sourceB] = sourcePixel;
+  const [destinationA, destinationR, destinationG, destinationB] = destinationPixel;
+
+  if (sourceR === 0 && sourceG === 0 && sourceB === 0) {
+    return [sourceA, destinationR, destinationG, destinationB] as Pixel;
+  }
+
+  return sourcePixel;
+}
+
 /**
- * Convert a Supernote file to one or more Sharp image objects.
+ * Convert a Supernote file to one or more image-js image objects.
  * @param note Parsed Supernote.
  * @param pageNumbers Optional page numbers to export (defaults to all). Indexing starts at 1.
  */
-export async function toSharp(note: ISupernote, pageNumbers?: number[]) {
+export async function toImage(note: ISupernote, pageNumbers?: number[]) {
   const pages = pageNumbers ? pageNumbers.map((n) => note.pages[n - 1]) : note.pages
   const decoder = new RattaRLEDecoder()
   return pages.map((page, pageIndex) => {
     const overlays = page.LAYERSEQ.map((name) => page[name] as ILayer)
       .filter((layer) => layer.bitmapBuffer !== null && layer.bitmapBuffer.length)
-      .map((layer): OverlayOptions => {
-        try {
+      .map((layer): Image => {
           const buffer = decoder.decode(
             layer.bitmapBuffer as Buffer,
             note.pageWidth,
             note.pageHeight
           )
-          return {
-            input: buffer,
-            raw: {
-              width: note.pageWidth,
-              height: note.pageHeight,
-              channels: 4,
-            },
-          }
-        } catch (error) {
-          throw new Error(`Could not parse ${pageIndex}-${layer.LAYERNAME}`)
-        }
+          return new Image(note.pageWidth, note.pageHeight, buffer, {components: 3, alpha: 1});
       })
       .reverse()
-    const image = sharp(getSharpBackgroundOptions(note)).composite(overlays)
-    return image
+
+      let output = overlays[0].clone();
+      for (let i = 1; i < overlays.length; i++) {
+        compositeImages(overlays[i], overlays[0]);
+      }
+
+      return output.grey({keepAlpha: true});
   })
 }
 
-/**
- * Get Sharp background creation options for a note.
- * @param note Parsed Supernote.
- * @returns Options to create a background image with Sharp.
- */
-export function getSharpBackgroundOptions(note: ISupernote): SharpOptions {
-  return {
-    create: {
-      width: note.pageWidth,
-      height: note.pageHeight,
-      channels: 4,
-      background: "white",
-    },
-  }
-}
+
+
 
 /** Color palette to use as substitutes for the Supernote's colors. */
 export interface IColorPalette extends Record<string, Color> {

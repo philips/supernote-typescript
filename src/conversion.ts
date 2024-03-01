@@ -1,4 +1,4 @@
-import { ILayer, ISupernote } from "~/format"
+import { ILayer, ISupernote } from "./format"
 import sharp, { OverlayOptions, SharpOptions } from "sharp"
 import Color from "color"
 

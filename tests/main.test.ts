@@ -1,6 +1,6 @@
 import * as fs from "fs-extra"
-import { toSharp } from "~/conversion"
-import { SupernoteX } from "~/parsing"
+import { toSharp } from "../src/conversion"
+import { SupernoteX } from "../src/parsing"
 
 async function getNoteBuffer(): Promise<Buffer> {
   return await fs.readFile("tests/input/test.note")

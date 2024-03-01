@@ -9,7 +9,7 @@ import {
   IPage,
   ISupernote,
   ITitle,
-} from "~/format"
+} from "./format"
 
 /** Get content at location. */
 export function getContentAtAddress(

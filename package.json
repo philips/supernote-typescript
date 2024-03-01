@@ -54,6 +54,6 @@
   "dependencies": {
     "color": "^4.2.3",
     "fs-extra": "^10.1.0",
-    "sharp": "^0.30.7"
+    "sharp": "^0.33.2"
   }
 }

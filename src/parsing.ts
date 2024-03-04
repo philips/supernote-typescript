@@ -6,6 +6,7 @@ import {
   ILayer,
   ILayerInfo,
   ILayerNames,
+  RecognitionStatuses,
   IPage,
   ISupernote,
   ITitle,
@@ -190,6 +191,7 @@ export class SupernoteX {
       FILE_PARSE_TYPE: "0",
       RATTA_ETMD: "0",
       APP_VERSION: "0",
+      FILE_RECOGN_TYPE: "0",
       ...data,
     }
     return this.header
@@ -209,6 +211,10 @@ export class SupernoteX {
           LAYERSWITCH: "0",
           TOTALPATH: "0",
           THUMBNAILTYPE: "0",
+          RECOGNSTATUS: RecognitionStatuses.NONE,
+          RECOGNTEXT: "0",
+          RECOGNFILE: "0",
+          RECOGNFILESTATUS: RecognitionStatuses.NONE,
           ...data,
           MAINLAYER: this._parseLayer(buffer, parseInt((data.MAINLAYER as string) ?? "0")),
           LAYER1: this._parseLayer(buffer, parseInt((data.LAYER1 as string) ?? "0")),
@@ -217,6 +223,7 @@ export class SupernoteX {
           BGLAYER: this._parseLayer(buffer, parseInt((data.BGLAYER as string) ?? "0")),
           LAYERINFO: extractLayerInfo(data["LAYERINFO"] as string),
           LAYERSEQ: (data["LAYERSEQ"] as string).split(",") as ILayerNames[],
+          text: this._parseText(buffer, data["RECOGNTEXT"] as string),
           totalPathBuffer: getContentAtAddress(
             buffer,
             parseInt((data.TOTALPATH as string) ?? "0"),
@@ -226,6 +233,31 @@ export class SupernoteX {
       })
     this.pages = pages
     return pages
+  }
+
+  /** Parse text of a Supernote file's buffer contents.
+   * Relies on the address as given in the file's footer. */
+  _parseText(buffer: Buffer, text: string) {
+    if (text === "0" || text === undefined) {
+      return
+    }
+
+    const address = parseInt(text)
+    const data = getContentAtAddress(buffer, address, this.lengthFieldSize)
+
+    if (data === null) {
+      return
+    }
+
+    const recognJson = data.toString("utf-8")
+    const recogn = JSON.parse(atob(recognJson))
+
+    const elements = recogn.elements || [];
+    const labels = elements
+      .filter((e: any) => e.type === "Text")
+      .map((e: any) => e.label);
+
+    return labels.join("\n")
   }
 
   /** Parse layer at a specific address in a Supernote file's buffer contents. */

@@ -23,6 +23,14 @@ describe("smoke", () => {
     expect(sn).not.toBeUndefined()
   })
 
+  it("should parse text from Supernote X2 file", async () => {
+    let sn = new SupernoteX(await getNoteBuffer("nomad-3.15.27-blank-shapes-and-RTR.note"))
+    expect(sn.pages[0].text).toEqual(`Square
+Triangle
+Circle
+Star`)
+  })
+
   it("convert a simple note to png pages", async () => {
     let sn = new SupernoteX(await getNoteBuffer("test.note"))
     let images = await toImage(sn)

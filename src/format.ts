@@ -55,6 +55,8 @@ export interface IHeader {
   RATTA_ETMD: string
   /** Supernote app version. Currently unused (0). */
   APP_VERSION: string
+  /** Handwriting recognition and text enabled */
+  FILE_RECOGN_TYPE: string
 }
 
 export interface IKeyword {
@@ -116,6 +118,8 @@ export interface ILayer {
   bitmapBuffer: Buffer | null
 }
 
+export enum RecognitionStatuses { NONE = "0", DONE = "1", RUNNING = "2"}
+
 export interface IPage {
   /** Page style (template). */
   PAGESTYLE: string
@@ -141,6 +145,16 @@ export interface IPage {
   TOTALPATH: string
   /** Layer thumbnail type. */
   THUMBNAILTYPE: string
+  /** Status of text recognition */
+  RECOGNSTATUS: RecognitionStatuses
+  /** Address of recognition text */
+  RECOGNTEXT: string
+  /** Address of recognition file */
+  RECOGNFILE: string
+  /** Status of text recognition */
+  RECOGNFILESTATUS: RecognitionStatuses
+  /** Parsed text from recognition */
+  text: string
   /** Total path contents. */
   totalPathBuffer: Buffer | null
 }

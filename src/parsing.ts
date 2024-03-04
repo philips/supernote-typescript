@@ -145,11 +145,12 @@ export class SupernoteX {
 
   /** Parse Supernote file signature from buffer. */
   _parseSignature(buffer: Buffer): string {
-    const pattern = /^noteSN_FILE_VER_\d{8}/
+    const pattern = /^noteSN_FILE_VER_(\d{8})/
     const content = buffer.toString(undefined, 0, 24)
-    const isMatch = pattern.test(content)
-    if (!isMatch) throw new Error("Cannot parse this file. Signature doesn't match.")
+    const match = content.match(pattern)
+    if (!match) throw new Error("Cannot parse this file. Signature doesn't match.")
     this.signature = content
+    this.version = parseFloat(match[1])
     return this.signature
   }
 

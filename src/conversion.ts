@@ -74,6 +74,11 @@ export interface IColorPalette extends Record<string, Color> {
   markerBlack: Color
   markerDarkGray: Color
   markerGray: Color
+
+  darkGrayX2: Color,
+  grayX2: Color,
+  markerDarkGrayX2: Color,
+  markerGrayX2: Color,
 }
 
 /** Default color palette to use based on named colors in the color library. */
@@ -86,6 +91,11 @@ const defaultPalette: IColorPalette = {
   markerBlack: Color("black"),
   markerDarkGray: Color("darkgray"),
   markerGray: Color("gray"),
+
+  darkGrayX2: Color("darkgray"),
+  grayX2: Color("gray"),
+  markerDarkGrayX2: Color("darkgray"),
+  markerGrayX2: Color("gray"),
 }
 
 /** An encoded color palette as found in the Supernote's file buffer. */
@@ -98,6 +108,11 @@ export interface IEncodedPalette extends Record<string, number> {
   markerBlack: number
   markerDarkGray: number
   markerGray: number
+
+  darkGrayX2: number,
+  grayX2: number,
+  markerDarkGrayX2: number,
+  markerGrayX2: number,
 }
 
 /** Decoder for the Ratta RLE protocol. */
@@ -111,6 +126,11 @@ export class RattaRLEDecoder {
     markerBlack: 0x66,
     markerDarkGray: 0x67,
     markerGray: 0x68,
+
+    darkGrayX2:0x9D,
+    grayX2: 0xC9,
+    markerDarkGrayX2: 0x9E,
+    markerGrayX2: 0xCA,
   }
   specialLengthMarker = 0xff
   specialLength = 0x4000

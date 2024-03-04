@@ -10,6 +10,8 @@ export interface ISupernote {
   lengthFieldSize: number
   /** File type signature. */
   signature: string
+  /** Version number in YYYYmmdd e.g. 20230015 */
+  version: number
   /** Default layers. */
   defaultLayers: string[]
   /** Header keyworded data. */

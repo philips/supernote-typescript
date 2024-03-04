@@ -6,6 +6,16 @@ Ratta Supernote has often commented that the file-format is yet unstable and sho
 
 For some quick snippets, take a look at the [smoke tests](./tests/main.test.ts).
 
+## Developer Notes
+
+### Publish
+
+```
+npm version patch
+npm run build
+npm publish
+```
+
 ## Thank You
 
 - Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for developing the initial supernote Typescript library I forked.

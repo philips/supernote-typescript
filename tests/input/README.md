@@ -1,0 +1,2 @@
+'nomad-3.15.27-blank-2p.note' contains two pages of handwritten text, and demos the available writing tools. This was done using the blank background template, and contains a link to the first page on the second page.
+'nomad-3.15.27-blank-shapes-and-RTR.note' conains a single page of shapes, patterns, and handwritten text. Headings and keyword highlighting included in file. This file was created using Real Time Recognition (allows export of handwritten notes as text within the nomad), with the blank background template.

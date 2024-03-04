@@ -28,7 +28,7 @@ describe("smoke", () => {
     let images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await image.save(`tests/output/${index}.png`)
+      await image.save(`tests/output/test.note-${index}.png`)
     }
   }, 30000)
 
@@ -37,7 +37,7 @@ describe("smoke", () => {
     let images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await image.save(`tests/output/${index}.png`)
+      await image.save(`tests/output/nomad-3.15.27-blank-2p.note-${index}.png`)
     }
   }, 30000)
 
@@ -46,7 +46,7 @@ describe("smoke", () => {
     let images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await image.save(`tests/output/${index}.png`)
+      await image.save(`tests/output/nomad-3.15.27-blank-shapes-and-RTR.note-${index}.png`)
     }
   }, 30000)
 })

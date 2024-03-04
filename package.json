@@ -1,6 +1,6 @@
 {
-  "name": "supernote",
-  "version": "0.1.0",
+  "name": "supernote-typescript",
+  "version": "0.2.0",
   "description": "Supernote file-format support.",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
@@ -14,19 +14,19 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://gitlab.com/Tiemen/supernote.git"
+    "url": "git+https://github.com/philips/supernote-typescript.git"
   },
   "keywords": [
     "supernote",
     "typescript",
     "library"
   ],
-  "author": "Tiemen Schuijbroek",
+  "author": "Brandon Philips",
   "license": "GPL-3.0-or-later",
   "bugs": {
-    "url": "https://gitlab.com/Tiemen/supernote/issues"
+    "url": "https://github.com/philips/supernote-typescript/issues"
   },
-  "homepage": "https://gitlab.com/Tiemen/supernote#readme",
+  "homepage": "https://gitlab.com/philips/supernote-typescript",
   "devDependencies": {
     "@types/color": "^3.0.3",
     "@types/fs-extra": "^9.0.13",

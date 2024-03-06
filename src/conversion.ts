@@ -24,8 +24,9 @@ function blendPixelOverlay(sourcePixel: Pixel, destinationPixel: Pixel): Pixel {
   const [sourceA, sourceR, sourceG, sourceB] = sourcePixel;
   const [destinationA, destinationR, destinationG, destinationB] = destinationPixel;
 
-  if (sourceR === 0 && sourceG === 0 && sourceB === 0) {
-    return [sourceA, destinationR, destinationG, destinationB] as Pixel;
+  // HACK: if the pixel is fully transparent just pass the lower pixel through
+  if (sourceR === 0 && sourceG === 0 && sourceB === 0 && sourceA == 0) {
+    return [destinationA, destinationR, destinationG, destinationB] as Pixel;
   }
 
   return sourcePixel;
@@ -36,29 +37,36 @@ function blendPixelOverlay(sourcePixel: Pixel, destinationPixel: Pixel): Pixel {
  * @param note Parsed Supernote.
  * @param pageNumbers Optional page numbers to export (defaults to all). Indexing starts at 1.
  */
-export async function toImage(note: ISupernote, pageNumbers?: number[]) {
+export function toImage(note: ISupernote, pageNumbers?: number[]) {
   const pages = pageNumbers ? pageNumbers.map((n) => note.pages[n - 1]) : note.pages
   const decoder = new RattaRLEDecoder()
-  return pages.map((page, pageIndex) => {
+  return Promise.all(pages.map(async (page, pageIndex) => {
     const overlays = page.LAYERSEQ.map((name) => page[name] as ILayer)
-      .filter((layer) => layer.bitmapBuffer !== null && layer.bitmapBuffer.length)
-      .map((layer): Image => {
-          const buffer = decoder.decode(
+      .filter((layer) => layer.bitmapBuffer !== null && layer.bitmapBuffer.length);
+
+    const promises = overlays.map(async (layer): Promise<Image> => {
+          let buffer = null
+
+          if (layer.LAYERNAME == "BGLAYER" && page.PAGESTYLE.startsWith('user_')) {
+            return await Image.load(layer.bitmapBuffer as Buffer)
+          }
+          buffer = decoder.decode(
             layer.bitmapBuffer as Buffer,
             note.pageWidth,
-            note.pageHeight
+            note.pageHeight,
           )
           return new Image(note.pageWidth, note.pageHeight, buffer, {components: 3, alpha: 1});
-      })
-      .reverse()
+    })
 
-      let output = overlays[0].clone();
-      for (let i = 1; i < overlays.length; i++) {
-        compositeImages(overlays[i], overlays[0]);
-      }
+    let images = await Promise.all(promises);
+    images = images.reverse();
+    let output = images[0].clone();
+    for (let i = 1; i < overlays.length; i++) {
+      compositeImages(images[i], output);
+    }
 
-      return output.grey({keepAlpha: true});
-  })
+    return output.grey({keepAlpha: true});
+  }))
 }
 
 
@@ -199,7 +207,7 @@ export class RattaRLEDecoder {
     }
 
     if (holder !== null) {
-      ;[color, length] = holder as [number, number]
+      [color, length] = holder as [number, number]
       length = this.adjustTailLength(length, this.getChunksLength(chunks), expectedLength)
       if (length > 0) {
         this.addColorBuffer(chunks, color, length, translation)
@@ -208,7 +216,7 @@ export class RattaRLEDecoder {
 
     let result = Buffer.concat(chunks)
     if (result.length !== expectedLength)
-      throw new Error("Buffer length doesn't match expected length.")
+      throw new Error(`Buffer length ${result.length} doesn't match expected length ${expectedLength}.`)
     return result
   }
 
@@ -220,6 +228,9 @@ export class RattaRLEDecoder {
   ): Buffer[] {
     let newColor = encodedColor === -1 ? Color("transparent") : translation[encodedColor]
     let chunk: Buffer
+    if (newColor === undefined) {
+      throw Error(`unknown color 0x${encodedColor.toString(16)}`)
+    }
     if (newColor.alpha() === 0) {
       chunk = Buffer.from(new Uint8Array([0, 0, 0, 0]))
     } else {

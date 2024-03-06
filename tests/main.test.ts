@@ -68,3 +68,14 @@ Ama çıkmamış da olabilirim.`)
     }
   }, 30000)
 })
+
+describe("A5X", () => {
+  it("convert a note from a A5X with Chauvet 2.14.28 to png pages", async () => {
+    let sn = new SupernoteX(await getNoteBuffer("a5x-2.14.28.note"))
+    let images = await toImage(sn)
+    expect(images).not.toBeUndefined()
+    for await (const [index, image] of images.entries()) {
+      await image.save(`tests/output/a5x-2.14.28.note-${index}.png`)
+    }
+  }, 30000)
+})

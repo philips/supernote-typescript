@@ -31,6 +31,16 @@ Circle
 Star`)
   })
 
+  it("should parse text from turkish file", async () => {
+    let sn = new SupernoteX(await getNoteBuffer("turkish.note"))
+    expect(sn.pages[0].text).toEqual(`Şimdi ben buraya neden çıktım?
+Niçin çıktım?
+Nasıl Çıktım?
+Bunu izaha gerek yok.
+Gördünüz, yürüdüm çıktım.
+Ama çıkmamış da olabilirim.`)
+  })
+
   it("convert a simple note to png pages", async () => {
     let sn = new SupernoteX(await getNoteBuffer("test.note"))
     let images = await toImage(sn)

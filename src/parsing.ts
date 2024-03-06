@@ -249,13 +249,13 @@ export class SupernoteX {
       return
     }
 
-    const recognJson = data.toString("utf-8")
+    const recognJson = data.toString("utf8")
     const recogn = JSON.parse(atob(recognJson))
 
     const elements = recogn.elements || [];
     const labels = elements
       .filter((e: any) => e.type === "Text")
-      .map((e: any) => e.label);
+      .map((e: any) => decodeURIComponent(escape(e.label))); // Decode using windows-1254 encoding
 
     return labels.join("\n")
   }

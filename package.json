@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc",
     "test": "jest --watch",
+    "test-mirror": "jest --watch -t mirror",
     "coverage": "jest --coverage"
   },
   "repository": {
@@ -52,6 +53,7 @@
     "testRegex": "^.+\\.test\\.ts$"
   },
   "dependencies": {
+    "axios": "^1.6.8",
     "color": "^4.2.3",
     "fs-extra": "^10.1.0",
     "image-js": "^0.35.5"

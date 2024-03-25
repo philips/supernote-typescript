@@ -1,5 +1,6 @@
 lib/*
 node_modules/
 tests/output/*.png
+tests/output/*.jpg
 *.DS_Store*
 package-lock.json

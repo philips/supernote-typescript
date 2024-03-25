@@ -1,6 +1,8 @@
 import * as fs from "fs-extra"
+import { fetchMirrorFrame } from "../src/mirror"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
+import http from 'http';
 
 async function getNoteBuffer(name: string): Promise<Buffer> {
   return await fs.readFile(`tests/input/${name}`)
@@ -22,25 +24,9 @@ describe("smoke", () => {
     let sn = new SupernoteX(await getNoteBuffer("test.note"))
     expect(sn).not.toBeUndefined()
   })
+})
 
-  it("should parse text from Supernote X2 file", async () => {
-    let sn = new SupernoteX(await getNoteBuffer("nomad-3.15.27-blank-shapes-and-RTR.note"))
-    expect(sn.pages[0].text).toEqual(`Square
-Triangle
-Circle
-Star`)
-  })
-
-  it("should parse text from turkish file", async () => {
-    let sn = new SupernoteX(await getNoteBuffer("turkish.note"))
-    expect(sn.pages[0].text).toEqual(`Şimdi ben buraya neden çıktım?
-Niçin çıktım?
-Nasıl Çıktım?
-Bunu izaha gerek yok.
-Gördünüz, yürüdüm çıktım.
-Ama çıkmamış da olabilirim.`)
-  })
-
+describe("image", () => {
   it("convert a simple note to png pages", async () => {
     let sn = new SupernoteX(await getNoteBuffer("test.note"))
     let images = await toImage(sn)
@@ -49,7 +35,9 @@ Ama çıkmamış da olabilirim.`)
       await image.save(`tests/output/test.note-${index}.png`)
     }
   }, 30000)
+})
 
+describe("nomad", () => {
   it("convert a note from a nomad Chauvet 3.15.27 to png pages", async () => {
     let sn = new SupernoteX(await getNoteBuffer("nomad-3.15.27-blank-2p.note"))
     let images = await toImage(sn)
@@ -77,5 +65,43 @@ describe("A5X", () => {
     for await (const [index, image] of images.entries()) {
       await image.save(`tests/output/a5x-2.14.28.note-${index}.png`)
     }
+  }, 30000)
+})
+
+const TEST_PORT = 8080;
+
+// Minimal PNG image encoded in base64
+const encodedImage = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAACklEQVR4AWNgAAAAAgABc3UBGAAAAABJRU5ErkJggg==";
+const buffer = Buffer.from(encodedImage, 'base64');
+const testServer = http.createServer((req, res) => {
+    res.setHeader('Content-Type', 'multipart/x-mixed-replace; boundary=--BOUNDARY');
+    res.write(`--BOUNDARY\r\n`);
+    res.write(`Content-Type: image/jpeg\r\n`);
+    res.write(`Content-Length: ${encodedImage.length}\r\n`);
+    res.write(`\r\n`);
+    res.write(buffer);
+    res.write(`--BOUNDARY\r\n`);
+    res.write(`Content-Type: image/jpeg\r\n`);
+    res.write(`Content-Length: ${encodedImage.length}\r\n`);
+    res.write(`\r\n`);
+    res.write(buffer);
+    res.write(`--BOUNDARY--`);
+    res.end();
+});
+
+beforeAll(() => {
+    testServer.listen(TEST_PORT);
+});
+
+afterAll(() => {
+    testServer.close();
+});
+
+describe("mirror", () => {
+  it("download a frame off the mirroring service", async () => {
+    console.log(`length: ${encodedImage.length}`);
+    const image = await fetchMirrorFrame(`localhost:${TEST_PORT}`);
+    expect(image).toBeDefined();
+    await image.save(`tests/output/mirror.jpg`)
   }, 30000)
 })

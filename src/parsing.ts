@@ -12,27 +12,51 @@ import {
   ITitle,
 } from "./format"
 
+/*
+ * Need to make sure that buffer isn't trying to write out of bounds.
+ */
+function checkOffset (offset: number, ext: number, length: number) {
+  if ((offset % 1) !== 0 || offset < 0) throw new RangeError('offset is not uint')
+  if (offset + ext > length) throw new RangeError('Trying to access beyond buffer length')
+}
+
+function readUintLE(data: Uint8Array, offset: number, byteLength: number): number {
+  offset = offset >>> 0
+  byteLength = byteLength >>> 0
+  checkOffset(offset, byteLength, data.length)
+
+  let val = data[offset]
+  let mul = 1
+  let i = 0
+  while (++i < byteLength && (mul *= 0x100)) {
+    val += data[offset + i] * mul
+  }
+
+  return val
+}
+
 /** Get content at location. */
 export function getContentAtAddress(
-  buffer: Buffer,
+  buffer: Uint8Array,
   address: number,
   byteLength: number
-): Buffer | null {
+): Uint8Array | null {
   if (address === 0) return null
-  const blockLength = buffer.readUintLE(address, byteLength)
+  const blockLength = readUintLE(buffer, address, byteLength)
   const content = buffer.subarray(address + byteLength, address + byteLength + blockLength)
   return content
 }
 
 /** Parse key-value pairs. */
 export function parseKeyValue(
-  buffer: Buffer,
+  buffer: Uint8Array,
   address: number,
   byteLength: number
 ): Record<string, string | string[]> {
   const content = getContentAtAddress(buffer, address, byteLength)
   if (content === null) return {}
-  return extractKeyValue(content.toString())
+  const str = uint8ArrayToString(content);
+  return extractKeyValue(str)
 }
 
 /** Extract key-value pairs from content. */
@@ -120,10 +144,24 @@ export function extractLayerInfo(content: string): ILayerInfo[] {
   return layerInfos
 }
 
+function uint8ArrayToString(uint8Array: Uint8Array, encoding: string = 'utf8', start: number = 0, end?: number): string {
+  // Determine the end index
+  end = end || uint8Array.length;
+
+  // Slice the Uint8Array to get the desired portion
+  const slicedArray = uint8Array.slice(start, end);
+
+  // Create a new text decoder with the specified encoding
+  const decoder = new TextDecoder(encoding);
+
+  // Decode the sliced Uint8Array into a string
+  return decoder.decode(slicedArray);
+}
+
 /** Supernote X series note. */
 export interface SupernoteX extends ISupernote {}
 export class SupernoteX {
-  constructor(buffer: Buffer) {
+  constructor(buffer: Uint8Array) {
     this.pageWidth = 1404
     this.pageHeight = 1872
     this.addressSize = 4
@@ -133,7 +171,7 @@ export class SupernoteX {
   }
 
   /** Parse note contents from buffer. */
-  _parseBuffer(buffer: Buffer): Partial<SupernoteX> {
+  _parseBuffer(buffer: Uint8Array): Partial<SupernoteX> {
     this._parseSignature(buffer)
     this._parseFooter(buffer)
     this._parseHeader(buffer)
@@ -145,9 +183,9 @@ export class SupernoteX {
   }
 
   /** Parse Supernote file signature from buffer. */
-  _parseSignature(buffer: Buffer): string {
+  _parseSignature(buffer: Uint8Array): string {
     const pattern = /^noteSN_FILE_VER_(\d{8})/
-    const content = buffer.toString(undefined, 0, 24)
+    const content = uint8ArrayToString(buffer, 'utf8', 0, 24)
     const match = content.match(pattern)
     if (!match) throw new Error("Cannot parse this file. Signature doesn't match.")
     this.signature = content
@@ -156,10 +194,10 @@ export class SupernoteX {
   }
 
   /** Parse the footer of a Supernote file's buffer contents. */
-  _parseFooter(buffer: Buffer): IFooter {
+  _parseFooter(buffer: Uint8Array): IFooter {
     const chunk = buffer.subarray(buffer.length - this.addressSize)
-    const address = chunk.readUIntLE(0, this.addressSize)
-    const data = parseKeyValue(buffer, address, this.lengthFieldSize)
+    const address = readUintLE(chunk, 0, this.addressSize)
+    const data =  parseKeyValue(buffer, address, this.lengthFieldSize)
     const nested = extractNestedKeyValue(data, "_", ["PAGE"])
     this.footer = {
       FILE: { FEATURE: "24" },
@@ -175,7 +213,7 @@ export class SupernoteX {
 
   /** Parse the header of a Supernote file's buffer contents.
    * Relies on the address as given in the file's footer. */
-  _parseHeader(buffer: Buffer): IHeader {
+  _parseHeader(buffer: Uint8Array): IHeader {
     const address = this.footer.FILE?.FEATURE ? parseInt(this.footer.FILE.FEATURE) : 24
     const data = parseKeyValue(buffer, address, this.lengthFieldSize)
     this.header = {
@@ -199,7 +237,7 @@ export class SupernoteX {
 
   /** Parse pages of a Supernote file's buffer contents.
    * Relies on the address as given in the file's footer. */
-  _parsePages(buffer: Buffer) {
+  _parsePages(buffer: Uint8Array) {
     const pages: IPage[] = Array.from(Object.keys(this.footer.PAGE))
       .sort()
       .map((idx) => {
@@ -237,7 +275,7 @@ export class SupernoteX {
 
   /** Parse text of a Supernote file's buffer contents.
    * Relies on the address as given in the file's footer. */
-  _parseText(buffer: Buffer, text: string) {
+  _parseText(buffer: Uint8Array, text: string) {
     if (text === "0" || text === undefined) {
       return
     }
@@ -249,7 +287,7 @@ export class SupernoteX {
       return
     }
 
-    const recognJson = data.toString("utf8")
+    const recognJson = new TextDecoder('utf8').decode(data);
     const recogn = JSON.parse(atob(recognJson))
 
     const elements = recogn.elements || [];
@@ -261,7 +299,7 @@ export class SupernoteX {
   }
 
   /** Parse layer at a specific address in a Supernote file's buffer contents. */
-  _parseLayer(buffer: Buffer, address: number): ILayer {
+  _parseLayer(buffer: Uint8Array, address: number): ILayer {
     const data = parseKeyValue(buffer, address, this.lengthFieldSize)
     const bitmapBuffer = getContentAtAddress(
       buffer,
@@ -282,7 +320,7 @@ export class SupernoteX {
   }
 
   /** Parse cover from Supernote file's buffer contents. */
-  _parseCover(buffer: Buffer): ICover | undefined {
+  _parseCover(buffer: Uint8Array): ICover | undefined {
     const address = parseInt(this.footer.COVER["0"] ?? this.footer.COVER["1"])
     if (address && address > 0) {
       const bitmapBuffer = getContentAtAddress(buffer, address, this.lengthFieldSize)
@@ -292,7 +330,7 @@ export class SupernoteX {
   }
 
   /** Parse keywords from Supernote file's buffer contents. */
-  _parseKeywords(buffer: Buffer): Record<string, IKeyword[]> {
+  _parseKeywords(buffer: Uint8Array): Record<string, IKeyword[]> {
     this.keywords = {}
     Object.entries(this.footer.KEYWORD).forEach(([key, value]) => {
       if (!(key in this.keywords)) this.keywords[key] = []
@@ -307,7 +345,7 @@ export class SupernoteX {
   }
 
   /** Parse a single keyword entry at a certain buffer address. */
-  _parseKeyword(buffer: Buffer, address: number): IKeyword {
+  _parseKeyword(buffer: Uint8Array, address: number): IKeyword {
     const data = parseKeyValue(buffer, address, this.lengthFieldSize)
     const bitmapBuffer = getContentAtAddress(
       buffer,
@@ -328,7 +366,7 @@ export class SupernoteX {
   }
 
   /** Parse titles from Supernote file's buffer contents. */
-  _parseTitles(buffer: Buffer): Record<string, ITitle[]> {
+  _parseTitles(buffer: Uint8Array): Record<string, ITitle[]> {
     this.titles = {}
     Object.entries(this.footer.TITLE).forEach(([key, value]) => {
       if (!(key in this.titles)) this.titles[key] = []
@@ -343,7 +381,7 @@ export class SupernoteX {
   }
 
   /** Parse a single title entry at a certain buffer address. */
-  _parseTitle(buffer: Buffer, address: number): ITitle {
+  _parseTitle(buffer: Uint8Array, address: number): ITitle {
     const data = parseKeyValue(buffer, address, this.lengthFieldSize)
     const bitmapBuffer = getContentAtAddress(
       buffer,

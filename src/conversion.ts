@@ -1,8 +1,28 @@
 import { ILayer, ISupernote } from "./format"
-import { Image, ColorModel } from 'image-js';
+import { Image } from 'image-js';
 import Color from "color"
 
 type Pixel = [number, number, number, number]; // Define type for pixel data (alpha, red, green, blue)
+
+function concatUint8Arrays(chunks: Uint8Array[]): Uint8Array {
+  // Calculate the total length of the concatenated Uint8Array
+  let totalLength = 0;
+  for (const chunk of chunks) {
+      totalLength += chunk.length;
+  }
+
+  // Create a new Uint8Array with the total length
+  const concatenatedArray = new Uint8Array(totalLength);
+
+  // Copy each chunk into the concatenated array
+  let offset = 0;
+  for (const chunk of chunks) {
+      concatenatedArray.set(chunk, offset);
+      offset += chunk.length;
+  }
+
+  return concatenatedArray;
+}
 
 async function compositeImages(sourceImage: Image, destinationImage: Image) {
   if (sourceImage.width !== destinationImage.width || sourceImage.height !== destinationImage.height) {
@@ -48,10 +68,10 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
           let buffer = null
 
           if (layer.LAYERNAME == "BGLAYER" && page.PAGESTYLE.startsWith('user_')) {
-            return await Image.load(layer.bitmapBuffer as Buffer)
+            return await Image.load(layer.bitmapBuffer as Uint8Array)
           }
           buffer = decoder.decode(
-            layer.bitmapBuffer as Buffer,
+            layer.bitmapBuffer as Uint8Array,
             note.pageWidth,
             note.pageHeight,
           )
@@ -153,7 +173,7 @@ export class RattaRLEDecoder {
    * @returns Decoded buffer.
    * Adopted from https://github.com/jya-dev/supernote-tool.
    */
-  decode(buffer: Buffer, width: number, height: number, palette?: IColorPalette, allBlank = false) {
+  decode(buffer: Uint8Array, width: number, height: number, palette?: IColorPalette, allBlank = false) {
     const pal = palette ?? defaultPalette
     const translation = Object.entries(this.encodedPalette).reduce(
       (acc: Record<number, Color>, [key, value]) => {
@@ -164,7 +184,7 @@ export class RattaRLEDecoder {
     )
 
     const expectedLength = width * height * 4
-    const chunks: Buffer[] = []
+    const chunks: Uint8Array[] = []
     let waiting: [number, number][] = []
     let holder: [number, number] | null = null
     let [color, length] = [0, 0]
@@ -214,27 +234,27 @@ export class RattaRLEDecoder {
       }
     }
 
-    let result = Buffer.concat(chunks)
+    let result = concatUint8Arrays(chunks)
     if (result.length !== expectedLength)
-      throw new Error(`Buffer length ${result.length} doesn't match expected length ${expectedLength}.`)
+      throw new Error(`Uint8Array length ${result.length} doesn't match expected length ${expectedLength}.`)
     return result
   }
 
   addColorBuffer(
-    chunks: Buffer[],
+    chunks: Uint8Array[],
     encodedColor: number,
     length: number,
     translation: Record<number, Color>
-  ): Buffer[] {
+  ): Uint8Array[] {
     let newColor = encodedColor === -1 ? Color("transparent") : translation[encodedColor]
-    let chunk: Buffer
+    let chunk: Uint8Array
     if (newColor === undefined) {
       throw Error(`unknown color 0x${encodedColor.toString(16)}`)
     }
     if (newColor.alpha() === 0) {
-      chunk = Buffer.from(new Uint8Array([0, 0, 0, 0]))
+      chunk = Uint8Array.from(new Uint8Array([0, 0, 0, 0]))
     } else {
-      chunk = Buffer.from(new Uint8Array([...newColor.rgb().array(), ~~(255 * newColor.alpha())]))
+      chunk = Uint8Array.from(new Uint8Array([...newColor.rgb().array(), ~~(255 * newColor.alpha())]))
     }
     for (let index = 0; index < length; index++) {
       chunks.push(chunk)
@@ -254,7 +274,7 @@ export class RattaRLEDecoder {
     return 0
   }
 
-  getChunksLength(chunks: Buffer[]): number {
+  getChunksLength(chunks: Uint8Array[]): number {
     return chunks.reduce((acc: number, chunk) => acc + chunk.length, 0)
   }
 }

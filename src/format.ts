@@ -75,7 +75,7 @@ export interface IKeyword {
   /** Keyword word. */
   KEYWORD: string
   /** Keyword bitmap content. */
-  bitmapBuffer: Buffer | null
+  bitmapBuffer: Uint8Array | null
 }
 
 export interface ITitle {
@@ -94,7 +94,7 @@ export interface ITitle {
   /** Title style. */
   TITLESTYLE: string
   /** Title bitmap content. */
-  bitmapBuffer: Buffer | null
+  bitmapBuffer: Uint8Array | null
 }
 
 export type ILayerNames = "MAINLAYER" | "LAYER1" | "LAYER2" | "LAYER3" | "BGLAYER"
@@ -115,7 +115,7 @@ export interface ILayer {
   /** Layer recognition. */
   LAYERRECOGN: string
   /** Layer bitmap content. */
-  bitmapBuffer: Buffer | null
+  bitmapBuffer: Uint8Array | null
 }
 
 export enum RecognitionStatuses { NONE = "0", DONE = "1", RUNNING = "2"}
@@ -156,7 +156,7 @@ export interface IPage {
   /** Parsed text from recognition */
   text: string
   /** Total path contents. */
-  totalPathBuffer: Buffer | null
+  totalPathBuffer: Uint8Array | null
 }
 
 export interface ILayerInfo {
@@ -197,5 +197,5 @@ export interface IFooter {
 
 export type ICover = {
   /** Cover bitmap content. */
-  bitmapBuffer: Buffer | null
+  bitmapBuffer: Uint8Array | null
 }

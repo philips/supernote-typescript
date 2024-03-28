@@ -3,15 +3,22 @@ import { fetchMirrorFrame } from "../src/mirror"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import http from 'http';
-import os from 'os';
 
-async function getNoteBuffer(name: string): Promise<Buffer> {
-  return await fs.readFile(`tests/input/${name}`)
+function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+      fs.readFile(`tests/input/${filePath}`, (err, data) => {
+          if (err) {
+              reject(err);
+          } else {
+              resolve(new Uint8Array(data.buffer));
+          }
+      });
+  });
 }
 
 describe("smoke", () => {
   it("opens the test note", async () => {
-    let buf = await getNoteBuffer("test.note")
+    let buf = await readFileToUint8Array("test.note")
     expect(buf.byteLength).toEqual(263119)
   })
 
@@ -22,14 +29,14 @@ describe("smoke", () => {
   })
 
   it("should parse a Supernote X file", async () => {
-    let sn = new SupernoteX(await getNoteBuffer("test.note"))
+    let sn = new SupernoteX(await readFileToUint8Array("test.note"))
     expect(sn).not.toBeUndefined()
   })
 })
 
 describe("image", () => {
   it("convert a simple note to png pages", async () => {
-    let sn = new SupernoteX(await getNoteBuffer("test.note"))
+    let sn = new SupernoteX(await readFileToUint8Array("test.note"))
     let images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
@@ -40,7 +47,7 @@ describe("image", () => {
 
 describe("nomad", () => {
   it("convert a note from a nomad Chauvet 3.15.27 to png pages", async () => {
-    let sn = new SupernoteX(await getNoteBuffer("nomad-3.15.27-blank-2p.note"))
+    let sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-2p.note"))
     let images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
@@ -49,7 +56,7 @@ describe("nomad", () => {
   }, 30000)
 
   it("convert a note from a nomad Chauvet 3.15.27 with handwriting recognition to png pages", async () => {
-    let sn = new SupernoteX(await getNoteBuffer("nomad-3.15.27-blank-shapes-and-RTR.note"))
+    let sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
     let images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
@@ -60,7 +67,7 @@ describe("nomad", () => {
 
 describe("A5X", () => {
   it("convert a note from a A5X with Chauvet 2.14.28 to png pages", async () => {
-    let sn = new SupernoteX(await getNoteBuffer("a5x-2.14.28.note"))
+    let sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
     let images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
@@ -71,9 +78,19 @@ describe("A5X", () => {
 
 const TEST_PORT = 8080;
 
+function base64ToUint8Array(base64String: string): Uint8Array {
+  const binaryString = atob(base64String);
+  const length = binaryString.length;
+  const uint8Array = new Uint8Array(length);
+  for (let i = 0; i < length; ++i) {
+      uint8Array[i] = binaryString.charCodeAt(i);
+  }
+  return uint8Array;
+}
+
 // Minimal PNG image encoded in base64
 const encodedImage = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAACklEQVR4AWNgAAAAAgABc3UBGAAAAABJRU5ErkJggg==";
-const buffer = Buffer.from(encodedImage, 'base64');
+const buffer = base64ToUint8Array(encodedImage);
 const testServer = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'multipart/x-mixed-replace; boundary=--BOUNDARY');
     res.write(`Content-Type: image/jpeg\r\n`);

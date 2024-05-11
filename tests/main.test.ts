@@ -6,13 +6,13 @@ import http from 'http';
 
 function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
-      fs.readFile(`tests/input/${filePath}`, (err, data) => {
-          if (err) {
-              reject(err);
-          } else {
-              resolve(new Uint8Array(data.buffer));
-          }
-      });
+    fs.readFile(`tests/input/${filePath}`, (err, data) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(new Uint8Array(data.buffer));
+      }
+    });
   });
 }
 
@@ -83,7 +83,7 @@ function base64ToUint8Array(base64String: string): Uint8Array {
   const length = binaryString.length;
   const uint8Array = new Uint8Array(length);
   for (let i = 0; i < length; ++i) {
-      uint8Array[i] = binaryString.charCodeAt(i);
+    uint8Array[i] = binaryString.charCodeAt(i);
   }
   return uint8Array;
 }
@@ -92,26 +92,26 @@ function base64ToUint8Array(base64String: string): Uint8Array {
 const encodedImage = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAACklEQVR4AWNgAAAAAgABc3UBGAAAAABJRU5ErkJggg==";
 const buffer = base64ToUint8Array(encodedImage);
 const testServer = http.createServer((req, res) => {
-    res.setHeader('Content-Type', 'multipart/x-mixed-replace; boundary=--BOUNDARY');
-    res.write(`Content-Type: image/jpeg\r\n`);
-    res.write(`Content-Length: ${encodedImage.length}\r\n`);
-    res.write(`\r\n`);
-    res.write(buffer);
-    res.write(`--BOUNDARY\r\n`);
-    res.write(`Content-Type: image/jpeg\r\n`);
-    res.write(`Content-Length: ${encodedImage.length}\r\n`);
-    res.write(`\r\n`);
-    res.write(buffer);
-    res.write(`--BOUNDARY--`);
-    res.end();
+  res.setHeader('Content-Type', 'multipart/x-mixed-replace; boundary=--BOUNDARY');
+  res.write(`Content-Type: image/jpeg\r\n`);
+  res.write(`Content-Length: ${encodedImage.length}\r\n`);
+  res.write(`\r\n`);
+  res.write(buffer);
+  res.write(`--BOUNDARY\r\n`);
+  res.write(`Content-Type: image/jpeg\r\n`);
+  res.write(`Content-Length: ${encodedImage.length}\r\n`);
+  res.write(`\r\n`);
+  res.write(buffer);
+  res.write(`--BOUNDARY--`);
+  res.end();
 });
 
 beforeAll(() => {
-    testServer.listen(TEST_PORT);
+  testServer.listen(TEST_PORT);
 });
 
 afterAll(() => {
-    testServer.close();
+  testServer.close();
 });
 
 describe("mirror", () => {

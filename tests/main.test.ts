@@ -3,6 +3,7 @@ import { fetchMirrorFrame } from "../src/mirror"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import http from 'http';
+import * as v8Profiler from 'v8-profiler-next';
 
 function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
@@ -76,15 +77,34 @@ describe("A5X", () => {
   }, 30000)
 })
 
-describe("test ordering", () => {
-  it("ensure that pages 1 to 10 are oredered correctly", async () => {
-    let sn = new SupernoteX(await readFileToUint8Array("1to10.note"))
-    let images = await toImage(sn)
-    expect(images).not.toBeUndefined()
-    for await (const [index, image] of images.entries()) {
-      await image.save(`tests/output/1to10-${index + 1}.png`)
-    }
-  }, 30000)
+describe('profile', () => {
+  v8Profiler.setGenerateType(1);
+  const title = '1to10';
+  v8Profiler.startProfiling(title, true);
+  afterAll(() => {
+    const profile = v8Profiler.stopProfiling(title);
+    profile.export(function (error, result: any) {
+      // if it doesn't have the extension .cpuprofile then
+      // chrome's profiler tool won't like it.
+      // examine the profile:
+      //   Navigate to chrome://inspect
+      //   Click Open dedicated DevTools for Node
+      //   Select the profiler tab
+      //   Load your file
+      fs.writeFileSync(`tests/output/${title}.cpuprofile`, result);
+      profile.delete();
+    });
+  });
+  describe("test ordering", () => {
+    it("ensure that pages 1 to 10 are oredered correctly", async () => {
+      let sn = new SupernoteX(await readFileToUint8Array("1to10.note"))
+      let images = await toImage(sn)
+      expect(images).not.toBeUndefined()
+      for await (const [index, image] of images.entries()) {
+        await image.save(`tests/output/1to10-${index + 1}.png`)
+      }
+    }, 30000)
+  })
 })
 
 const TEST_PORT = 8080;

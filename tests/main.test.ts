@@ -76,6 +76,17 @@ describe("A5X", () => {
   }, 30000)
 })
 
+describe("test ordering", () => {
+  it("ensure that pages 1 to 10 are oredered correctly", async () => {
+    let sn = new SupernoteX(await readFileToUint8Array("1to10.note"))
+    let images = await toImage(sn)
+    expect(images).not.toBeUndefined()
+    for await (const [index, image] of images.entries()) {
+      await image.save(`tests/output/1to10-${index + 1}.png`)
+    }
+  }, 30000)
+})
+
 const TEST_PORT = 8080;
 
 function base64ToUint8Array(base64String: string): Uint8Array {

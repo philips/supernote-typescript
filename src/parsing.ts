@@ -268,8 +268,9 @@ export class SupernoteX {
 	/** Parse pages of a Supernote file's buffer contents.
 	 * Relies on the address as given in the file's footer. */
 	_parsePages(buffer: Uint8Array) {
+		const collator = new Intl.Collator([], { numeric: true });
 		const pages: IPage[] = Array.from(Object.keys(this.footer.PAGE))
-			.sort()
+			.sort((a, b) => collator.compare(a, b))
 			.map((idx) => {
 				const address = parseInt(this.footer.PAGE[idx]);
 				const data = parseKeyValue(buffer, address, this.lengthFieldSize);

@@ -273,19 +273,21 @@ export class RattaRLEDecoder {
 		let newColor =
 			encodedColor === -1 ? Color('transparent') : translation[encodedColor];
 		let chunk: Uint8Array;
+
 		if (newColor === undefined) {
-			throw Error(`unknown color 0x${encodedColor.toString(16)}`);
-		}
-		if (newColor.alpha() === 0) {
-			chunk = Uint8Array.from(new Uint8Array([0, 0, 0, 0]));
-		} else {
-			chunk = Uint8Array.from(
-				new Uint8Array([...newColor.rgb().array(), ~~(255 * newColor.alpha())]),
-			);
-		}
-		for (let index = 0; index < length; index++) {
-			chunks.push(chunk);
-		}
+            // throw Error(`unknown color 0x${encodedColor.toString(16)}`);
+			console.warn(`Unknown Color 0x${encodedColor.toString(16)}`)
+            chunk = Uint8Array.from(new Uint8Array([255, 255, 255, 0]));
+        }else{
+            if (newColor.alpha() === 0) {
+                chunk = Uint8Array.from(new Uint8Array([0, 0, 0, 0]));
+            } else {	
+                chunk = Uint8Array.from(new Uint8Array([...newColor.rgb().array(), ~~(255 * newColor.alpha())]));
+            }
+        }
+        for (let index = 0; index < length; index++) {
+            chunks.push(chunk);
+        }
 		return chunks;
 	}
 

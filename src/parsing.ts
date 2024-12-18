@@ -202,6 +202,12 @@ export class SupernoteX {
 		this._parseSignature(buffer);
 		this._parseFooter(buffer);
 		this._parseHeader(buffer);
+		// Manta is the first Supernote device to have a different
+		// pageWidth and pageHeight
+		if (this.header.APPLY_EQUIPMENT == 'N5') {
+			this.pageWidth = 1920
+			this.pageHeight = 2560;
+		}
 		this._parsePages(buffer);
 		this._parseCover(buffer);
 		this._parseKeywords(buffer);

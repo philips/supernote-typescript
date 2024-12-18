@@ -2,5 +2,6 @@ lib/*
 node_modules/
 tests/output/*.png
 tests/output/*.jpg
+tests/output/*.cpuprofile
 *.DS_Store*
 package-lock.json

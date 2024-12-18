@@ -8,6 +8,12 @@ For some quick snippets, take a look at the [smoke tests](./tests/main.test.ts).
 
 ## Developer Notes
 
+### Test Individual Suite
+
+```
+npx jest -t 'manta'
+```
+
 ### Publish
 
 ```

@@ -77,6 +77,17 @@ describe("A5X", () => {
   }, 30000)
 })
 
+describe("manta", () => {
+  it("convert a note from a A5X2 Manta with Chauvet ??? to png pages", async () => {
+    let sn = new SupernoteX(await readFileToUint8Array("manta.note"))
+    let images = await toImage(sn)
+    expect(images).not.toBeUndefined()
+    for await (const [index, image] of images.entries()) {
+      await image.save(`tests/output/manta.note-${index}.png`)
+    }
+  }, 30000)
+})
+
 describe('profile', () => {
   v8Profiler.setGenerateType(1);
   const title = '1to10';

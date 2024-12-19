@@ -274,9 +274,9 @@ export class RattaRLEDecoder {
 			encodedColor === -1 ? Color('transparent') : translation[encodedColor];
 		let chunk: Uint8Array;
 		if (newColor === undefined) {
-			throw Error(`unknown color 0x${encodedColor.toString(16)}`);
-		}
-		if (newColor.alpha() === 0) {
+			// HACK(philips): if we get an unknown color just ignore it and make it black
+			chunk = Uint8Array.from(new Uint8Array([255, 255, 255, 0]));
+		} else if (newColor.alpha() === 0) {
 			chunk = Uint8Array.from(new Uint8Array([0, 0, 0, 0]));
 		} else {
 			chunk = Uint8Array.from(

@@ -88,6 +88,17 @@ describe("manta", () => {
   }, 30000)
 })
 
+describe("color", () => {
+  it("test a note that has an unknown color", async () => {
+    let sn = new SupernoteX(await readFileToUint8Array("unknown-color.note"))
+    let images = await toImage(sn)
+    expect(images).not.toBeUndefined()
+    for await (const [index, image] of images.entries()) {
+      await image.save(`tests/output/unknown-colors.note-${index}.png`)
+    }
+  }, 30000)
+})
+
 describe('profile', () => {
   v8Profiler.setGenerateType(1);
   const title = '1to10';

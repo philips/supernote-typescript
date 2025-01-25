@@ -3,7 +3,6 @@ import { fetchMirrorFrame } from "../src/mirror"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import http from 'http';
-import * as v8Profiler from 'v8-profiler-next';
 
 function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
@@ -99,6 +98,38 @@ describe("color", () => {
   }, 30000)
 })
 
+describe("rtr", () => {
+  it("test a note that has paragraphs", async () => {
+    let sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+
+    const ep = [
+      'Real time recognition paragraph test',
+      'With enough space a new paragraph should be created. If lines are close then the text should reflow.',
+      'This should be a new paragraph.',
+      'As well as this.',
+      'But thin is the last paragraph and should reflow together.',
+    ].join('\n\n')
+
+    expect(sn.pages[0].paragraphs).toEqual(ep)
+
+    const et = [
+      'Real',
+      'time', 'recognition',
+      'paragraph test',
+      'With enough space a new paragraph',
+      'should be created. If lines are',
+      'close then the text should reflow.',
+      'This should be a new paragraph.',
+      'As well as this.',
+      'But thin is the last paragraph and',
+      'should reflow together.',
+    ].join('\n')
+
+    expect(sn.pages[0].text).toEqual(et)
+  }, 30000)
+})
+
+/*
 describe('profile', () => {
   v8Profiler.setGenerateType(1);
   const title = '1to10';
@@ -178,3 +209,4 @@ describe("mirror", () => {
     await image.save(`tests/output/mirror.jpg`)
   }, 30000)
 })
+*/

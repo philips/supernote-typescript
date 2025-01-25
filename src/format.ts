@@ -129,6 +129,20 @@ export enum RecognitionStatuses {
 	RUNNING = '2',
 }
 
+export interface IRecognitionElement {
+	label: string;
+	type: string;
+	words: {
+		label: string;
+		"bounding-box"?: {
+			height: number;
+			width: number;
+			x: number;
+			y: number;
+		};
+	}[];
+}
+
 export interface IPage {
 	/** Page style (template). */
 	PAGESTYLE: string;
@@ -162,11 +176,17 @@ export interface IPage {
 	RECOGNFILE: string;
 	/** Status of text recognition */
 	RECOGNFILESTATUS: RecognitionStatuses;
+	/** Parsed elements from recognition */
+	recognitionElements: IRecognitionElement[];
+	/** Parsed paragraphs from recognition */
+	paragraphs: string;
 	/** Parsed text from recognition */
 	text: string;
 	/** Total path contents. */
 	totalPathBuffer: Uint8Array | null;
 }
+
+
 
 export interface ILayerInfo {
 	/** Layer ID number. -1 (background), 0 (main) ... 3 (layer3) */

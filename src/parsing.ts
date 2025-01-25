@@ -7,6 +7,7 @@ import {
 	ILayerInfo,
 	ILayerNames,
 	RecognitionStatuses,
+	IRecognitionElement,
 	IPage,
 	ISupernote,
 	ITitle,
@@ -186,7 +187,7 @@ function uint8ArrayToString(
 }
 
 /** Supernote X series note. */
-export interface SupernoteX extends ISupernote {}
+export interface SupernoteX extends ISupernote { }
 export class SupernoteX {
 	constructor(buffer: Uint8Array) {
 		this.pageWidth = 1404;
@@ -280,6 +281,7 @@ export class SupernoteX {
 			.map((idx) => {
 				const address = parseInt(this.footer.PAGE[idx]);
 				const data = parseKeyValue(buffer, address, this.lengthFieldSize);
+				const recognitionElements = this._parseRecognition(buffer, data['RECOGNTEXT'] as string) || [];
 				return {
 					PAGESTYLE: '0',
 					PAGESTYLEMD5: '0',
@@ -313,7 +315,9 @@ export class SupernoteX {
 					),
 					LAYERINFO: extractLayerInfo(data['LAYERINFO'] as string),
 					LAYERSEQ: (data['LAYERSEQ'] as string).split(',') as ILayerNames[],
-					text: this._parseText(buffer, data['RECOGNTEXT'] as string),
+					recognitionElements: recognitionElements,
+					paragraphs: this._extractParagraphs(recognitionElements),
+					text: this._extractText(recognitionElements),
 					totalPathBuffer: getContentAtAddress(
 						buffer,
 						parseInt((data.TOTALPATH as string) ?? '0'),
@@ -327,7 +331,7 @@ export class SupernoteX {
 
 	/** Parse text of a Supernote file's buffer contents.
 	 * Relies on the address as given in the file's footer. */
-	_parseText(buffer: Uint8Array, text: string) {
+	_parseRecognition(buffer: Uint8Array, text: string) {
 		if (text === '0' || text === undefined) {
 			return;
 		}
@@ -342,12 +346,73 @@ export class SupernoteX {
 		const recognJson = new TextDecoder('utf8').decode(data);
 		const recogn = JSON.parse(atob(recognJson));
 
-		const elements = recogn.elements || [];
+		const elements: IRecognitionElement[] = recogn.elements || [];
+
+		return elements
+	}
+
+	_extractText(elements: IRecognitionElement[]) {
 		const labels = elements
 			.filter((e: any) => e.type === 'Text')
 			.map((e: any) => decodeURIComponent(escape(e.label))); // Decode using windows-1254 encoding
 
-		return labels.join('\n');
+		return labels.join("\n");
+	}
+
+	_extractParagraphs(elements: IRecognitionElement[]) {
+		// Filter text elements and get their bounding boxes
+		const textElements = elements
+			.filter(e => e.type === 'Text')
+			.map(e => ({
+				text: decodeURIComponent(escape(e.label)),
+				box: e.words[0]?.['bounding-box']
+			}))
+			.filter(e => e.box); // Only keep elements with valid bounding boxes
+
+		if (textElements.length === 0) return '';
+
+		const avgLineHeight = textElements.reduce((sum, e) => sum + (e.box?.height || 0), 0) / textElements.length;
+
+		// Sort by vertical position first, then horizontal
+		textElements.sort((a, b) => {
+			const verticalDiff = (a.box?.y || 0) - (b.box?.y || 0);
+			// If elements are roughly on the same line (within 0.5 line height), sort by x
+			if (Math.abs(verticalDiff) < avgLineHeight * 0.5) {
+				return (a.box?.x || 0) - (b.box?.x || 0);
+			}
+			return verticalDiff;
+		});
+
+		// Group elements into paragraphs based on vertical spacing
+		let result = '';
+		let lastY = textElements[0].box?.y || 0;
+		let lastX = textElements[0].box?.x || 0;
+
+		textElements.forEach((element, index) => {
+			const currentY = element.box?.y || 0;
+			const currentX = element.box?.x || 0;
+
+			if (index > 0) {
+				const verticalGap = currentY - lastY;
+				const isNewParagraph = verticalGap > avgLineHeight * 1.5;
+
+				if (isNewParagraph) {
+					result += '\n\n';
+				} else if (currentX < lastX) { // Same paragraph
+					result += ' ';
+				} else { // Same line
+					result += ' ';
+				}
+			}
+
+
+			const trimmed = element.text.replace(/\n/g, ' ');
+			result += trimmed;
+			lastY = currentY;
+			lastX = currentX;
+		});
+
+		return result;
 	}
 
 	/** Parse layer at a specific address in a Supernote file's buffer contents. */

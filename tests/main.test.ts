@@ -87,6 +87,17 @@ describe("manta", () => {
   }, 30000)
 })
 
+describe("horizontal", () => {
+  it("convert a horizontal note from a A5X2 Manta", async () => {
+    let sn = new SupernoteX(await readFileToUint8Array("horizontal.note"))
+    let images = await toImage(sn)
+    expect(images).not.toBeUndefined()
+    for await (const [index, image] of images.entries()) {
+      await image.save(`tests/output/horizontal.note-${index}.png`)
+    }
+  }, 30000)
+})
+
 describe("color", () => {
   it("test a note that has an unknown color", async () => {
     let sn = new SupernoteX(await readFileToUint8Array("unknown-color.note"))

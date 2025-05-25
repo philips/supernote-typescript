@@ -176,6 +176,8 @@ export interface IPage {
 	RECOGNFILE: string;
 	/** Status of text recognition */
 	RECOGNFILESTATUS: RecognitionStatuses;
+	/** An indicator of device and file orientation */
+	ORIENTATION: string;
 	/** Parsed elements from recognition */
 	recognitionElements: IRecognitionElement[];
 	/** Parsed paragraphs from recognition */

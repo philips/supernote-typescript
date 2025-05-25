@@ -186,6 +186,9 @@ function uint8ArrayToString(
 	return decoder.decode(slicedArray);
 }
 
+// Note: known vertical orientations are 1000, 1180
+const HORIZONTAL_ORIENTATIONS = ['1090', '1270'];
+
 /** Supernote X series note. */
 export interface SupernoteX extends ISupernote { }
 export class SupernoteX {
@@ -209,7 +212,13 @@ export class SupernoteX {
 			this.pageWidth = 1920
 			this.pageHeight = 2560;
 		}
-		this._parsePages(buffer);
+		const pages = this._parsePages(buffer);
+		if (pages.every((page) => HORIZONTAL_ORIENTATIONS.includes(page.ORIENTATION))) {
+			// Orientation is defined at the page level, but seems to only define one unique value per file.
+			// If it is ever the case that both portrait and landscape pages are defined within one note file,
+			// it will be necessary to treat the width/height per-page instead.
+			[this.pageWidth, this.pageHeight] = [this.pageHeight, this.pageWidth];
+		}
 		this._parseCover(buffer);
 		this._parseKeywords(buffer);
 		this._parseTitles(buffer);
@@ -292,6 +301,7 @@ export class SupernoteX {
 					RECOGNTEXT: '0',
 					RECOGNFILE: '0',
 					RECOGNFILESTATUS: RecognitionStatuses.NONE,
+					ORIENTATION: '0',
 					...data,
 					MAINLAYER: this._parseLayer(
 						buffer,

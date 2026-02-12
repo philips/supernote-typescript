@@ -22,10 +22,13 @@ npm run build
 npm publish
 ```
 
+
+## Users
+
+- [Supernote Obsidian Plugin](https://github.com/philips/supernote-obsidian-plugin)
+- [Supernote Joplin Plugin](https://github.com/individual-it/supernote-joplin)
+
 ## Thank You
 
 - Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for developing the initial supernote Typescript library I forked.
 - Heavily inspired by the [Python implementation by jya-dev](https://github.com/jya-dev/supernote-tool). This one currently only supports the X series notebooks.
-
-
-

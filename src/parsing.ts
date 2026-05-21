@@ -227,13 +227,13 @@ export class SupernoteX {
 
 	/** Parse Supernote file signature from buffer. */
 	_parseSignature(buffer: Uint8Array): string {
-		const pattern = /^noteSN_FILE_VER_(\d{8})/;
+		const pattern = /^(mark|note)SN_FILE_VER_(\d{8})/;
 		const content = uint8ArrayToString(buffer, 'utf8', 0, 24);
 		const match = content.match(pattern);
 		if (!match)
 			throw new Error("Cannot parse this file. Signature doesn't match.");
 		this.signature = content;
-		this.version = parseFloat(match[1]);
+		this.version = parseFloat(match[2]);
 		return this.signature;
 	}
 

@@ -47,6 +47,25 @@ describe("image", () => {
   }, { timeout: 30000 })
 })
 
+describe('digest_image', () => {
+  test(
+    'convert mark file into a png image',
+    async () => {
+      let sn = new SupernoteX(await readFileToUint8Array('digest_test.mark'));
+      let images = await toImage(sn);
+      expect(images).not.toBeUndefined();
+      for await (const [index, image] of images.entries()) {
+        await imagejs.writeSync(
+          `tests/output/digest_image.mark-${index}.png`,
+          image,
+        );
+      }
+    },
+    { timeout: 30000 },
+  );
+});
+
+
 describe("nomad", () => {
   test("convert a note from a nomad Chauvet 3.15.27 to png pages", async () => {
     let sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-2p.note"))
@@ -101,40 +120,40 @@ describe("horizontal orientation value detection", () => {
     }
   }, 30000)
 
-	test('convert a horizontal note from a A6X2 Nomad w/ orientation value 1270', async () => {
-		let sn = new SupernoteX(await readFileToUint8Array('horizontal_1270.note'));
-		let images = await toImage(sn);
-		expect(images).not.toBeUndefined();
-		for await (const [index, image] of images.entries()) {
-			expect(image.width).toBeGreaterThan(image.height); // expect a landscape image
-			await imagejs.writeSync(`tests/output/horizontal_1270.note-${index}.png`, image);
-		}
-	}, 30000);
+  test('convert a horizontal note from a A6X2 Nomad w/ orientation value 1270', async () => {
+    let sn = new SupernoteX(await readFileToUint8Array('horizontal_1270.note'));
+    let images = await toImage(sn);
+    expect(images).not.toBeUndefined();
+    for await (const [index, image] of images.entries()) {
+      expect(image.width).toBeGreaterThan(image.height); // expect a landscape image
+      await imagejs.writeSync(`tests/output/horizontal_1270.note-${index}.png`, image);
+    }
+  }, 30000);
 
   // Ensure vertical orientation values (1000, 1180) are still read as vertical
-	test('convert a vertical note w/ orientation value 1000', async () => {
-		let sn = new SupernoteX(await readFileToUint8Array('vertical_1000.note'));
-		let images = await toImage(sn);
-		expect(images).not.toBeUndefined();
-		for await (const [index, image] of images.entries()) {
-			expect(image.height).toBeGreaterThan(image.width); // expect a portrait image
-			await imagejs.writeSync(`tests/output/vertical_1000.note-${index}.png`, image);
-		}
-	}, 30000);
+  test('convert a vertical note w/ orientation value 1000', async () => {
+    let sn = new SupernoteX(await readFileToUint8Array('vertical_1000.note'));
+    let images = await toImage(sn);
+    expect(images).not.toBeUndefined();
+    for await (const [index, image] of images.entries()) {
+      expect(image.height).toBeGreaterThan(image.width); // expect a portrait image
+      await imagejs.writeSync(`tests/output/vertical_1000.note-${index}.png`, image);
+    }
+  }, 30000);
 
-	test(
-		'convert a vertical note from a A6X2 Nomad w/ orientation value 1180',
-		async () => {
-			let sn = new SupernoteX(await readFileToUint8Array('vertical_1180.note'));
-			let images = await toImage(sn);
-			expect(images).not.toBeUndefined();
-			for await (const [index, image] of images.entries()) {
-				expect(image.height).toBeGreaterThan(image.width); // expect a portrait image
-				await imagejs.writeSync(`tests/output/vertical_1180.note-${index}.png`, image);
-			}
-		},
-		{ timeout: 30000 },
-	);
+  test(
+    'convert a vertical note from a A6X2 Nomad w/ orientation value 1180',
+    async () => {
+      let sn = new SupernoteX(await readFileToUint8Array('vertical_1180.note'));
+      let images = await toImage(sn);
+      expect(images).not.toBeUndefined();
+      for await (const [index, image] of images.entries()) {
+        expect(image.height).toBeGreaterThan(image.width); // expect a portrait image
+        await imagejs.writeSync(`tests/output/vertical_1180.note-${index}.png`, image);
+      }
+    },
+    { timeout: 30000 },
+  );
 })
 
 describe("color", () => {

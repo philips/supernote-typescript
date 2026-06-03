@@ -172,6 +172,8 @@ export interface IRecognitionElement {
 }
 
 export interface IPage {
+	/** Unique page identifier used for linking. */
+	PAGEID?: string;
 	/** Page style (template). */
 	PAGESTYLE: string;
 	/** Page style MD5. */

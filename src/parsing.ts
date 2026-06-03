@@ -565,6 +565,14 @@ export class SupernoteX {
 				// ignore malformed base64
 			}
 		}
+		// Append #PageN when the target page exists in this document.
+		const pageid = data.PAGEID as string | undefined;
+		if (pageid && pageid !== '0' && pageid !== 'none') {
+			const pageIndex = this.pages.findIndex(p => p.PAGEID === pageid);
+			if (pageIndex >= 0) {
+				text += `#Page ${pageIndex + 1}`;
+			}
+		}
 		return {
 			LINKTYPE: '0',
 			LINKINOUT: '0',

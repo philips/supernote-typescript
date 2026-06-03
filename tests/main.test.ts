@@ -279,3 +279,43 @@ describe("mirror", () => {
 })
 */
 
+
+
+
+describe("keywords", () => {
+  test("parses all keyword stars with correct text and page via key prefix", async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+
+    const allKeywords = Object.entries(sn.keywords).flatMap(([key, kws]) =>
+      kws.map(kw => ({ key, kw }))
+    )
+
+    // Three keyword stars on page 3.
+    expect(allKeywords).toHaveLength(3)
+
+    const texts = allKeywords.map(({ kw }) => kw.KEYWORD)
+    expect(texts).toContain("Supemote Keyword")
+    expect(texts).toContain("Multiple keywords")
+    expect(texts).toContain("New tag")
+
+    // The KEYWORD footer key encodes the source page as its first 4 digits (1-indexed).
+    // This is the reliable page indicator — KEYWORDPAGE can be '0' (invalid).
+    for (const { key } of allKeywords) {
+      expect(parseInt(key.slice(0, 4))).toBe(3)
+    }
+
+    // "New tag" has KEYWORDPAGE='0' (invalid) but the key prefix is correct.
+    const newTagEntry = allKeywords.find(({ kw }) => kw.KEYWORD === "New tag")
+    expect(newTagEntry).toBeDefined()
+    expect(newTagEntry!.kw.KEYWORDPAGE).toBe('0')
+    expect(parseInt(newTagEntry!.key.slice(0, 4))).toBe(3)
+  })
+
+  test("page 3 OCR text includes the # new tag line that maps to the keyword", async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    const page3Text = sn.pages[2].text
+    expect(page3Text).toContain("# new tag")
+    expect(page3Text).toContain("# TITLE")
+    expect(page3Text).toContain("Multiple keywords")
+  })
+})

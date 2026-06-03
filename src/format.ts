@@ -1,3 +1,29 @@
+/** Supernote internal link (created via the Supernote link feature). */
+export interface ILink {
+	/** Link type. 1 = internal note link. */
+	LINKTYPE: string;
+	LINKINOUT: string;
+	/** Address of the link bitmap. */
+	LINKBITMAP: string;
+	LINKSTYLE: string;
+	LINKTIMESTAMP: string;
+	/** Link rectangle coordinates (x, y, w, h as a comma-separated string). */
+	LINKRECT: string;
+	LINKRECTORI: string;
+	/** Protocol. Usually RATTA_RLE. */
+	LINKPROTOCAL: string;
+	/** Base64-encoded absolute path to the linked .note file on the device. */
+	LINKFILE: string;
+	LINKFILEID: string;
+	PAGEID: string;
+	/** 0-indexed page number this link appears on. */
+	OBJPAGE: string;
+	/** Decoded filename (without path or .note extension) ready for use as [[link]]. */
+	text: string;
+	/** Link area bitmap content. */
+	bitmapBuffer: Uint8Array | null;
+}
+
 /** Supernote note object. */
 export interface ISupernote {
 	/** Page width in pixels. */
@@ -22,6 +48,8 @@ export interface ISupernote {
 	keywords: Record<string, IKeyword[]>;
 	/** Title locations and styles. */
 	titles: Record<string, ITitle[]>;
+	/** Internal links created via the Supernote link feature. */
+	links: Record<string, ILink[]>;
 	/** Pages information. */
 	pages: IPage[];
 	/** Cover page. */
@@ -220,6 +248,8 @@ export interface IFooter {
 	KEYWORD: Record<string, string | string[]>;
 	/** Title values. Mappings of TITLE_{key}:{value}. */
 	TITLE: Record<string, string | string[]>;
+	/** Link values. Mappings of LINKO_{key}:{value}. */
+	LINKO: Record<string, string | string[]>;
 	/** Style values. Mappings of STYLE_{key}:{value}. */
 	STYLE: Record<string, string>;
 	/** Page values. Mappings of PAGE{key}:{value}. */

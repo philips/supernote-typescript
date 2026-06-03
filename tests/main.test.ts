@@ -47,6 +47,24 @@ describe("image", () => {
   }, { timeout: 30000 })
 })
 
+describe("links", () => {
+  it("appends #PageN anchor to same-file links via PAGEID; cross-file and no-page links have no anchor", async () => {
+    let sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    const allLinks = Object.values(sn.links).flat()
+    // Link to page 1 of the same file should include the page anchor.
+    const sameFileLink = allLinks.find(l => l.text.startsWith("nomad-3.26.40-link-tag-3p"))
+    expect(sameFileLink).toBeDefined()
+    expect(sameFileLink!.text).toBe("nomad-3.26.40-link-tag-3p#Page 1")
+    // Cross-file link with a PAGEID (target page not in this document) has no anchor.
+    const crossFileWithPage = allLinks.find(l => l.PAGEID !== '0' && l.PAGEID !== 'none' && l.text.startsWith("nomad-3.26.40-blank-2p") && !l.text.includes('#'))
+    expect(crossFileWithPage).toBeDefined()
+    // Cross-file link without a page (PAGEID 'none') has no anchor.
+    const crossFileNoPage = allLinks.find(l => l.PAGEID === 'none')
+    expect(crossFileNoPage).toBeDefined()
+    expect(crossFileNoPage!.text).toBe("nomad-3.26.40-blank-2p")
+  })
+})
+
 describe("nomad", () => {
   test("convert a note from a nomad Chauvet 3.15.27 to png pages", async () => {
     let sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-2p.note"))

@@ -48,7 +48,7 @@ describe("image", () => {
 })
 
 describe("links", () => {
-  it("appends #PageN anchor to same-file links via PAGEID; cross-file and no-page links have no anchor", async () => {
+  test("appends #PageN anchor to same-file links via PAGEID; cross-file and no-page links have no anchor", async () => {
     let sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
     const allLinks = Object.values(sn.links).flat()
     // Link to page 1 of the same file should include the page anchor.
@@ -278,3 +278,4 @@ describe("mirror", () => {
   }, { timeout: 30000 })
 })
 */
+

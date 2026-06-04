@@ -49,6 +49,6 @@
   "dependencies": {
     "color": "^4.2.3",
     "fs-extra": "^10.1.0",
-    "image-js": "^1.2.0"
+    "image-js": "1.2.0"
   }
 }

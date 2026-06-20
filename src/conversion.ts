@@ -1,7 +1,8 @@
 import { ILayer, ISupernote } from './format';
-import { Image, ImageColorModel, decodePng } from "image-js";
+import { Image, ImageColorModel, decodePng } from 'image-js';
 import Color from 'color';
 
+type ColorType = InstanceType<typeof Color>;
 type Pixel = [number, number, number, number]; // Define type for pixel data (alpha, red, green, blue)
 
 function concatUint8Arrays(chunks: Uint8Array[]): Uint8Array {
@@ -29,7 +30,9 @@ async function compositeImages(sourceImage: Image, destinationImage: Image) {
 		sourceImage.width !== destinationImage.width ||
 		sourceImage.height !== destinationImage.height
 	) {
-		throw new Error('Images must have the same dimensions for compositing.');
+		throw new Error(
+			'Images must have the same dimensions for compositing.',
+		);
 	}
 
 	for (let y = 0; y < destinationImage.height; y++) {
@@ -37,7 +40,10 @@ async function compositeImages(sourceImage: Image, destinationImage: Image) {
 			const sourcePixel = sourceImage.getPixel(x, y) as Pixel; // Explicitly cast for type safety
 			const destinationPixel = destinationImage.getPixel(x, y) as Pixel;
 
-			const blendedPixel = blendPixelOverlay(sourcePixel, destinationPixel);
+			const blendedPixel = blendPixelOverlay(
+				sourcePixel,
+				destinationPixel,
+			);
 			destinationImage.setPixel(x, y, blendedPixel);
 		}
 	}
@@ -50,7 +56,12 @@ function blendPixelOverlay(sourcePixel: Pixel, destinationPixel: Pixel): Pixel {
 
 	// HACK: if the pixel is fully transparent just pass the lower pixel through
 	if (sourceR === 0 && sourceG === 0 && sourceB === 0 && sourceA == 0) {
-		return [destinationA, destinationR, destinationG, destinationB] as Pixel;
+		return [
+			destinationA,
+			destinationR,
+			destinationG,
+			destinationB,
+		] as Pixel;
 	}
 
 	return sourcePixel;
@@ -68,8 +79,11 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 	const decoder = new RattaRLEDecoder();
 	return Promise.all(
 		pages.map(async (page, pageIndex) => {
-			const overlays = page.LAYERSEQ.map((name) => page[name] as ILayer).filter(
-				(layer) => layer.bitmapBuffer !== null && layer.bitmapBuffer.length,
+			const overlays = page.LAYERSEQ.map(
+				(name) => page[name] as ILayer,
+			).filter(
+				(layer) =>
+					layer.bitmapBuffer !== null && layer.bitmapBuffer.length,
 			);
 
 			const promises = overlays.map(async (layer): Promise<Image> => {
@@ -86,7 +100,10 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 					note.pageWidth,
 					note.pageHeight,
 				);
-				return new Image(note.pageWidth, note.pageHeight, { colorModel: ImageColorModel.RGBA, data: buffer });
+				return new Image(note.pageWidth, note.pageHeight, {
+					colorModel: ImageColorModel.RGBA,
+					data: buffer,
+				});
 			});
 
 			let images = await Promise.all(promises);
@@ -102,25 +119,25 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 }
 
 /** Color palette to use as substitutes for the Supernote's colors. */
-export interface IColorPalette extends Record<string, Color> {
-	background: Color;
-	black: Color;
-	darkGray: Color;
-	gray: Color;
-	white: Color;
-	markerBlack: Color;
-	markerDarkGray: Color;
-	markerGray: Color;
+export interface IColorPalette extends Record<string, ColorType> {
+	background: ColorType;
+	black: ColorType;
+	darkGray: ColorType;
+	gray: ColorType;
+	white: ColorType;
+	markerBlack: ColorType;
+	markerDarkGray: ColorType;
+	markerGray: ColorType;
 
-	darkGrayX2: Color;
-	grayX2: Color;
-	markerDarkGrayX2: Color;
-	markerGrayX2: Color;
+	darkGrayX2: ColorType;
+	grayX2: ColorType;
+	markerDarkGrayX2: ColorType;
+	markerGrayX2: ColorType;
 }
 
 /** Default color palette to use based on named colors in the color library. */
 const defaultPalette: IColorPalette = {
-	background: Color('transparent'),
+	background: Color('white'),
 	black: Color('black'),
 	darkGray: Color('darkgray'),
 	gray: Color('gray'),
@@ -191,7 +208,7 @@ export class RattaRLEDecoder {
 	) {
 		const pal = palette ?? defaultPalette;
 		const translation = Object.entries(this.encodedPalette).reduce(
-			(acc: Record<number, Color>, [key, value]) => {
+			(acc: Record<number, ColorType>, [key, value]) => {
 				acc[value] = pal[key] ?? defaultPalette[key];
 				return acc;
 			},
@@ -265,10 +282,12 @@ export class RattaRLEDecoder {
 		chunks: Uint8Array[],
 		encodedColor: number,
 		length: number,
-		translation: Record<number, Color>,
+		translation: Record<number, ColorType>,
 	): Uint8Array[] {
 		let newColor =
-			encodedColor === -1 ? Color('transparent') : translation[encodedColor];
+			encodedColor === -1
+				? Color('transparent')
+				: translation[encodedColor];
 		let chunk: Uint8Array;
 		if (newColor === undefined) {
 			// HACK(philips): if we get an unknown color just ignore it and make it black
@@ -277,7 +296,10 @@ export class RattaRLEDecoder {
 			chunk = Uint8Array.from(new Uint8Array([0, 0, 0, 0]));
 		} else {
 			chunk = Uint8Array.from(
-				new Uint8Array([...newColor.rgb().array(), ~~(255 * newColor.alpha())]),
+				new Uint8Array([
+					...newColor.rgb().array(),
+					~~(255 * newColor.alpha()),
+				]),
 			);
 		}
 		for (let index = 0; index < length; index++) {

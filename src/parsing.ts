@@ -6,6 +6,7 @@ import {
 	ILayer,
 	ILayerInfo,
 	ILayerNames,
+	ILink,
 	RecognitionStatuses,
 	IRecognitionElement,
 	IPage,
@@ -202,6 +203,7 @@ export class SupernoteX implements ISupernote {
 	declare footer: IFooter;
 	declare keywords: Record<string, IKeyword[]>;
 	declare titles: Record<string, ITitle[]>;
+	declare links: Record<string, ILink[]>;
 	declare pages: IPage[];
 	declare cover?: ICover;
 
@@ -235,6 +237,7 @@ export class SupernoteX implements ISupernote {
 		this._parseCover(buffer);
 		this._parseKeywords(buffer);
 		this._parseTitles(buffer);
+		this._parseLinks(buffer);
 		return this;
 	}
 
@@ -256,14 +259,28 @@ export class SupernoteX implements ISupernote {
 		const address = readUintLE(chunk, 0, this.addressSize);
 		const data = parseKeyValue(buffer, address, this.lengthFieldSize);
 		const nested = extractNestedKeyValue(data, '_', ['PAGE']);
+
+		// KEYWORD and LINKO entries can appear multiple times in the footer (the
+		// format is journaled/append-only) causing parseKeyValue to store them as
+		// arrays. extractNestedKeyValue skips array values, so we extract these two
+		// groups directly from the raw data to preserve every entry.
+		const keyword: Record<string, string | string[]> = {};
+		const linko: Record<string, string | string[]> = {};
+		for (const [key, value] of Object.entries(data)) {
+			if (key.startsWith('KEYWORD_'))
+				keyword[key.slice('KEYWORD_'.length)] = value;
+			else if (key.startsWith('LINKO_'))
+				linko[key.slice('LINKO_'.length)] = value;
+		}
+
 		this.footer = {
-			FILE: { FEATURE: '24' },
-			COVER: { '0': '0' },
-			KEYWORD: {},
-			TITLE: {},
-			STYLE: {},
-			PAGE: {},
-			...nested,
+			FILE: (nested.FILE as Record<string, string>) ?? { FEATURE: '24' },
+			COVER: (nested.COVER as Record<string, string>) ?? { '0': '0' },
+			TITLE: nested.TITLE ?? {},
+			STYLE: (nested.STYLE as Record<string, string>) ?? {},
+			PAGE: (nested.PAGE as Record<string, string>) ?? {},
+			KEYWORD: keyword,
+			LINKO: linko,
 		};
 		return this.footer;
 	}
@@ -493,22 +510,24 @@ export class SupernoteX implements ISupernote {
 	/** Parse a single keyword entry at a certain buffer address. */
 	_parseKeyword(buffer: Uint8Array, address: number): IKeyword {
 		const data = parseKeyValue(buffer, address, this.lengthFieldSize);
-		const bitmapBuffer = getContentAtAddress(
-			buffer,
-			parseInt((data.KEYWORDSITE as string) ?? '0'),
-			this.lengthFieldSize,
-		);
-		const keyword: IKeyword = {
+		const siteAddress = parseInt((data.KEYWORDSITE as string) ?? '0');
+		// KEYWORDSITE points to a length-prefixed block containing the OCR text
+		// of the starred word (not a bitmap).
+		const textContent = getContentAtAddress(buffer, siteAddress, this.lengthFieldSize);
+		const keywordText = textContent
+			? uint8ArrayToString(textContent).replace(/\0/g, '').trim()
+			: '';
+		return {
 			KEYWORDSEQNO: '0',
 			KEYWORDPAGE: '1',
 			KEYWORDRECT: ['0', '0', '0', '0'],
 			KEYWORDRECTORI: ['0', '0', '0', '0'],
 			KEYWORDSITE: '0',
 			KEYWORDLEN: '0',
-			KEYWORD: '',
-			bitmapBuffer,
+			...data,
+			KEYWORD: keywordText,
+			bitmapBuffer: textContent,
 		};
-		return keyword;
 	}
 
 	/** Parse titles from Supernote file's buffer contents. */
@@ -524,6 +543,67 @@ export class SupernoteX implements ISupernote {
 				);
 		});
 		return this.titles;
+	}
+
+	/** Parse links from Supernote file's buffer contents. */
+	_parseLinks(buffer: Uint8Array): Record<string, ILink[]> {
+		this.links = {};
+		Object.entries(this.footer.LINKO).forEach(([key, value]) => {
+			if (!(key in this.links)) this.links[key] = [];
+			if (typeof value === 'string')
+				this.links[key].push(this._parseLink(buffer, parseInt(value)));
+			else
+				value.forEach((address) =>
+					this.links[key].push(this._parseLink(buffer, parseInt(address))),
+				);
+		});
+		return this.links;
+	}
+
+	/** Parse a single link entry at a certain buffer address. */
+	_parseLink(buffer: Uint8Array, address: number): ILink {
+		const data = parseKeyValue(buffer, address, this.lengthFieldSize);
+		const bitmapBuffer = getContentAtAddress(
+			buffer,
+			parseInt((data.LINKBITMAP as string) ?? '0'),
+			this.lengthFieldSize,
+		);
+		// LINKFILE is a base64-encoded absolute path on the device, e.g.:
+		// /storage/emulated/0/Note/Folder/MyNote.note
+		let text = '';
+		if (data.LINKFILE) {
+			try {
+				const path = atob(data.LINKFILE as string);
+				text = path.split('/').pop()?.replace(/\.note$/i, '') ?? '';
+			} catch {
+				// ignore malformed base64
+			}
+		}
+		// Append #PageN when the target page exists in this document.
+		const pageid = data.PAGEID as string | undefined;
+		if (pageid && pageid !== '0' && pageid !== 'none') {
+			const pageIndex = this.pages.findIndex(p => p.PAGEID === pageid);
+			if (pageIndex >= 0) {
+				text += `#Page ${pageIndex + 1}`;
+			}
+		}
+		return {
+			LINKTYPE: '0',
+			LINKINOUT: '0',
+			LINKBITMAP: '0',
+			LINKSTYLE: '0',
+			LINKTIMESTAMP: '0',
+			LINKRECT: '0',
+			LINKRECTORI: '0',
+			LINKPROTOCAL: 'RATTA_RLE',
+			LINKFILE: '',
+			LINKFILEID: '0',
+			PAGEID: '0',
+			OBJPAGE: '0',
+			...data,
+			text,
+			bitmapBuffer,
+		};
 	}
 
 	/** Parse a single title entry at a certain buffer address. */

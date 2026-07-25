@@ -15,6 +15,7 @@
     "pretest": "npm run build",
     "test": "vitest run",
     "test-watch": "vitest",
+    "prebench": "npm run build",
     "bench": "vitest bench",
     "test-mirror": "vitest --watch -t mirror",
     "coverage": "vitest run --coverage",

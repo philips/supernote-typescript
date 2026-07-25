@@ -1,6 +1,6 @@
 import { ILayer, ISupernote } from './format';
 import { Image, ImageColorModel, decodePng } from "image-js";
-import Color from 'color';
+import Color, { ColorInstance } from 'color';
 
 type Pixel = [number, number, number, number]; // image-js RGBA pixel order: red, green, blue, alpha
 
@@ -100,20 +100,20 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 }
 
 /** Color palette to use as substitutes for the Supernote's colors. */
-export interface IColorPalette extends Record<string, Color> {
-	background: Color;
-	black: Color;
-	darkGray: Color;
-	gray: Color;
-	white: Color;
-	markerBlack: Color;
-	markerDarkGray: Color;
-	markerGray: Color;
+export interface IColorPalette extends Record<string, ColorInstance> {
+	background: ColorInstance;
+	black: ColorInstance;
+	darkGray: ColorInstance;
+	gray: ColorInstance;
+	white: ColorInstance;
+	markerBlack: ColorInstance;
+	markerDarkGray: ColorInstance;
+	markerGray: ColorInstance;
 
-	darkGrayX2: Color;
-	grayX2: Color;
-	markerDarkGrayX2: Color;
-	markerGrayX2: Color;
+	darkGrayX2: ColorInstance;
+	grayX2: ColorInstance;
+	markerDarkGrayX2: ColorInstance;
+	markerGrayX2: ColorInstance;
 }
 
 /** Default color palette to use based on named colors in the color library. */
@@ -191,7 +191,7 @@ export class RattaRLEDecoder {
 	) {
 		const pal = palette ?? defaultPalette;
 		const translation = Object.entries(this.encodedPalette).reduce(
-			(acc: Record<number, Color>, [key, value]) => {
+			(acc: Record<number, ColorInstance>, [key, value]) => {
 				acc[value] = pal[key] ?? defaultPalette[key];
 				return acc;
 			},
@@ -265,7 +265,7 @@ export class RattaRLEDecoder {
 		chunks: Uint8Array[],
 		encodedColor: number,
 		length: number,
-		translation: Record<number, Color>,
+		translation: Record<number, ColorInstance>,
 	): Uint8Array[] {
 		let newColor =
 			encodedColor === -1 ? Color('transparent') : translation[encodedColor];

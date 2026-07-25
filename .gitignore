@@ -2,6 +2,7 @@ lib/*
 node_modules/
 tests/output/*.png
 tests/output/*.jpg
+tests/output/*.pdf
 tests/output/*.cpuprofile
 *.DS_Store*
 .aider*

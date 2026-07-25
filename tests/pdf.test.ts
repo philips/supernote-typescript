@@ -1,5 +1,7 @@
 import * as fs from "fs-extra"
-import { toPdf } from "../src/pdf"
+import { encodePng } from "image-js"
+import { toPdf, createPdfContext, addPdfPage } from "../src/pdf"
+import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import { PDFParse } from "pdf-parse"
 import { describe, test, expect } from 'vitest'
@@ -66,5 +68,51 @@ describe("pdf", () => {
     for (const word of ["Saturn", "Mercury", "Moon", "MAGUS"]) {
       expect(result.text).toContain(word)
     }
+  })
+
+  test("toPdf() produces text equivalent to manual createPdfContext + addPdfPage composition", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+
+    const viaToPdf = await toPdf(sn)
+
+    const ctx = await createPdfContext()
+    const images = await toImage(sn)
+    for (let i = 0; i < sn.pages.length; i++) {
+      await addPdfPage(ctx, sn.pages[i], images[i])
+    }
+    const viaManualComposition = await ctx.pdfDoc.save()
+
+    const parserA = new PDFParse({ data: viaToPdf })
+    const textA = await parserA.getText()
+    await parserA.destroy()
+
+    const parserB = new PDFParse({ data: viaManualComposition })
+    const textB = await parserB.getText()
+    await parserB.destroy()
+
+    expect(textA.text).toBe(textB.text)
+  })
+
+  test("addPdfPage accepts either an Image or pre-encoded PNG bytes with equivalent output", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const [image] = await toImage(sn, [1])
+
+    const ctxWithImage = await createPdfContext()
+    await addPdfPage(ctxWithImage, sn.pages[0], image)
+    const pdfFromImage = await ctxWithImage.pdfDoc.save()
+
+    const ctxWithBytes = await createPdfContext()
+    await addPdfPage(ctxWithBytes, sn.pages[0], encodePng(image))
+    const pdfFromBytes = await ctxWithBytes.pdfDoc.save()
+
+    const parserA = new PDFParse({ data: pdfFromImage })
+    const textA = await parserA.getText()
+    await parserA.destroy()
+
+    const parserB = new PDFParse({ data: pdfFromBytes })
+    const textB = await parserB.getText()
+    await parserB.destroy()
+
+    expect(textA.text).toBe(textB.text)
   })
 })

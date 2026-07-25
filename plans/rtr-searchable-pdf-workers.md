@@ -41,6 +41,15 @@ Let an application render pages in parallel across Web Workers (browser) or `wor
 - Not parallelizing the invisible-text-drawing loop itself (cheap relative to RLE decode; not worth the complexity per the spike in step 1, pending its result).
 - Not pursuing per-page PDF merge (Option B: build single-page PDFs in workers, merge via `PDFDocument.copyPages`) unless step 1's profiling shows assembly is a meaningful fraction of total time — it adds real complexity (duplicated embedded fonts inflate file size unless deduped).
 
-## Open question for whoever implements this
+## Step 1 profiling result (resolves the open question below)
 
-Step 1's profiling result decides whether this plan is even the right shape — if PDF assembly turns out to be non-trivial too, Option B needs its own design pass before implementation starts.
+Measured on `tests/input/1to10.note` (10 pages), one-shot timing (not the noisier `vitest bench` warmup average) via `createPdfContext`/`addPdfPage`:
+
+| Phase | Time | Worker-eligible? |
+|---|---|---|
+| `toImage` (RLE decode + composite) | 120ms (5%) | yes |
+| `encodePng` | 1059ms (40%) | yes |
+| `addPdfPage` loop (`embedPng` + `drawImage` + text operators) | 538ms (21%) | no — needs `pdf-lib` objects |
+| `pdfDoc.save()` | 886ms (34%) | no — one-time, whole-document |
+
+Contrary to this plan's original assumption, PDF assembly is *not* cheap relative to rendering — `encodePng` (not raster decode) dominates the worker-eligible side, and main-thread-only work is 55% of total time. However, 34 of those 55 points are `pdfDoc.save()`, a single whole-document serialization that happens once regardless of how many pages were rendered where — it isn't a per-page cost Option B's per-page-PDF-merge approach would eliminate (a merged document still needs one final `save()` over the same total embedded-image payload). So Option B's added complexity (duplicate embedded fonts, `copyPages` merge) would only reach the 21% `addPdfPage`-loop slice, not the dominant 34% `save()` floor — not judged worth it. **Decision: implement Option A only** (this is what's built below); an app parallelizing `toImage`+`encodePng` across N workers should expect roughly `(45%/N) + 55%` of baseline wall-clock time, not a full `1/N`.

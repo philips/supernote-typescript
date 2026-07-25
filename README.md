@@ -6,6 +6,23 @@ Ratta Supernote has often commented that the file-format is yet unstable and sho
 
 For some quick snippets, take a look at the [smoke tests](./tests/main.test.ts).
 
+### Generating searchable PDFs
+
+`toPdf` renders each page's raster image into a PDF page and overlays the recognized handwriting (RTR) text invisibly at the location it was written, so the PDF is searchable and words can be selected/copied from the image. See [tests/pdf.test.ts](./tests/pdf.test.ts) for a full example.
+
+```ts
+import { SupernoteX, toPdf } from 'supernote-typescript';
+
+const note = new SupernoteX(buffer);
+const pdfBytes = await toPdf(note);
+```
+
+The default font (Helvetica) only supports Latin text. Pass `fontBytes` with a Unicode TTF/OTF to support other scripts:
+
+```ts
+const pdfBytes = await toPdf(note, { fontBytes: await fs.readFile('NotoSans-Regular.ttf') });
+```
+
 ## Developer Notes
 
 ### Test Individual Suite

@@ -6,6 +6,7 @@ import {
 	beginText,
 	endText,
 	moveText,
+	setCharacterSqueeze,
 	setFontAndSize,
 	setTextRenderingMode,
 	showText,
@@ -90,18 +91,23 @@ export async function toPdf(note: ISupernote, options: ToPdfOptions = {}): Promi
 				// PDF's y-axis runs bottom-up; recognition boxes are top-down.
 				const y = heightPts - (yPx * pointsPerPixel + boxHeightPts);
 
-				// Shrink the font to fit the recognized word's box width, since
-				// cursive handwriting compresses to a narrower printed word.
+				// Size the font to the box height, then use horizontal scaling
+				// (the PDF `Tz` operator) to stretch or squeeze the text to
+				// exactly match the box width in both directions — handwriting
+				// is rarely the same width as print at a given height (cursive
+				// runs narrower, print can run wider) — so that PDF viewers'
+				// search-hit highlight rectangle lines up with the ink instead
+				// of just not overflowing it.
 				try {
-					const naturalWidth = font.widthOfTextAtSize(label, boxHeightPts);
-					const fontSize = naturalWidth > boxWidthPts && naturalWidth > 0
-						? boxHeightPts * (boxWidthPts / naturalWidth)
-						: boxHeightPts;
+					const fontSize = boxHeightPts;
+					const naturalWidth = font.widthOfTextAtSize(label, fontSize);
+					const horizontalScale = naturalWidth > 0 ? (boxWidthPts / naturalWidth) * 100 : 100;
 
 					pdfPage.pushOperators(
 						beginText(),
 						setTextRenderingMode(TextRenderingMode.Invisible),
 						setFontAndSize(fontKey, fontSize),
+						setCharacterSqueeze(horizontalScale),
 						moveText(x, y),
 						showText(font.encodeText(label)),
 						endText(),

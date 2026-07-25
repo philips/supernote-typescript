@@ -42,7 +42,7 @@
     "eslint": "8.57.1",
     "eslint-plugin-node": "11.1.0",
     "prettier": "3.9.6",
-    "typescript": "4.9.5",
+    "typescript": "7.0.2",
     "vitest": "1.6.1"
   },
   "dependencies": {

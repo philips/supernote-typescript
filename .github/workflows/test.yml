@@ -17,5 +17,6 @@ jobs:
           node-version: 20
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
+      - run: npm run lint
       - run: npm run build
       - run: npm test

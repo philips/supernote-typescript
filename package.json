@@ -10,6 +10,8 @@
   ],
   "scripts": {
     "build": "tsc",
+    "clean": "rm -f tests/output/*.png tests/output/*.jpg tests/output/*.cpuprofile",
+    "lint": "eslint . --ext .ts",
     "test": "vitest run",
     "test-watch": "vitest",
     "test-mirror": "vitest --watch -t mirror",

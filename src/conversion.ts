@@ -71,15 +71,13 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 			);
 
 			const promises = overlays.map(async (layer): Promise<Image> => {
-				let buffer = null;
-
 				if (
 					layer.LAYERNAME == 'BGLAYER' &&
 					page.PAGESTYLE.startsWith('user_')
 				) {
 					return decodePng(layer.bitmapBuffer as Uint8Array);
 				}
-				buffer = decoder.decode(
+				const buffer = decoder.decode(
 					layer.bitmapBuffer as Uint8Array,
 					note.pageWidth,
 					note.pageHeight,
@@ -202,7 +200,8 @@ export class RattaRLEDecoder {
 		const chunks: Uint8Array[] = [];
 		let waiting: [number, number][] = [];
 		let holder: [number, number] | null = null;
-		let [color, length] = [0, 0];
+		let color: number;
+		let length: number;
 		for (let index = 1; index < buffer.length; index += 2) {
 			color = buffer.at(index - 1) as number;
 			length = buffer.at(index) as number;
@@ -227,13 +226,11 @@ export class RattaRLEDecoder {
 					if (allBlank) length = this.specialLengthForBlank;
 					else length = this.specialLength;
 					waiting.push([color, length]);
-					pushed = true;
 				} else if ((length & 0x80) !== 0) {
 					holder = [color, length];
 				} else {
 					length += 1;
 					waiting.push([color, length]);
-					pushed = true;
 				}
 			}
 			for (const [color, length] of waiting.values()) {

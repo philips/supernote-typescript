@@ -99,7 +99,11 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 
 			let images = await Promise.all(promises);
 			images = images.reverse();
-			const output = images[0].clone();
+			// images[0] is freshly constructed above (decodePng or a new Image
+			// wrapping a freshly decoded buffer) and not referenced elsewhere,
+			// so it can be used as the composite destination directly instead
+			// of cloning it first.
+			const output = images[0];
 			for (let i = 1; i < overlays.length; i++) {
 				compositeImages(images[i], output);
 			}

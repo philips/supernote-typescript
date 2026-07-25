@@ -47,4 +47,24 @@ describe("pdf", () => {
     const pdfBytes = await toPdf(sn)
     expect(pdfBytes.byteLength).toBeGreaterThan(0)
   })
+
+  test("handles a user-uploaded background template and unencodable recognition glyphs", { timeout: 30000 }, async () => {
+    // Regression fixture trimmed from a real note that hit two bugs together:
+    // (1) a user-uploaded PNG background template that decodes to 8-bit RGB
+    //     with no alpha channel, which compositeImages() previously rejected
+    //     (it requires 8-bit RGBA); and
+    // (2) recognized handwriting containing characters (e.g. "→") the default
+    //     Helvetica font can't encode, which previously aborted the whole PDF.
+    const sn = new SupernoteX(await readFileToUint8Array("moonchild-user-bg-and-bad-glyph.note"))
+    const pdfBytes = await toPdf(sn)
+    expect(pdfBytes.byteLength).toBeGreaterThan(0)
+
+    const parser = new PDFParse({ data: pdfBytes })
+    const result = await parser.getText()
+    await parser.destroy()
+
+    for (const word of ["Saturn", "Mercury", "Moon", "MAGUS"]) {
+      expect(result.text).toContain(word)
+    }
+  })
 })

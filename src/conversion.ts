@@ -87,7 +87,13 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 					layer.LAYERNAME == 'BGLAYER' &&
 					page.PAGESTYLE.startsWith('user_')
 				) {
-					return decodePng(layer.bitmapBuffer as Uint8Array);
+					// User-uploaded background templates are arbitrary PNGs and may
+					// decode to any bit depth/color model (e.g. 8-bit RGB with no
+					// alpha channel). compositeImages() requires 8-bit RGBA on both
+					// sides, so normalize regardless of the source PNG's format.
+					return decodePng(layer.bitmapBuffer as Uint8Array)
+						.convertBitDepth(8)
+						.convertColor(ImageColorModel.RGBA);
 				}
 				const buffer = decoder.decode(
 					layer.bitmapBuffer as Uint8Array,

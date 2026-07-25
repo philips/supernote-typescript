@@ -92,19 +92,28 @@ export async function toPdf(note: ISupernote, options: ToPdfOptions = {}): Promi
 
 				// Shrink the font to fit the recognized word's box width, since
 				// cursive handwriting compresses to a narrower printed word.
-				const naturalWidth = font.widthOfTextAtSize(label, boxHeightPts);
-				const fontSize = naturalWidth > boxWidthPts && naturalWidth > 0
-					? boxHeightPts * (boxWidthPts / naturalWidth)
-					: boxHeightPts;
+				try {
+					const naturalWidth = font.widthOfTextAtSize(label, boxHeightPts);
+					const fontSize = naturalWidth > boxWidthPts && naturalWidth > 0
+						? boxHeightPts * (boxWidthPts / naturalWidth)
+						: boxHeightPts;
 
-				pdfPage.pushOperators(
-					beginText(),
-					setTextRenderingMode(TextRenderingMode.Invisible),
-					setFontAndSize(fontKey, fontSize),
-					moveText(x, y),
-					showText(font.encodeText(label)),
-					endText(),
-				);
+					pdfPage.pushOperators(
+						beginText(),
+						setTextRenderingMode(TextRenderingMode.Invisible),
+						setFontAndSize(fontKey, fontSize),
+						moveText(x, y),
+						showText(font.encodeText(label)),
+						endText(),
+					);
+				} catch {
+					// The active font (Helvetica by default) can't encode every
+					// character recognition may produce (e.g. superscripts, smart
+					// punctuation). Skip this word rather than losing the whole
+					// PDF over one unsearchable word; pass a Unicode `fontBytes`
+					// font via ToPdfOptions to cover more characters.
+					continue;
+				}
 			}
 		}
 	}

@@ -32,7 +32,7 @@
   },
   "homepage": "https://gitlab.com/philips/supernote-typescript",
   "devDependencies": {
-    "@types/fs-extra": "9.0.13",
+    "@types/fs-extra": "11.0.4",
     "@types/node": "18.19.130",
     "@typescript-eslint/eslint-plugin": "7.18.0",
     "@typescript-eslint/parser": "7.18.0",
@@ -45,7 +45,7 @@
   },
   "dependencies": {
     "color": "^5.0.3",
-    "fs-extra": "^10.1.0",
+    "fs-extra": "^11.4.0",
     "image-js": "^1.7.0"
   }
 }

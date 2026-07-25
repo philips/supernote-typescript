@@ -24,7 +24,7 @@ export async function fetchMirrorFrame(ipAddress: string): Promise<Image> {
 		throw new Error('Failed to get reader for response body.');
 	}
 
-	let boundary = contentType.split('boundary=')[1];
+	const boundary = contentType.split('boundary=')[1];
 	if (!boundary) {
 		throw new Error('Boundary not found in response headers.');
 	}
@@ -39,8 +39,8 @@ export async function fetchMirrorFrame(ipAddress: string): Promise<Image> {
 		const processChunk = async (chunk: Uint8Array) => {
 			buffer = concatUint8Arrays(buffer, chunk);
 
-			let start = new TextDecoder().decode(buffer).indexOf('Content-Type:', 0);
-			let end = findBoundary(buffer, boundary, start + 2);
+			const start = new TextDecoder().decode(buffer).indexOf('Content-Type:', 0);
+			const end = findBoundary(buffer, boundary, start + 2);
 
 			const part = buffer.slice(start, end);
 			const headerEndIndex = new TextDecoder().decode(part).indexOf(headerEnd);
@@ -83,7 +83,6 @@ export async function fetchMirrorFrame(ipAddress: string): Promise<Image> {
 
 		const read = async () => {
 			const { done, value } = await reader.read();
-			const txt = new TextDecoder().decode(value);
 			if (done) {
 				if (!found) {
 					reject(new Error('No JPEG image found in multipart stream.'));
@@ -104,7 +103,7 @@ function findBoundary(
 	startIndex: number = 0,
 ): number {
 	const boundaryStr = `${boundary}`;
-	return new TextDecoder().decode(data).indexOf(boundaryStr);
+	return new TextDecoder().decode(data).indexOf(boundaryStr, startIndex);
 }
 
 function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {

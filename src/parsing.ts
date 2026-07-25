@@ -76,9 +76,9 @@ export function extractKeyValue(
 	const pattern = /<([^:<>]+):([^:<>]+)>/gm;
 	const pairs = [...content.matchAll(pattern)];
 	const data = pairs.reduce(
-		(acc: Record<string, string | string[]>, [_, key, value]) => {
+		(acc: Record<string, string | string[]>, [, key, value]) => {
 			if (key in acc) {
-				let newValue =
+				const newValue =
 					typeof acc[key] === 'string'
 						? [acc[key] as string, value]
 						: [...acc[key], value];
@@ -130,7 +130,7 @@ export function extractNestedKeyValue(
 /** Extract layer info from the content string. */
 export function extractLayerInfo(content: string): ILayerInfo[] {
 	const layerPattern = /{(?<content>[^{}]+)}/gm;
-	const dictPattern = /"(?<key>[^"\[{}\]]+)"#"?(?<value>[^"\[{}\],]+)/gm;
+	const dictPattern = /"(?<key>[^"[{}\]]+)"#"?(?<value>[^"[{}\],]+)/gm;
 	// Fetch the string per layer from the array (between {}'s).
 	const layerContents = Array.from(content.matchAll(layerPattern));
 	const layerInfos = layerContents.map((match) => {
@@ -190,8 +190,21 @@ function uint8ArrayToString(
 const HORIZONTAL_ORIENTATIONS = ['1090', '1270'];
 
 /** Supernote X series note. */
-export interface SupernoteX extends ISupernote { }
-export class SupernoteX {
+export class SupernoteX implements ISupernote {
+	declare pageWidth: number;
+	declare pageHeight: number;
+	declare addressSize: number;
+	declare lengthFieldSize: number;
+	declare signature: string;
+	declare version: number;
+	declare defaultLayers: string[];
+	declare header: IHeader;
+	declare footer: IFooter;
+	declare keywords: Record<string, IKeyword[]>;
+	declare titles: Record<string, ITitle[]>;
+	declare pages: IPage[];
+	declare cover?: ICover;
+
 	constructor(buffer: Uint8Array) {
 		this.pageWidth = 1404;
 		this.pageHeight = 1872;
@@ -363,8 +376,8 @@ export class SupernoteX {
 
 	_extractText(elements: IRecognitionElement[]) {
 		const labels = elements
-			.filter((e: any) => e.type === 'Text')
-			.map((e: any) => decodeURIComponent(escape(e.label))); // Decode using windows-1254 encoding
+			.filter((e) => e.type === 'Text')
+			.map((e) => decodeURIComponent(escape(e.label))); // Decode using windows-1254 encoding
 
 		return labels.join("\n");
 	}

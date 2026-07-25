@@ -65,7 +65,7 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 		: note.pages;
 	const decoder = new RattaRLEDecoder();
 	return Promise.all(
-		pages.map(async (page, pageIndex) => {
+		pages.map(async (page) => {
 			const overlays = page.LAYERSEQ.map((name) => page[name] as ILayer).filter(
 				(layer) => layer.bitmapBuffer !== null && layer.bitmapBuffer.length,
 			);
@@ -89,7 +89,7 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 
 			let images = await Promise.all(promises);
 			images = images.reverse();
-			let output = images[0].clone();
+			const output = images[0].clone();
 			for (let i = 1; i < overlays.length; i++) {
 				compositeImages(images[i], output);
 			}
@@ -209,7 +209,8 @@ export class RattaRLEDecoder {
 			let pushed = false;
 
 			if (holder !== null) {
-				let [prevColor, prevLength] = holder as [number, number];
+				const [prevColor, holderLength] = holder as [number, number];
+				let prevLength = holderLength;
 				holder = null;
 				if (color === prevColor) {
 					length = 1 + length + (((prevLength & 0x7f) + 1) << 7);
@@ -253,7 +254,7 @@ export class RattaRLEDecoder {
 			}
 		}
 
-		let result = concatUint8Arrays(chunks);
+		const result = concatUint8Arrays(chunks);
 		if (result.length !== expectedLength)
 			throw new Error(
 				`Uint8Array length ${result.length} doesn't match expected length ${expectedLength}.`,
@@ -267,7 +268,7 @@ export class RattaRLEDecoder {
 		length: number,
 		translation: Record<number, ColorInstance>,
 	): Uint8Array[] {
-		let newColor =
+		const newColor =
 			encodedColor === -1 ? Color('transparent') : translation[encodedColor];
 		let chunk: Uint8Array;
 		if (newColor === undefined) {

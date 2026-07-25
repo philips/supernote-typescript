@@ -2,7 +2,7 @@ import { ILayer, ISupernote } from './format';
 import { Image, ImageColorModel, decodePng } from "image-js";
 import Color from 'color';
 
-type Pixel = [number, number, number, number]; // Define type for pixel data (alpha, red, green, blue)
+type Pixel = [number, number, number, number]; // image-js RGBA pixel order: red, green, blue, alpha
 
 function concatUint8Arrays(chunks: Uint8Array[]): Uint8Array {
 	// Calculate the total length of the concatenated Uint8Array
@@ -44,13 +44,11 @@ async function compositeImages(sourceImage: Image, destinationImage: Image) {
 }
 
 function blendPixelOverlay(sourcePixel: Pixel, destinationPixel: Pixel): Pixel {
-	const [sourceA, sourceR, sourceG, sourceB] = sourcePixel;
-	const [destinationA, destinationR, destinationG, destinationB] =
-		destinationPixel;
+	const [sourceR, sourceG, sourceB, sourceA] = sourcePixel;
 
 	// HACK: if the pixel is fully transparent just pass the lower pixel through
-	if (sourceR === 0 && sourceG === 0 && sourceB === 0 && sourceA == 0) {
-		return [destinationA, destinationR, destinationG, destinationB] as Pixel;
+	if (sourceR === 0 && sourceG === 0 && sourceB === 0 && sourceA === 0) {
+		return destinationPixel;
 	}
 
 	return sourcePixel;
@@ -96,7 +94,7 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 				compositeImages(images[i], output);
 			}
 
-			return output.grey({ keepAlpha: true });
+			return output;
 		}),
 	);
 }
@@ -122,17 +120,19 @@ export interface IColorPalette extends Record<string, Color> {
 const defaultPalette: IColorPalette = {
 	background: Color('transparent'),
 	black: Color('black'),
-	darkGray: Color('darkgray'),
-	gray: Color('gray'),
+	// NOTE: CSS 'gray' (128,128,128) is darker than CSS 'darkgray' (169,169,169),
+	// so the named colors are swapped here to match darkGray < gray in lightness.
+	darkGray: Color('gray'),
+	gray: Color('darkgray'),
 	white: Color('white'),
 	markerBlack: Color('black'),
-	markerDarkGray: Color('darkgray'),
-	markerGray: Color('gray'),
+	markerDarkGray: Color('gray'),
+	markerGray: Color('darkgray'),
 
-	darkGrayX2: Color('darkgray'),
-	grayX2: Color('gray'),
-	markerDarkGrayX2: Color('darkgray'),
-	markerGrayX2: Color('gray'),
+	darkGrayX2: Color('gray'),
+	grayX2: Color('darkgray'),
+	markerDarkGrayX2: Color('gray'),
+	markerGrayX2: Color('darkgray'),
 };
 
 /** An encoded color palette as found in the Supernote's file buffer. */

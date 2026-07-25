@@ -32,18 +32,16 @@
   },
   "homepage": "https://gitlab.com/philips/supernote-typescript",
   "devDependencies": {
-    "@types/fs-extra": "^9.0.13",
-    "@types/node": "^18.6.5",
-    "@types/sharp": "^0.30.5",
-    "@typescript-eslint/eslint-plugin": "^7.4.0",
-    "@typescript-eslint/parser": "^7.4.0",
-    "@vitest/coverage-v8": "^1.4.0",
-    "eslint": "^8.57.0",
-    "eslint-plugin-node": "^11.1.0",
-    "prettier": "^3.2.5",
-    "typescript": "^4.9.5",
-    "v8-profiler-next": "^1.10.0",
-    "vitest": "^1.4.0"
+    "@types/fs-extra": "9.0.13",
+    "@types/node": "18.19.130",
+    "@typescript-eslint/eslint-plugin": "7.18.0",
+    "@typescript-eslint/parser": "7.18.0",
+    "@vitest/coverage-v8": "1.6.1",
+    "eslint": "8.57.1",
+    "eslint-plugin-node": "11.1.0",
+    "prettier": "3.9.6",
+    "typescript": "4.9.5",
+    "vitest": "1.6.1"
   },
   "dependencies": {
     "color": "^5.0.3",

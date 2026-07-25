@@ -2,8 +2,6 @@ import { ILayer, ISupernote } from './format';
 import { Image, ImageColorModel, decodePng } from "image-js";
 import Color, { ColorInstance } from 'color';
 
-type Pixel = [number, number, number, number]; // image-js RGBA pixel order: red, green, blue, alpha
-
 // True when the platform stores the least-significant byte of a multi-byte
 // value first in memory (true for every runtime this library targets, i.e.
 // x86/x64/ARM Node.js and browsers).
@@ -18,7 +16,15 @@ function packRGBA(r: number, g: number, b: number, a: number): number {
 		: (a | (b << 8) | (g << 16) | (r << 24)) >>> 0;
 }
 
-async function compositeImages(sourceImage: Image, destinationImage: Image) {
+/** Overlays `sourceImage` onto `destinationImage` in place. Both must be
+ * 8-bit RGBA images of matching dimensions.
+ *
+ * Operates on the raw pixel buffers as packed uint32s instead of going
+ * through `Image.getPixel`/`setPixel`, which allocate a fresh JS array per
+ * pixel touched (two per pixel, for both reads and the write). For a
+ * megapixel-scale page composited across several overlay layers, that adds
+ * up to millions of short-lived array allocations; this does none. */
+function compositeImages(sourceImage: Image, destinationImage: Image) {
 	if (
 		sourceImage.width !== destinationImage.width ||
 		sourceImage.height !== destinationImage.height
@@ -26,26 +32,38 @@ async function compositeImages(sourceImage: Image, destinationImage: Image) {
 		throw new Error('Images must have the same dimensions for compositing.');
 	}
 
-	for (let y = 0; y < destinationImage.height; y++) {
-		for (let x = 0; x < destinationImage.width; x++) {
-			const sourcePixel = sourceImage.getPixel(x, y) as Pixel; // Explicitly cast for type safety
-			const destinationPixel = destinationImage.getPixel(x, y) as Pixel;
+	const source = sourceImage.getRawImage();
+	const destination = destinationImage.getRawImage();
 
-			const blendedPixel = blendPixelOverlay(sourcePixel, destinationPixel);
-			destinationImage.setPixel(x, y, blendedPixel);
+	if (
+		source.bitDepth !== 8 ||
+		destination.bitDepth !== 8 ||
+		source.channels !== 4 ||
+		destination.channels !== 4
+	) {
+		throw new Error('Compositing only supports 8-bit RGBA images.');
+	}
+
+	const sourcePixels = new Uint32Array(
+		source.data.buffer,
+		source.data.byteOffset,
+		source.data.length / 4,
+	);
+	const destinationPixels = new Uint32Array(
+		destination.data.buffer,
+		destination.data.byteOffset,
+		destination.data.length / 4,
+	);
+
+	// A fully-transparent RGBA pixel is 0 regardless of platform byte order,
+	// so "is this pixel fully transparent" is just a zero check on the
+	// packed value; anything non-zero overwrites the destination.
+	for (let i = 0; i < sourcePixels.length; i++) {
+		const sourcePixel = sourcePixels[i];
+		if (sourcePixel !== 0) {
+			destinationPixels[i] = sourcePixel;
 		}
 	}
-}
-
-function blendPixelOverlay(sourcePixel: Pixel, destinationPixel: Pixel): Pixel {
-	const [sourceR, sourceG, sourceB, sourceA] = sourcePixel;
-
-	// HACK: if the pixel is fully transparent just pass the lower pixel through
-	if (sourceR === 0 && sourceG === 0 && sourceB === 0 && sourceA === 0) {
-		return destinationPixel;
-	}
-
-	return sourcePixel;
 }
 
 /**

@@ -1,3 +1,3 @@
-export { SupernoteX } from './parsing';
+export { SupernoteX, extractText, extractParagraphs } from './parsing';
 export { toImage } from './conversion';
 export { fetchMirrorFrame } from './mirror';

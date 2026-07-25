@@ -1,6 +1,7 @@
 import * as fs from "fs-extra"
 import { toImage } from "../src/conversion"
-import { SupernoteX } from "../src/parsing"
+import { SupernoteX, extractParagraphs } from "../src/parsing"
+import { IRecognitionElement } from "../src/format"
 import * as imagejs from "image-js"
 import { describe, test, expect } from 'vitest'
 
@@ -174,6 +175,59 @@ describe("rtr", () => {
     ].join('\n')
 
     expect(sn.pages[0].text).toEqual(et)
+  })
+})
+
+describe("extractParagraphs", () => {
+  // Helper to build a recognition word: a positioned word, or (with no box)
+  // one of the recognizer's own "\n" line-break markers.
+  function word(label: string, x?: number, y?: number, w?: number, h?: number): IRecognitionElement['words'][number] {
+    if (x === undefined) return { label }
+    return { label, 'bounding-box': { x, y: y as number, width: w as number, height: h as number } }
+  }
+
+  test("does not insert a paragraph break after a wrapped multi-line block with no blank line before the next block", () => {
+    // Element A: one recognition block spanning two wrapped lines, like a
+    // real handwritten paragraph the device recognized as a single block.
+    const elementA: IRecognitionElement = {
+      type: 'Text',
+      label: 'alpha bravo charlie\ndelta echo foxtrot',
+      words: [
+        word('alpha', 0, 0, 20, 10), word(' '),
+        word('bravo', 25, 0, 20, 10), word(' '),
+        word('charlie', 50, 0, 25, 10),
+        word('\n'),
+        word('delta', 0, 9, 20, 10), word(' '),
+        word('echo', 25, 9, 20, 10), word(' '),
+        word('foxtrot', 50, 9, 25, 10),
+      ],
+    }
+
+    // Element B: a separate block immediately below element A's last line
+    // (gap of 2, well under one line height) - the device split it into a
+    // new block, but visually it's the same paragraph continuing.
+    const elementB: IRecognitionElement = {
+      type: 'Text',
+      label: 'golf hotel',
+      words: [
+        word('golf', 0, 21, 20, 10), word(' '),
+        word('hotel', 25, 21, 20, 10),
+      ],
+    }
+
+    // Element C: a genuinely new paragraph, separated by a real blank gap.
+    const elementC: IRecognitionElement = {
+      type: 'Text',
+      label: 'india',
+      words: [word('india', 0, 60, 20, 10)],
+    }
+
+    const result = extractParagraphs([elementA, elementB, elementC])
+
+    expect(result).toEqual([
+      'alpha bravo charlie delta echo foxtrot golf hotel',
+      'india',
+    ].join('\n\n'))
   })
 })
 

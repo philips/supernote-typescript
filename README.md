@@ -23,6 +23,36 @@ The default font (Helvetica) only supports Latin text. Pass `fontBytes` with a U
 const pdfBytes = await toPdf(note, { fontBytes: await fs.readFile('NotoSans-Regular.ttf') });
 ```
 
+#### Rendering pages in parallel across Workers
+
+`toPdf` is a convenience wrapper around three lower-level pieces, exported so applications can render pages in parallel (across Web Workers or Node `worker_threads`) instead of one at a time on the main thread:
+
+- `extractPageRenderData(note, pageNumber)` — pulls out the minimal, structured-clone-safe slice of one page needed to render it, safe to `postMessage` to a Worker.
+- `toImage` and `encodePng` (from `image-js`) — both safe to call inside a Worker; render the page and encode it to PNG bytes there.
+- `createPdfContext(options?)` / `addPdfPage(ctx, page, image, options?)` — must run on the main thread (they hold `pdf-lib` objects, which aren't structured-clone-safe); `addPdfPage` accepts either an `Image` or already-encoded PNG bytes, so it can take a Worker's output directly.
+
+```ts
+import { SupernoteX, extractPageRenderData, createPdfContext, addPdfPage } from 'supernote-typescript';
+
+const note = new SupernoteX(buffer);
+
+// In each Worker: toImage(pageRenderData, [1]) then encodePng(image), then
+// postMessage the PNG bytes back. See tests/fixtures/render-worker.mjs and
+// tests/pdf-worker-roundtrip.test.ts for a full worker_threads example.
+const pngBuffers = await Promise.all(
+  note.pages.map((_, i) => renderInWorker(extractPageRenderData(note, i + 1))),
+);
+
+// Back on the main thread: assemble the PDF from the rendered pages.
+const ctx = await createPdfContext();
+for (let i = 0; i < note.pages.length; i++) {
+  await addPdfPage(ctx, note.pages[i], pngBuffers[i]);
+}
+const pdfBytes = await ctx.pdfDoc.save();
+```
+
+Note that only page rendering (`toImage`/`encodePng`) is parallelizable this way — PDF assembly, including the final `pdfDoc.save()`, is a single main-thread operation regardless of how many Workers rendered pages.
+
 ## Developer Notes
 
 ### Test Individual Suite

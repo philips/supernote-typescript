@@ -12,6 +12,7 @@
     "build": "tsc",
     "clean": "rm -f tests/output/*.png tests/output/*.jpg tests/output/*.pdf tests/output/*.cpuprofile",
     "lint": "eslint .",
+    "pretest": "npm run build",
     "test": "vitest run",
     "test-watch": "vitest",
     "bench": "vitest bench",

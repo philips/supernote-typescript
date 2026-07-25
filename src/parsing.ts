@@ -11,7 +11,7 @@ import {
 	IPage,
 	ISupernote,
 	ITitle,
-} from './format';
+} from './format.js';
 
 /*
  * Need to make sure that buffer isn't trying to write out of bounds.

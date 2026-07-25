@@ -1,6 +1,33 @@
-import { ILayer, ISupernote } from './format';
+import { ILayerNames, ISupernote } from './format.js';
 import { Image, ImageColorModel, decodePng } from "image-js";
 import Color, { ColorInstance } from 'color';
+
+/** The minimal layer shape `toImage` needs to rasterize a page: enough to
+ * decode/composite, without the address/protocol metadata `ILayer` carries. */
+export interface IRenderableLayer {
+	LAYERNAME: ILayerNames;
+	bitmapBuffer: Uint8Array | null;
+}
+
+/** The minimal page shape `toImage` needs to rasterize a page. Only layers
+ * named in `LAYERSEQ` need to be present. */
+export interface IRenderablePage extends Partial<Record<ILayerNames, IRenderableLayer>> {
+	PAGESTYLE: string;
+	LAYERSEQ: ILayerNames[];
+}
+
+/** The minimal note shape `toImage` needs: page pixel dimensions plus the
+ * per-page layer data, without the class instance or unrelated pages/fields.
+ * `ISupernote` (and its full `IPage`/`ILayer` types) satisfy this structurally,
+ * so `toImage` continues to accept `ISupernote` unchanged; this narrower type
+ * additionally lets a single-page slice (see `extractPageRenderData`) be
+ * passed to `toImage` after being sent through a Worker's structured clone,
+ * without reconstructing a fake `ISupernote`. */
+export interface IRenderableNote {
+	pageWidth: number;
+	pageHeight: number;
+	pages: IRenderablePage[];
+}
 
 // True when the platform stores the least-significant byte of a multi-byte
 // value first in memory (true for every runtime this library targets, i.e.
@@ -68,17 +95,18 @@ function compositeImages(sourceImage: Image, destinationImage: Image) {
 
 /**
  * Convert a Supernote file to one or more image-js image objects.
- * @param note Parsed Supernote.
+ * @param note Parsed Supernote, or the minimal `IRenderableNote` slice
+ * produced by `extractPageRenderData` (e.g. when rendering off-main-thread).
  * @param pageNumbers Optional page numbers to export (defaults to all). Indexing starts at 1.
  */
-export function toImage(note: ISupernote, pageNumbers?: number[]) {
+export function toImage(note: IRenderableNote, pageNumbers?: number[]) {
 	const pages = pageNumbers
 		? pageNumbers.map((n) => note.pages[n - 1])
 		: note.pages;
 	const decoder = new RattaRLEDecoder();
 	return Promise.all(
 		pages.map(async (page) => {
-			const overlays = page.LAYERSEQ.map((name) => page[name] as ILayer).filter(
+			const overlays = page.LAYERSEQ.map((name) => page[name] as IRenderableLayer).filter(
 				(layer) => layer.bitmapBuffer !== null && layer.bitmapBuffer.length,
 			);
 
@@ -113,6 +141,33 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 			return output;
 		}),
 	);
+}
+
+/**
+ * Extracts the minimal, structured-clone-safe slice of `note` needed to
+ * render page `pageNumber` off-main-thread (e.g. posted to a Web Worker or
+ * `worker_threads` worker), without cloning the whole note (every other
+ * page's buffers, or the `SupernoteX` instance and its methods, which don't
+ * survive structured clone). Feed the result straight back into `toImage`:
+ * `toImage(extractPageRenderData(note, n), [1])`.
+ * @param note Parsed Supernote.
+ * @param pageNumber Page number to extract (1-indexed).
+ */
+export function extractPageRenderData(note: ISupernote, pageNumber: number): IRenderableNote {
+	const page = note.pages[pageNumber - 1];
+	const renderablePage: IRenderablePage = {
+		PAGESTYLE: page.PAGESTYLE,
+		LAYERSEQ: page.LAYERSEQ,
+	};
+	for (const name of page.LAYERSEQ) {
+		const layer = page[name];
+		renderablePage[name] = { LAYERNAME: layer.LAYERNAME, bitmapBuffer: layer.bitmapBuffer };
+	}
+	return {
+		pageWidth: note.pageWidth,
+		pageHeight: note.pageHeight,
+		pages: [renderablePage],
+	};
 }
 
 /** Color palette to use as substitutes for the Supernote's colors. */

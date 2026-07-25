@@ -30,13 +30,13 @@ export async function fetchMirrorFrame(ipAddress: string): Promise<Image> {
 	}
 
 	let currentPartHeaders: string[] = [];
-	let buffer = new Uint8Array();
+	let buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
 
 	return new Promise((resolve, reject) => {
 		let found = false;
 		const headerEnd = '\r\n\r\n';
 
-		const processChunk = async (chunk: Uint8Array) => {
+		const processChunk = async (chunk: Uint8Array<ArrayBufferLike>) => {
 			buffer = concatUint8Arrays(buffer, chunk);
 
 			const start = new TextDecoder().decode(buffer).indexOf('Content-Type:', 0);
@@ -98,7 +98,7 @@ export async function fetchMirrorFrame(ipAddress: string): Promise<Image> {
 }
 
 function findBoundary(
-	data: Uint8Array,
+	data: Uint8Array<ArrayBufferLike>,
 	boundary: string,
 	startIndex: number = 0,
 ): number {
@@ -106,7 +106,10 @@ function findBoundary(
 	return new TextDecoder().decode(data).indexOf(boundaryStr, startIndex);
 }
 
-function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {
+function concatUint8Arrays(
+	a: Uint8Array<ArrayBufferLike>,
+	b: Uint8Array<ArrayBufferLike>,
+): Uint8Array<ArrayBufferLike> {
 	const result = new Uint8Array(a.length + b.length);
 	result.set(a, 0);
 	result.set(b, a.length);

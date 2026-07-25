@@ -35,61 +35,61 @@ describe("smoke", () => {
 })
 
 describe("image", () => {
-  test("convert a simple note to png pages", async () => {
+  test("convert a simple note to png pages", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("test.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
       await imagejs.writeSync(`tests/output/test.note-${index}.png`, image)
     }
-  }, { timeout: 30000 })
+  })
 })
 
 describe("nomad", () => {
-  test("convert a note from a nomad Chauvet 3.15.27 to png pages", async () => {
+  test("convert a note from a nomad Chauvet 3.15.27 to png pages", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-2p.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
       await imagejs.writeSync(`tests/output/nomad-3.15.27-blank-2p.note-${index}.png`, image)
     }
-  }, { timeout: 30000 })
+  })
 
-  test("convert a note from a nomad Chauvet 3.15.27 with handwriting recognition to png pages", async () => {
+  test("convert a note from a nomad Chauvet 3.15.27 with handwriting recognition to png pages", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
       await imagejs.writeSync(`tests/output/nomad-3.15.27-blank-shapes-and-RTR.note-${index}.png`, image)
     }
-  }, { timeout: 30000 })
+  })
 })
 
 describe("A5X", () => {
-  test("convert a note from a A5X with Chauvet 2.14.28 to png pages", async () => {
+  test("convert a note from a A5X with Chauvet 2.14.28 to png pages", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
       await imagejs.writeSync(`tests/output/a5x-2.14.28.note-${index}.png`, image)
     }
-  }, { timeout: 30000 })
+  })
 })
 
 describe("manta", () => {
-  test("convert a note from a A5X2 Manta with Chauvet ??? to png pages", async () => {
+  test("convert a note from a A5X2 Manta with Chauvet ??? to png pages", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("manta.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
       await imagejs.writeSync(`tests/output/manta.note-${index}.png`, image)
     }
-  }, { timeout: 30000 })
+  })
 })
 
 describe("horizontal orientation value detection", () => {
   // Ensure horizontal orientation values (1090 and 1270) are read as horizontal
-  test("convert a horizontal note from a A5X2 Manta w/ orientation value 1090", async () => {
+  test("convert a horizontal note from a A5X2 Manta w/ orientation value 1090", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("horizontal_1090.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
@@ -97,9 +97,9 @@ describe("horizontal orientation value detection", () => {
       expect(image.width).toBeGreaterThan(image.height); // expect a landscape image
       await imagejs.writeSync(`tests/output/horizontal_1090.note-${index}.png`, image);
     }
-  }, 30000)
+  })
 
-	test('convert a horizontal note from a A6X2 Nomad w/ orientation value 1270', async () => {
+	test('convert a horizontal note from a A6X2 Nomad w/ orientation value 1270', { timeout: 30000 }, async () => {
 		const sn = new SupernoteX(await readFileToUint8Array('horizontal_1270.note'));
 		const images = await toImage(sn);
 		expect(images).not.toBeUndefined();
@@ -107,10 +107,10 @@ describe("horizontal orientation value detection", () => {
 			expect(image.width).toBeGreaterThan(image.height); // expect a landscape image
 			await imagejs.writeSync(`tests/output/horizontal_1270.note-${index}.png`, image);
 		}
-	}, 30000);
+	});
 
   // Ensure vertical orientation values (1000, 1180) are still read as vertical
-	test('convert a vertical note w/ orientation value 1000', async () => {
+	test('convert a vertical note w/ orientation value 1000', { timeout: 30000 }, async () => {
 		const sn = new SupernoteX(await readFileToUint8Array('vertical_1000.note'));
 		const images = await toImage(sn);
 		expect(images).not.toBeUndefined();
@@ -118,10 +118,11 @@ describe("horizontal orientation value detection", () => {
 			expect(image.height).toBeGreaterThan(image.width); // expect a portrait image
 			await imagejs.writeSync(`tests/output/vertical_1000.note-${index}.png`, image);
 		}
-	}, 30000);
+	});
 
 	test(
 		'convert a vertical note from a A6X2 Nomad w/ orientation value 1180',
+		{ timeout: 30000 },
 		async () => {
 			const sn = new SupernoteX(await readFileToUint8Array('vertical_1180.note'));
 			const images = await toImage(sn);
@@ -131,23 +132,22 @@ describe("horizontal orientation value detection", () => {
 				await imagejs.writeSync(`tests/output/vertical_1180.note-${index}.png`, image);
 			}
 		},
-		{ timeout: 30000 },
 	);
 })
 
 describe("color", () => {
-  test("test a note that has an unknown color", async () => {
+  test("test a note that has an unknown color", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("unknown-color.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
       await imagejs.writeSync(`tests/output/unknown-colors.note-${index}.png`, image)
     }
-  }, { timeout: 30000 })
+  })
 })
 
 describe("rtr", () => {
-  test("test a note that has paragraphs", async () => {
+  test("test a note that has paragraphs", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
 
     const ep = [
@@ -174,7 +174,7 @@ describe("rtr", () => {
     ].join('\n')
 
     expect(sn.pages[0].text).toEqual(et)
-  }, { timeout: 30000 })
+  })
 })
 
 /*

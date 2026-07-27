@@ -46,6 +46,24 @@ describe("image", () => {
   })
 })
 
+describe("links", () => {
+  test("appends #PageN anchor to same-file links via PAGEID; cross-file and no-page links have no anchor", async () => {
+    let sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    const allLinks = Object.values(sn.links).flat()
+    // Link to page 1 of the same file should include the page anchor.
+    const sameFileLink = allLinks.find(l => l.text.startsWith("nomad-3.26.40-link-tag-3p"))
+    expect(sameFileLink).toBeDefined()
+    expect(sameFileLink!.text).toBe("nomad-3.26.40-link-tag-3p#Page 1")
+    // Cross-file link with a PAGEID (target page not in this document) has no anchor.
+    const crossFileWithPage = allLinks.find(l => l.PAGEID !== '0' && l.PAGEID !== 'none' && l.text.startsWith("nomad-3.26.40-blank-2p") && !l.text.includes('#'))
+    expect(crossFileWithPage).toBeDefined()
+    // Cross-file link without a page (PAGEID 'none') has no anchor.
+    const crossFileNoPage = allLinks.find(l => l.PAGEID === 'none')
+    expect(crossFileNoPage).toBeDefined()
+    expect(crossFileNoPage!.text).toBe("nomad-3.26.40-blank-2p")
+  })
+})
+
 describe("nomad", () => {
   test("convert a note from a nomad Chauvet 3.15.27 to png pages", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-2p.note"))
@@ -312,3 +330,44 @@ describe("mirror", () => {
   }, { timeout: 30000 })
 })
 */
+
+
+
+
+describe("keywords", () => {
+  test("parses all keyword stars with correct text and page via key prefix", async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+
+    const allKeywords = Object.entries(sn.keywords).flatMap(([key, kws]) =>
+      kws.map(kw => ({ key, kw }))
+    )
+
+    // Three keyword stars on page 3.
+    expect(allKeywords).toHaveLength(3)
+
+    const texts = allKeywords.map(({ kw }) => kw.KEYWORD)
+    expect(texts).toContain("Supemote Keyword")
+    expect(texts).toContain("Multiple keywords")
+    expect(texts).toContain("New tag")
+
+    // The KEYWORD footer key encodes the source page as its first 4 digits (1-indexed).
+    // This is the reliable page indicator — KEYWORDPAGE can be '0' (invalid).
+    for (const { key } of allKeywords) {
+      expect(parseInt(key.slice(0, 4))).toBe(3)
+    }
+
+    // "New tag" has KEYWORDPAGE='0' (invalid) but the key prefix is correct.
+    const newTagEntry = allKeywords.find(({ kw }) => kw.KEYWORD === "New tag")
+    expect(newTagEntry).toBeDefined()
+    expect(newTagEntry!.kw.KEYWORDPAGE).toBe('0')
+    expect(parseInt(newTagEntry!.key.slice(0, 4))).toBe(3)
+  })
+
+  test("page 3 OCR text includes the # new tag line that maps to the keyword", async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    const page3Text = sn.pages[2].text
+    expect(page3Text).toContain("# new tag")
+    expect(page3Text).toContain("# TITLE")
+    expect(page3Text).toContain("Multiple keywords")
+  })
+})

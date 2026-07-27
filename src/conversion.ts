@@ -1,8 +1,33 @@
-import { ILayer, ISupernote } from './format';
+import { ILayerNames, ISupernote } from './format.js';
 import { Image, ImageColorModel, decodePng } from "image-js";
 import Color, { ColorInstance } from 'color';
 
-type Pixel = [number, number, number, number]; // image-js RGBA pixel order: red, green, blue, alpha
+/** The minimal layer shape `toImage` needs to rasterize a page: enough to
+ * decode/composite, without the address/protocol metadata `ILayer` carries. */
+export interface IRenderableLayer {
+	LAYERNAME: ILayerNames;
+	bitmapBuffer: Uint8Array | null;
+}
+
+/** The minimal page shape `toImage` needs to rasterize a page. Only layers
+ * named in `LAYERSEQ` need to be present. */
+export interface IRenderablePage extends Partial<Record<ILayerNames, IRenderableLayer>> {
+	PAGESTYLE: string;
+	LAYERSEQ: ILayerNames[];
+}
+
+/** The minimal note shape `toImage` needs: page pixel dimensions plus the
+ * per-page layer data, without the class instance or unrelated pages/fields.
+ * `ISupernote` (and its full `IPage`/`ILayer` types) satisfy this structurally,
+ * so `toImage` continues to accept `ISupernote` unchanged; this narrower type
+ * additionally lets a single-page slice (see `extractPageRenderData`) be
+ * passed to `toImage` after being sent through a Worker's structured clone,
+ * without reconstructing a fake `ISupernote`. */
+export interface IRenderableNote {
+	pageWidth: number;
+	pageHeight: number;
+	pages: IRenderablePage[];
+}
 
 // True when the platform stores the least-significant byte of a multi-byte
 // value first in memory (true for every runtime this library targets, i.e.
@@ -18,7 +43,15 @@ function packRGBA(r: number, g: number, b: number, a: number): number {
 		: (a | (b << 8) | (g << 16) | (r << 24)) >>> 0;
 }
 
-async function compositeImages(sourceImage: Image, destinationImage: Image) {
+/** Overlays `sourceImage` onto `destinationImage` in place. Both must be
+ * 8-bit RGBA images of matching dimensions.
+ *
+ * Operates on the raw pixel buffers as packed uint32s instead of going
+ * through `Image.getPixel`/`setPixel`, which allocate a fresh JS array per
+ * pixel touched (two per pixel, for both reads and the write). For a
+ * megapixel-scale page composited across several overlay layers, that adds
+ * up to millions of short-lived array allocations; this does none. */
+function compositeImages(sourceImage: Image, destinationImage: Image) {
 	if (
 		sourceImage.width !== destinationImage.width ||
 		sourceImage.height !== destinationImage.height
@@ -26,41 +59,54 @@ async function compositeImages(sourceImage: Image, destinationImage: Image) {
 		throw new Error('Images must have the same dimensions for compositing.');
 	}
 
-	for (let y = 0; y < destinationImage.height; y++) {
-		for (let x = 0; x < destinationImage.width; x++) {
-			const sourcePixel = sourceImage.getPixel(x, y) as Pixel; // Explicitly cast for type safety
-			const destinationPixel = destinationImage.getPixel(x, y) as Pixel;
+	const source = sourceImage.getRawImage();
+	const destination = destinationImage.getRawImage();
 
-			const blendedPixel = blendPixelOverlay(sourcePixel, destinationPixel);
-			destinationImage.setPixel(x, y, blendedPixel);
+	if (
+		source.bitDepth !== 8 ||
+		destination.bitDepth !== 8 ||
+		source.channels !== 4 ||
+		destination.channels !== 4
+	) {
+		throw new Error('Compositing only supports 8-bit RGBA images.');
+	}
+
+	const sourcePixels = new Uint32Array(
+		source.data.buffer,
+		source.data.byteOffset,
+		source.data.length / 4,
+	);
+	const destinationPixels = new Uint32Array(
+		destination.data.buffer,
+		destination.data.byteOffset,
+		destination.data.length / 4,
+	);
+
+	// A fully-transparent RGBA pixel is 0 regardless of platform byte order,
+	// so "is this pixel fully transparent" is just a zero check on the
+	// packed value; anything non-zero overwrites the destination.
+	for (let i = 0; i < sourcePixels.length; i++) {
+		const sourcePixel = sourcePixels[i];
+		if (sourcePixel !== 0) {
+			destinationPixels[i] = sourcePixel;
 		}
 	}
 }
 
-function blendPixelOverlay(sourcePixel: Pixel, destinationPixel: Pixel): Pixel {
-	const [sourceR, sourceG, sourceB, sourceA] = sourcePixel;
-
-	// HACK: if the pixel is fully transparent just pass the lower pixel through
-	if (sourceR === 0 && sourceG === 0 && sourceB === 0 && sourceA === 0) {
-		return destinationPixel;
-	}
-
-	return sourcePixel;
-}
-
 /**
  * Convert a Supernote file to one or more image-js image objects.
- * @param note Parsed Supernote.
+ * @param note Parsed Supernote, or the minimal `IRenderableNote` slice
+ * produced by `extractPageRenderData` (e.g. when rendering off-main-thread).
  * @param pageNumbers Optional page numbers to export (defaults to all). Indexing starts at 1.
  */
-export function toImage(note: ISupernote, pageNumbers?: number[]) {
+export function toImage(note: IRenderableNote, pageNumbers?: number[]) {
 	const pages = pageNumbers
 		? pageNumbers.map((n) => note.pages[n - 1])
 		: note.pages;
 	const decoder = new RattaRLEDecoder();
 	return Promise.all(
 		pages.map(async (page) => {
-			const overlays = page.LAYERSEQ.map((name) => page[name] as ILayer).filter(
+			const overlays = page.LAYERSEQ.map((name) => page[name] as IRenderableLayer).filter(
 				(layer) => layer.bitmapBuffer !== null && layer.bitmapBuffer.length,
 			);
 
@@ -69,7 +115,13 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 					layer.LAYERNAME == 'BGLAYER' &&
 					page.PAGESTYLE.startsWith('user_')
 				) {
-					return decodePng(layer.bitmapBuffer as Uint8Array);
+					// User-uploaded background templates are arbitrary PNGs and may
+					// decode to any bit depth/color model (e.g. 8-bit RGB with no
+					// alpha channel). compositeImages() requires 8-bit RGBA on both
+					// sides, so normalize regardless of the source PNG's format.
+					return decodePng(layer.bitmapBuffer as Uint8Array)
+						.convertBitDepth(8)
+						.convertColor(ImageColorModel.RGBA);
 				}
 				const buffer = decoder.decode(
 					layer.bitmapBuffer as Uint8Array,
@@ -89,6 +141,33 @@ export function toImage(note: ISupernote, pageNumbers?: number[]) {
 			return output;
 		}),
 	);
+}
+
+/**
+ * Extracts the minimal, structured-clone-safe slice of `note` needed to
+ * render page `pageNumber` off-main-thread (e.g. posted to a Web Worker or
+ * `worker_threads` worker), without cloning the whole note (every other
+ * page's buffers, or the `SupernoteX` instance and its methods, which don't
+ * survive structured clone). Feed the result straight back into `toImage`:
+ * `toImage(extractPageRenderData(note, n), [1])`.
+ * @param note Parsed Supernote.
+ * @param pageNumber Page number to extract (1-indexed).
+ */
+export function extractPageRenderData(note: ISupernote, pageNumber: number): IRenderableNote {
+	const page = note.pages[pageNumber - 1];
+	const renderablePage: IRenderablePage = {
+		PAGESTYLE: page.PAGESTYLE,
+		LAYERSEQ: page.LAYERSEQ,
+	};
+	for (const name of page.LAYERSEQ) {
+		const layer = page[name];
+		renderablePage[name] = { LAYERNAME: layer.LAYERNAME, bitmapBuffer: layer.bitmapBuffer };
+	}
+	return {
+		pageWidth: note.pageWidth,
+		pageHeight: note.pageHeight,
+		pages: [renderablePage],
+	};
 }
 
 /** Color palette to use as substitutes for the Supernote's colors. */

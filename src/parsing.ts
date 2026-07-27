@@ -12,7 +12,7 @@ import {
 	IPage,
 	ISupernote,
 	ITitle,
-} from './format';
+} from './format.js';
 
 /*
  * Need to make sure that buffer isn't trying to write out of bounds.
@@ -189,6 +189,171 @@ function uint8ArrayToString(
 
 // Note: known vertical orientations are 1000, 1180
 const HORIZONTAL_ORIENTATIONS = ['1090', '1270'];
+
+type IRecognitionWord = IRecognitionElement['words'][number];
+
+interface IRecognizedLine {
+	text: string;
+	/** Left edge of the line's bounding box. */
+	x: number;
+	/** Top edge of the line's bounding box. */
+	top: number;
+	/** Bottom edge of the line's bounding box. */
+	bottom: number;
+	height: number;
+}
+
+/** How much two fragments' tops may differ, relative to their own height,
+ * and still be considered the same visual line. */
+const SAME_LINE_HEIGHT_RATIO = 0.5;
+/** How large a gap between lines must be, relative to the local line
+ * height, to be treated as a paragraph break rather than a line wrap. */
+const PARAGRAPH_GAP_HEIGHT_RATIO = 1.0;
+/** Number of preceding lines averaged to estimate the "local" line height,
+ * so a page mixing large headings and small body text doesn't skew a
+ * single page-wide average. */
+const LINE_HEIGHT_WINDOW = 3;
+
+/** Recognition labels arrive as UTF-8 bytes read through a Latin-1 decoder,
+ * so they need to be re-decoded to recover the original text. */
+function decodeRecognitionLabel(label: string): string {
+	return decodeURIComponent(escape(label));
+}
+
+/** Split one recognition element into its visual lines. Multi-line
+ * elements embed "\n" marker words between lines; each line gets its own
+ * bounding box computed from its own words, rather than borrowing the
+ * bounding box of the element's first word. */
+function splitElementIntoLines(element: IRecognitionElement): IRecognizedLine[] {
+	const text = decodeRecognitionLabel(element.label);
+	const lineTexts = text.split('\n');
+
+	const wordLines: IRecognitionWord[][] = [[]];
+	for (const word of element.words) {
+		if (word.label === '\n' && !word['bounding-box']) {
+			wordLines.push([]);
+		} else {
+			wordLines[wordLines.length - 1].push(word);
+		}
+	}
+
+	// Defensive fallback: if the "\n" markers didn't line up with the
+	// label's own line breaks, treat the whole element as a single line
+	// rather than silently dropping text.
+	if (wordLines.length !== lineTexts.length) {
+		return boxLine(text.replace(/\n/g, ' ').trim(), element.words);
+	}
+
+	return lineTexts.flatMap((lineText, i) => boxLine(lineText.trim(), wordLines[i]));
+}
+
+/** Build a single IRecognizedLine (if any word has a bounding box) for the
+ * given text and words. */
+function boxLine(text: string, words: IRecognitionWord[]): IRecognizedLine[] {
+	if (text.length === 0) return [];
+
+	const boxes = words
+		.map((w) => w['bounding-box'])
+		.filter((b): b is NonNullable<IRecognitionWord['bounding-box']> => !!b);
+
+	if (boxes.length === 0) return [];
+
+	const top = Math.min(...boxes.map((b) => b.y));
+	const bottom = Math.max(...boxes.map((b) => b.y + b.height));
+	const x = Math.min(...boxes.map((b) => b.x));
+
+	return [{ text, x, top, bottom, height: bottom - top }];
+}
+
+/** Merge line fragments that sit on the same visual line (this happens
+ * when the recognizer splits one handwritten line across several
+ * elements) via a single forward sweep, chaining each fragment to the
+ * previous one rather than comparing every pair. A pairwise "close in y"
+ * comparator is not guaranteed transitive and can produce inconsistent
+ * sort orders; this sweep sidesteps that. */
+function clusterIntoVisualLines(lines: IRecognizedLine[]): IRecognizedLine[] {
+	if (lines.length === 0) return [];
+
+	const sorted = [...lines].sort((a, b) => a.top - b.top);
+
+	const clusters: IRecognizedLine[][] = [[sorted[0]]];
+	for (let i = 1; i < sorted.length; i++) {
+		const line = sorted[i];
+		const cluster = clusters[clusters.length - 1];
+		const last = cluster[cluster.length - 1];
+		const sameLineThreshold = Math.min(last.height, line.height) * SAME_LINE_HEIGHT_RATIO;
+
+		if (line.top - last.top < sameLineThreshold) {
+			cluster.push(line);
+		} else {
+			clusters.push([line]);
+		}
+	}
+
+	return clusters.map((cluster) => {
+		cluster.sort((a, b) => a.x - b.x);
+		return {
+			text: cluster.map((l) => l.text).join(' '),
+			x: Math.min(...cluster.map((l) => l.x)),
+			top: Math.min(...cluster.map((l) => l.top)),
+			bottom: Math.max(...cluster.map((l) => l.bottom)),
+			height: Math.max(...cluster.map((l) => l.bottom)) - Math.min(...cluster.map((l) => l.top)),
+		};
+	});
+}
+
+/** Join visual lines into paragraphs. A gap is measured from the bottom of
+ * the previous line to the top of the next, so a wrapped line inside a
+ * tall multi-line block doesn't get mistaken for a paragraph break just
+ * because the block itself spans several lines. The threshold is a local,
+ * rolling estimate of line height rather than a single page-wide average,
+ * so headings and body text don't skew each other's thresholds. */
+function joinLinesIntoParagraphs(lines: IRecognizedLine[]): string {
+	if (lines.length === 0) return '';
+
+	const sorted = [...lines].sort((a, b) => a.top - b.top);
+
+	let result = sorted[0].text;
+	const recentHeights = [sorted[0].height];
+
+	for (let i = 1; i < sorted.length; i++) {
+		const previous = sorted[i - 1];
+		const current = sorted[i];
+		const gap = current.top - previous.bottom;
+
+		const localLineHeight = recentHeights.reduce((sum, h) => sum + h, 0) / recentHeights.length;
+		const isNewParagraph = gap > localLineHeight * PARAGRAPH_GAP_HEIGHT_RATIO;
+
+		result += isNewParagraph ? '\n\n' : ' ';
+		result += current.text;
+
+		recentHeights.push(current.height);
+		if (recentHeights.length > LINE_HEIGHT_WINDOW) recentHeights.shift();
+	}
+
+	return result;
+}
+
+/** Extract plain recognized text, one recognition element per line. */
+export function extractText(elements: IRecognitionElement[]): string {
+	return elements
+		.filter((e) => e.type === 'Text')
+		.map((e) => decodeRecognitionLabel(e.label))
+		.join('\n');
+}
+
+/** Extract recognized text grouped into paragraphs. Wrapped lines within a
+ * paragraph are reflowed onto one line; a vertical gap of roughly a line
+ * height or more is treated as a paragraph break. */
+export function extractParagraphs(elements: IRecognitionElement[]): string {
+	const lines = elements
+		.filter((e) => e.type === 'Text')
+		.flatMap(splitElementIntoLines);
+
+	const visualLines = clusterIntoVisualLines(lines);
+
+	return joinLinesIntoParagraphs(visualLines);
+}
 
 /** Supernote X series note. */
 export class SupernoteX implements ISupernote {
@@ -392,67 +557,11 @@ export class SupernoteX implements ISupernote {
 	}
 
 	_extractText(elements: IRecognitionElement[]) {
-		const labels = elements
-			.filter((e) => e.type === 'Text')
-			.map((e) => decodeURIComponent(escape(e.label))); // Decode using windows-1254 encoding
-
-		return labels.join("\n");
+		return extractText(elements);
 	}
 
 	_extractParagraphs(elements: IRecognitionElement[]) {
-		// Filter text elements and get their bounding boxes
-		const textElements = elements
-			.filter(e => e.type === 'Text')
-			.map(e => ({
-				text: decodeURIComponent(escape(e.label)),
-				box: e.words[0]?.['bounding-box']
-			}))
-			.filter(e => e.box); // Only keep elements with valid bounding boxes
-
-		if (textElements.length === 0) return '';
-
-		const avgLineHeight = textElements.reduce((sum, e) => sum + (e.box?.height || 0), 0) / textElements.length;
-
-		// Sort by vertical position first, then horizontal
-		textElements.sort((a, b) => {
-			const verticalDiff = (a.box?.y || 0) - (b.box?.y || 0);
-			// If elements are roughly on the same line (within 0.5 line height), sort by x
-			if (Math.abs(verticalDiff) < avgLineHeight * 0.5) {
-				return (a.box?.x || 0) - (b.box?.x || 0);
-			}
-			return verticalDiff;
-		});
-
-		// Group elements into paragraphs based on vertical spacing
-		let result = '';
-		let lastY = textElements[0].box?.y || 0;
-		let lastX = textElements[0].box?.x || 0;
-
-		textElements.forEach((element, index) => {
-			const currentY = element.box?.y || 0;
-			const currentX = element.box?.x || 0;
-
-			if (index > 0) {
-				const verticalGap = currentY - lastY;
-				const isNewParagraph = verticalGap > avgLineHeight * 1.5;
-
-				if (isNewParagraph) {
-					result += '\n\n';
-				} else if (currentX < lastX) { // Same paragraph
-					result += ' ';
-				} else { // Same line
-					result += ' ';
-				}
-			}
-
-
-			const trimmed = element.text.replace(/\n/g, ' ');
-			result += trimmed;
-			lastY = currentY;
-			lastX = currentX;
-		});
-
-		return result;
+		return extractParagraphs(elements);
 	}
 
 	/** Parse layer at a specific address in a Supernote file's buffer contents. */

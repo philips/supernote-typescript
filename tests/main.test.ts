@@ -64,6 +64,17 @@ describe("links", () => {
   })
 })
 
+describe("digest_image", () => {
+  test("convert a mark file into a png image", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("digest_test.mark"))
+    const images = await toImage(sn)
+    expect(images).not.toBeUndefined()
+    for await (const [index, image] of images.entries()) {
+      await imagejs.writeSync(`tests/output/digest_test.mark-${index}.png`, image)
+    }
+  })
+})
+
 describe("nomad", () => {
   test("convert a note from a nomad Chauvet 3.15.27 to png pages", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-2p.note"))

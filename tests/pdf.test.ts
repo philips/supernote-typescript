@@ -1,6 +1,6 @@
 import * as fs from "fs-extra"
 import { encodePng } from "image-js"
-import { toPdf, createPdfContext, addPdfPage } from "../src/pdf"
+import { toPdf, createPdfContext, addPdfPage, addTextOnlyPdfPage } from "../src/pdf"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import { PDFParse } from "pdf-parse"
@@ -114,5 +114,40 @@ describe("pdf", () => {
     await parserB.destroy()
 
     expect(textA.text).toBe(textB.text)
+  })
+
+  test("addTextOnlyPdfPage produces the same searchable text as addPdfPage, without embedding an image", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const images = await toImage(sn)
+
+    const ctxWithImage = await createPdfContext()
+    for (let i = 0; i < sn.pages.length; i++) {
+      await addPdfPage(ctxWithImage, sn.pages[i], images[i])
+    }
+    const pdfWithImage = await ctxWithImage.pdfDoc.save()
+
+    const ctxTextOnly = await createPdfContext()
+    for (let i = 0; i < sn.pages.length; i++) {
+      await addTextOnlyPdfPage(ctxTextOnly, sn.pages[i], sn.pageWidth, sn.pageHeight)
+    }
+    const pdfTextOnly = await ctxTextOnly.pdfDoc.save()
+
+    // No image data to encode/compress/embed, so this should be dramatically
+    // smaller than the equivalent PDF with real page images — not just a
+    // marginal difference — since that's the entire point of this function.
+    expect(pdfTextOnly.byteLength).toBeLessThan(pdfWithImage.byteLength / 10)
+
+    const parserA = new PDFParse({ data: pdfWithImage })
+    const textA = await parserA.getText()
+    await parserA.destroy()
+
+    const parserB = new PDFParse({ data: pdfTextOnly })
+    const textB = await parserB.getText()
+    await parserB.destroy()
+
+    expect(textB.text).toBe(textA.text)
+    for (const word of ["Real", "time", "recognition", "paragraph", "reflow", "together"]) {
+      expect(textB.text).toContain(word)
+    }
   })
 })

@@ -654,7 +654,19 @@ export class SupernoteX implements ISupernote {
 		return this.titles;
 	}
 
-	/** Parse links from Supernote file's buffer contents. */
+	/** Parse links from Supernote file's buffer contents.
+	 * The returned Record's keys (taken as-is from the file's own `LINKO_*`
+	 * footer keys) aren't just unique identifiers: their first 4 characters,
+	 * read as an integer, are the 1-indexed page the link is actually drawn
+	 * on -- verified against real device-created notes, and the only
+	 * reliable way to find a link's source page (`ILink.OBJPAGE` isn't; see
+	 * its doc comment). The remaining characters are the link's own
+	 * `LINKRECT` `y,x,h,w` digits, zero-padded to 4 each and concatenated --
+	 * cosmetic, just enough to keep keys with links on the same page
+	 * distinct. E.g. key `"00021253011801320743"` for a link on page 2 with
+	 * `LINKRECT: "118,1253,743,132"` (`x,y,w,h`): `0002` + `1253` (y) +
+	 * `0118` (x) + `0132` (h) + `0743` (w).
+	 * See https://github.com/philips/supernote-typescript/issues/32. */
 	_parseLinks(buffer: Uint8Array): Record<string, ILink[]> {
 		this.links = {};
 		Object.entries(this.footer.LINKO).forEach(([key, value]) => {

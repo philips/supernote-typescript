@@ -1,6 +1,8 @@
 import {
 	PDFDocument,
 	PDFFont,
+	PDFName,
+	PDFPage,
 	StandardFonts,
 	TextRenderingMode,
 	beginText,
@@ -67,39 +69,19 @@ export interface AddPdfPageOptions {
 	dpi?: number;
 }
 
-/**
- * Adds one rendered page to `ctx`: the page image, plus the recognized
- * handwriting (RTR) text drawn invisibly on top of it at the position it was
- * written, so PDF viewers can search for and select the handwritten words.
- *
- * `image` may be an `image-js` `Image` (e.g. straight from `toImage`) or
- * already-PNG-encoded bytes (e.g. from a Worker that already called
- * `toImage` + `encodePng` off-main-thread) — accepting bytes avoids the main
- * thread needing to reconstruct an `Image` just to re-encode it.
- *
- * Main-thread only: `ctx` holds `pdf-lib` objects.
- */
-export async function addPdfPage(
-	ctx: PdfContext,
+// Draws the recognized handwriting (RTR) text invisibly onto `pdfPage` at
+// the position it was written, so PDF viewers (or pdf.js's getTextContent())
+// can find/select/extract the handwritten words. Shared by addPdfPage() (page
+// also gets the rendered image drawn beneath this) and addTextOnlyPdfPage()
+// (no image at all — see its doc comment for when that's the right choice).
+function drawRecognitionText(
+	pdfPage: PDFPage,
+	fontKey: PDFName,
+	font: PDFFont,
 	page: IPage,
-	image: Image | Uint8Array,
-	options: AddPdfPageOptions = {},
-): Promise<void> {
-	const { dpi = 300 } = options;
-	const { pdfDoc, font } = ctx;
-	const pointsPerPixel = 72 / dpi;
-
-	const pngBytes = image instanceof Uint8Array ? image : encodePng(image);
-	const pngImage = await pdfDoc.embedPng(pngBytes);
-
-	const widthPts = pngImage.width * pointsPerPixel;
-	const heightPts = pngImage.height * pointsPerPixel;
-
-	const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
-	const fontKey = pdfPage.node.newFontDictionary(font.name, font.ref);
-
-	pdfPage.drawImage(pngImage, { x: 0, y: 0, width: widthPts, height: heightPts });
-
+	pointsPerPixel: number,
+	heightPts: number,
+): void {
 	for (const element of page.recognitionElements) {
 		if (element.type !== 'Text') continue;
 
@@ -152,6 +134,75 @@ export async function addPdfPage(
 			}
 		}
 	}
+}
+
+/**
+ * Adds one rendered page to `ctx`: the page image, plus the recognized
+ * handwriting (RTR) text drawn invisibly on top of it at the position it was
+ * written, so PDF viewers can search for and select the handwritten words.
+ *
+ * `image` may be an `image-js` `Image` (e.g. straight from `toImage`) or
+ * already-PNG-encoded bytes (e.g. from a Worker that already called
+ * `toImage` + `encodePng` off-main-thread) — accepting bytes avoids the main
+ * thread needing to reconstruct an `Image` just to re-encode it.
+ *
+ * Main-thread only: `ctx` holds `pdf-lib` objects.
+ */
+export async function addPdfPage(
+	ctx: PdfContext,
+	page: IPage,
+	image: Image | Uint8Array,
+	options: AddPdfPageOptions = {},
+): Promise<void> {
+	const { dpi = 300 } = options;
+	const { pdfDoc, font } = ctx;
+	const pointsPerPixel = 72 / dpi;
+
+	const pngBytes = image instanceof Uint8Array ? image : encodePng(image);
+	const pngImage = await pdfDoc.embedPng(pngBytes);
+
+	const widthPts = pngImage.width * pointsPerPixel;
+	const heightPts = pngImage.height * pointsPerPixel;
+
+	const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
+	const fontKey = pdfPage.node.newFontDictionary(font.name, font.ref);
+
+	pdfPage.drawImage(pngImage, { x: 0, y: 0, width: widthPts, height: heightPts });
+
+	drawRecognitionText(pdfPage, fontKey, font, page, pointsPerPixel, heightPts);
+}
+
+/**
+ * Adds one page to `ctx` with the recognized text drawn invisibly, same as
+ * addPdfPage(), but with no image at all — for a PDF whose only purpose is
+ * to be handed to pdf.js so its getTextContent()/getViewport() can be used
+ * (e.g. to build a searchable/selectable text layer over a page that's
+ * actually displayed some other way, such as a directly-rendered canvas).
+ * `pdfPage.render()` is never called against such a PDF, so the image would
+ * be pure dead weight: embedding a full-resolution PNG only for pdf-lib to
+ * decode, recompress, and serialize it is real, size-proportional work
+ * (seconds for a many-page/high-resolution note) for bytes nothing ever
+ * looks at. `pageWidth`/`pageHeight` (pixels) size the PDF page the same way
+ * the image's own dimensions would via addPdfPage().
+ */
+export async function addTextOnlyPdfPage(
+	ctx: PdfContext,
+	page: IPage,
+	pageWidth: number,
+	pageHeight: number,
+	options: AddPdfPageOptions = {},
+): Promise<void> {
+	const { dpi = 300 } = options;
+	const { pdfDoc, font } = ctx;
+	const pointsPerPixel = 72 / dpi;
+
+	const widthPts = pageWidth * pointsPerPixel;
+	const heightPts = pageHeight * pointsPerPixel;
+
+	const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
+	const fontKey = pdfPage.node.newFontDictionary(font.name, font.ref);
+
+	drawRecognitionText(pdfPage, fontKey, font, page, pointsPerPixel, heightPts);
 }
 
 /**

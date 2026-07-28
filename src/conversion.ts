@@ -51,7 +51,7 @@ function packRGBA(r: number, g: number, b: number, a: number): number {
  * pixel touched (two per pixel, for both reads and the write). For a
  * megapixel-scale page composited across several overlay layers, that adds
  * up to millions of short-lived array allocations; this does none. */
-function compositeImages(sourceImage: Image, destinationImage: Image) {
+export function compositeImages(sourceImage: Image, destinationImage: Image) {
 	if (
 		sourceImage.width !== destinationImage.width ||
 		sourceImage.height !== destinationImage.height

@@ -188,4 +188,38 @@ describe("atelier real device file", () => {
     expect(composite!.height).toEqual(2560);
     await imagejs.writeSync(`tests/output/real-device.spd-composite.png`, composite!);
   })
+
+  test("toCompositeImage can composite a subset of surfaces, e.g. hiding the reference layer", { timeout: 30000 }, async () => {
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    const full = await note.toCompositeImage();
+    const withoutBackground = await note.toCompositeImage(["surface_1", "surface_2"]);
+    expect(withoutBackground).not.toBeNull();
+    // Still sized/aligned against every surface in the file, not just the
+    // ones included -- same coordinate space as toImage()/the full composite.
+    expect(withoutBackground!.width).toEqual(full!.width);
+    expect(withoutBackground!.height).toEqual(full!.height);
+    await imagejs.writeSync(`tests/output/real-device.spd-composite-no-background.png`, withoutBackground!);
+
+    // (70, 0) is outside surface_1/surface_2's own tiles but inside
+    // surface_9999's (the "Reference Layer" background) -- so excluding
+    // surface_9999 should leave it transparent, unlike the full composite
+    // where the background shows through (opaque white paper there).
+    expect(withoutBackground!.getPixel(70, 0)).toEqual([0, 0, 0, 0]);
+    expect(full!.getPixel(70, 0)).toEqual([255, 255, 255, 255]);
+  })
+
+  test("toCompositeImage returns null when the requested subset has no content", async () => {
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    expect(await note.toCompositeImage([])).toBeNull();
+    // surface_3 exists (it's a real layer) but has no tiles of its own.
+    expect(await note.toCompositeImage(["surface_3"])).toBeNull();
+  })
+
+  test("toCompositeImage ignores requested surface names the file doesn't have", { timeout: 30000 }, async () => {
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    const background = await note.toImage("surface_9999");
+    const composite = await note.toCompositeImage(["surface_9999", "surface_no_such_layer"]);
+    expect(composite).not.toBeNull();
+    expect(composite!.getPixel(0, 0)).toEqual(background!.getPixel(0, 0));
+  })
 })

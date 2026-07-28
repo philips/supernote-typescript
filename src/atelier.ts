@@ -226,18 +226,28 @@ export class SupernoteAtelier {
 	}
 
 	/**
-	 * Stitch and flatten every surface in the file into one final image, in
-	 * the same aligned coordinate space `toImage` uses. Surfaces are layered
+	 * Stitch and flatten a set of surfaces into one final image, in the same
+	 * aligned coordinate space `toImage` uses. Surfaces are layered
 	 * bottom-to-top using `layers` (from the `ls` config value) reversed:
 	 * that list has been observed with the frontmost/topmost layer first
 	 * (matching how most layer panels list layers), and painting back to
 	 * front puts it visually on top. This ordering is a best-effort guess
 	 * alongside the rest of `layers`, see the module doc comment; if `ls`
 	 * didn't decode, surfaces are composited in an arbitrary order instead.
-	 * Returns `null` if the file has no tiles at all.
+	 * @param visibleSurfaces Surface names to include (e.g. from a
+	 * layer-visibility toggle), in any order -- composite order is still
+	 * decided by `layers`/`ls`, not by the order given here. Defaults to
+	 * every surface in the file. Names not present in the file are ignored.
+	 * Returns `null` if nothing ends up included (no tiles at all, or an
+	 * empty/all-excluded `visibleSurfaces`).
 	 */
-	async toCompositeImage(): Promise<Image | null> {
-		const order = this._compositeOrder();
+	async toCompositeImage(visibleSurfaces?: Iterable<IAtelierSurfaceName>): Promise<Image | null> {
+		let order = this._compositeOrder();
+		if (visibleSurfaces !== undefined) {
+			const visible = new Set(visibleSurfaces);
+			order = order.filter((surfaceName) => visible.has(surfaceName));
+		}
+
 		const images: Image[] = [];
 		for (const surfaceName of order) {
 			const image = await this.toImage(surfaceName);

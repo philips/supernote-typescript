@@ -58,7 +58,7 @@ Note that only page rendering (`toImage`/`encodePng`) is parallelizable this way
 `.spd` files, produced by the Supernote Atelier app, are a different format from `.note` files: a SQLite database of image tiles rather than the custom binary layout `SupernoteX` parses. `SupernoteAtelier.open` reads it (via [sql.js](https://github.com/sql-js/sql.js)) and exposes the tiles per surface (layer — surface names vary per file, e.g. `surface_1` or a `surface_9999` "Reference Layer"), plus best-effort decoded metadata (viewport, canvas size, layer names). Its `.spd` schema and `ls` layer encoding aren't officially documented; the reverse-engineered details are noted in [src/atelier.ts](./src/atelier.ts).
 
 - `toImage(surfaceName)` stitches one surface's tiles into a single image, sized and positioned against every surface's tiles in the file so that different layers' images line up and can be composited on top of each other.
-- `toCompositeImage()` flattens every surface into one final image directly, layered bottom-to-top by `layers` order (best-effort, see `toImage`'s note about `ls`) — the simplest way to get one finished picture out of a `.spd` file without handling individual layers yourself.
+- `toCompositeImage(visibleSurfaces?)` flattens surfaces into one final image directly, layered bottom-to-top by `layers` order (best-effort, see `toImage`'s note about `ls`) — the simplest way to get one finished picture out of a `.spd` file without handling individual layers yourself. Defaults to every surface in the file; pass a subset of surface names (e.g. from a layer visibility toggle) to flatten only those.
 
 ```ts
 import { SupernoteAtelier } from 'supernote-typescript';
@@ -68,8 +68,11 @@ const note = await SupernoteAtelier.open(buffer);
 // One surface (layer) at a time:
 const image = await note.toImage('surface_1');
 
-// Or every surface flattened into one final image:
+// Every surface flattened into one final image:
 const flattened = await note.toCompositeImage();
+
+// Or just a chosen subset, e.g. hiding a "Reference Layer" background:
+const withoutBackground = await note.toCompositeImage(['surface_1', 'surface_2']);
 ```
 
 #### Bundling for the browser or mobile

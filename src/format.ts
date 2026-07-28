@@ -1,6 +1,11 @@
 /** Supernote internal link (created via the Supernote link feature). */
 export interface ILink {
-	/** Link type. 1 = internal note link. */
+	/** Link type. Meaning unconfirmed: doesn't reliably distinguish real
+	 * internal-note links from other kinds, e.g. real device-created notes
+	 * have had genuine links with `LINKTYPE: '0'`. Every entry present in
+	 * `SupernoteX.links` has already been resolved as a real link regardless
+	 * of this value, so it isn't a "is this a real link" filter. See
+	 * https://github.com/philips/supernote-typescript/issues/32. */
 	LINKTYPE: string;
 	LINKINOUT: string;
 	/** Address of the link bitmap. */
@@ -16,7 +21,15 @@ export interface ILink {
 	LINKFILE: string;
 	LINKFILEID: string;
 	PAGEID: string;
-	/** 0-indexed page number this link appears on. */
+	/** NOT reliably the page this link is drawn on, despite the name --
+	 * verified against a real device-created note where it didn't match the
+	 * link's actual source page under any indexing convention. Best guess is
+	 * something closer to the source page's own template/display label,
+	 * which can drift from that page's current position in `pages` (e.g.
+	 * after reordering), but that's unconfirmed. To find which page a link
+	 * actually appears on, use the first 4 characters of its key in the
+	 * `SupernoteX.links` Record (see `_parseLinks` in parsing.ts) instead.
+	 * See https://github.com/philips/supernote-typescript/issues/32. */
 	OBJPAGE: string;
 	/** Decoded filename (without path or .note extension) ready for use as [[link]]. */
 	text: string;

@@ -62,6 +62,25 @@ describe("links", () => {
     expect(crossFileNoPage).toBeDefined()
     expect(crossFileNoPage!.text).toBe("nomad-3.26.40-blank-2p")
   })
+
+  test("the links Record key's first 4 characters are the 1-indexed source page, not OBJPAGE", async () => {
+    let sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    // All 3 links in this fixture are physically drawn on the same page
+    // (source page array-index 1, i.e. page 2), so every key shares that
+    // page's 1-indexed prefix, "0002" -- see _parseLinks()'s doc comment.
+    const keys = Object.keys(sn.links)
+    expect(keys.length).toBeGreaterThan(0)
+    for (const key of keys) {
+      expect(key.slice(0, 4)).toBe("0002")
+    }
+    // OBJPAGE is NOT a reliable stand-in for the key prefix: these 3 links
+    // share one source page yet have 3 different OBJPAGE values, which is
+    // exactly what makes it unreliable (see ILink.OBJPAGE's doc comment and
+    // https://github.com/philips/supernote-typescript/issues/32).
+    const allLinks = Object.values(sn.links).flat()
+    const objPages = new Set(allLinks.map(l => l.OBJPAGE))
+    expect(objPages.size).toBeGreaterThan(1)
+  })
 })
 
 describe("digest_image", () => {

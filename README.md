@@ -72,6 +72,26 @@ const image = await note.toImage('surface_1');
 const flattened = await note.toCompositeImage();
 ```
 
+#### Bundling for the browser or mobile
+
+`SupernoteAtelier.open`'s second argument is passed straight through to `sql.js`'s `initSqlJs`, so a bundler that can embed the `.wasm` file as bytes (e.g. esbuild's `binary` loader) can hand it over as `wasmBinary`, instead of `sql.js` fetching/reading a sibling `sql-wasm.wasm` file at runtime via `locateFile` — the one thing that would otherwise differ between Node/Electron and a mobile browser runtime:
+
+```ts
+// esbuild.config.mjs
+loader: { '.wasm': 'binary' }, // resolves a `.wasm` import to a decoded Uint8Array
+
+// your code
+import sqlWasmBinary from 'sql.js/dist/sql-wasm.wasm';
+
+const wasmBinary = sqlWasmBinary.buffer.slice(
+  sqlWasmBinary.byteOffset,
+  sqlWasmBinary.byteOffset + sqlWasmBinary.byteLength,
+);
+const note = await SupernoteAtelier.open(buffer, { wasmBinary });
+```
+
+Used this way in the [Supernote Obsidian Plugin](https://github.com/philips/supernote-obsidian-plugin/pull/137), which runs unmodified on both desktop and mobile.
+
 ## Developer Notes
 
 ### Test Individual Suite

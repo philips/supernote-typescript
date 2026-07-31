@@ -93,13 +93,33 @@ export function compositeImages(sourceImage: Image, destinationImage: Image) {
 	}
 }
 
+export interface ToImageOptions {
+	/** Downsample factor (positive integer, default 1 = full resolution).
+	 * Output pages are `ceil(pageWidth / scale)` x `ceil(pageHeight / scale)`.
+	 * At `scale > 1`, each layer is decoded directly at the reduced
+	 * resolution via `RattaRLEDecoder.decodeAtScale` rather than decoded at
+	 * full resolution and downscaled afterward, so a full `pageWidth` x
+	 * `pageHeight` buffer is never allocated -- meant for cheap thumbnails
+	 * on memory-constrained devices, see
+	 * https://github.com/philips/supernote-typescript/issues/40. */
+	scale?: number;
+}
+
 /**
  * Convert a Supernote file to one or more image-js image objects.
  * @param note Parsed Supernote, or the minimal `IRenderableNote` slice
  * produced by `extractPageRenderData` (e.g. when rendering off-main-thread).
  * @param pageNumbers Optional page numbers to export (defaults to all). Indexing starts at 1.
+ * @param options See `ToImageOptions`.
  */
-export function toImage(note: IRenderableNote, pageNumbers?: number[]) {
+export function toImage(note: IRenderableNote, pageNumbers?: number[], options?: ToImageOptions) {
+	const scale = options?.scale ?? 1;
+	if (!Number.isInteger(scale) || scale < 1) {
+		throw new RangeError(`scale must be a positive integer, received ${scale}`);
+	}
+	const outWidth = Math.ceil(note.pageWidth / scale);
+	const outHeight = Math.ceil(note.pageHeight / scale);
+
 	const pages = pageNumbers
 		? pageNumbers.map((n) => note.pages[n - 1])
 		: note.pages;
@@ -119,16 +139,31 @@ export function toImage(note: IRenderableNote, pageNumbers?: number[]) {
 					// decode to any bit depth/color model (e.g. 8-bit RGB with no
 					// alpha channel). compositeImages() requires 8-bit RGBA on both
 					// sides, so normalize regardless of the source PNG's format.
-					return decodePng(layer.bitmapBuffer as Uint8Array)
+					let image = decodePng(layer.bitmapBuffer as Uint8Array)
 						.convertBitDepth(8)
 						.convertColor(ImageColorModel.RGBA);
+					if (scale > 1) {
+						// Matches the RLE layers' output size exactly (see below) so
+						// compositeImages()' equal-dimensions requirement still holds.
+						image = image.resize({ width: outWidth, height: outHeight, preserveAspectRatio: false });
+					}
+					return image;
 				}
-				const buffer = decoder.decode(
+				if (scale === 1) {
+					const buffer = decoder.decode(
+						layer.bitmapBuffer as Uint8Array,
+						note.pageWidth,
+						note.pageHeight,
+					);
+					return new Image(note.pageWidth, note.pageHeight, { colorModel: ImageColorModel.RGBA, data: buffer });
+				}
+				const decoded = decoder.decodeAtScale(
 					layer.bitmapBuffer as Uint8Array,
 					note.pageWidth,
 					note.pageHeight,
+					scale,
 				);
-				return new Image(note.pageWidth, note.pageHeight, { colorModel: ImageColorModel.RGBA, data: buffer });
+				return new Image(decoded.width, decoded.height, { colorModel: ImageColorModel.RGBA, data: decoded.data });
 			});
 
 			let images = await Promise.all(promises);
@@ -268,6 +303,87 @@ export class RattaRLEDecoder {
 		const result = new Uint8Array(expectedLength);
 		const pixels = new Uint32Array(result.buffer);
 
+		const cursor = this._walkRuns(buffer, totalPixels, allBlank, (cursor, color, length) =>
+			this.fillRun(pixels, cursor, color, length, translation),
+		);
+
+		if (cursor !== totalPixels)
+			throw new Error(
+				`Uint8Array length ${cursor * 4} doesn't match expected length ${expectedLength}.`,
+			);
+		return result;
+	}
+
+	/**
+	 * Like `decode`, but samples directly at a reduced resolution instead of
+	 * decoding a full `width` x `height` buffer and downscaling afterward, so
+	 * the full-resolution buffer is never allocated -- for cheap thumbnails
+	 * on memory-constrained devices, see
+	 * https://github.com/philips/supernote-typescript/issues/40. Uses
+	 * nearest-neighbor sampling: output pixel `(x, y)` takes the color of
+	 * full-resolution pixel `(x * factor, y * factor)`.
+	 * @param buffer Input buffer following Ratta RLE protocol.
+	 * @param width Full-resolution page width.
+	 * @param height Full-resolution page height.
+	 * @param factor Downsample factor (positive integer). `1` samples every
+	 * pixel -- equivalent to, but slower than, `decode` itself, so prefer
+	 * `decode` directly at factor `1`.
+	 * @param palette Optionally custom palette.
+	 * @param allBlank Blank toggle.
+	 * @returns Decoded buffer sized `ceil(width / factor)` x
+	 * `ceil(height / factor)` (not necessarily an exact divisor of the input
+	 * dimensions), plus those output dimensions.
+	 */
+	decodeAtScale(
+		buffer: Uint8Array,
+		width: number,
+		height: number,
+		factor: number,
+		palette?: IColorPalette,
+		allBlank = false,
+	): { data: Uint8Array; width: number; height: number } {
+		if (!Number.isInteger(factor) || factor < 1) {
+			throw new RangeError(`factor must be a positive integer, received ${factor}`);
+		}
+		const outWidth = Math.ceil(width / factor);
+		const outHeight = Math.ceil(height / factor);
+
+		const pal = palette ?? defaultPalette;
+		const translation = this.buildPackedTranslation(pal);
+
+		const totalPixels = width * height;
+		const outResult = new Uint8Array(outWidth * outHeight * 4);
+		const outPixels = new Uint32Array(outResult.buffer);
+
+		const cursor = this._walkRuns(buffer, totalPixels, allBlank, (cursor, color, length) =>
+			this.fillRunAtScale(outPixels, outWidth, width, totalPixels, factor, cursor, length, color, translation),
+		);
+
+		if (cursor !== totalPixels)
+			throw new Error(
+				`Uint8Array length ${cursor * 4} doesn't match expected length ${totalPixels * 4}.`,
+			);
+		return { data: outResult, width: outWidth, height: outHeight };
+	}
+
+	/** Walks `buffer`'s encoded (color, length) runs following Ratta RLE's
+	 * two-byte length-extension scheme, invoking `fill(cursor, color,
+	 * length)` for each run in turn and threading its return value through
+	 * as the next cursor. Shared by `decode` and `decodeAtScale` so both
+	 * stay in sync with this parsing logic; only how a run gets written
+	 * (`fillRun` vs. `fillRunAtScale`) differs between them.
+	 * @param totalPixels Full-resolution pixel count (`width * height`),
+	 * needed to size the trailing run correctly regardless of any
+	 * downsampling `fill` itself does.
+	 * @returns The final cursor, which callers compare against
+	 * `totalPixels` to confirm the buffer decoded to the expected size.
+	 */
+	private _walkRuns(
+		buffer: Uint8Array,
+		totalPixels: number,
+		allBlank: boolean,
+		fill: (cursor: number, color: number, length: number) => number,
+	): number {
 		let cursor = 0;
 		let waiting: [number, number][] = [];
 		let holder: [number, number] | null = null;
@@ -305,24 +421,20 @@ export class RattaRLEDecoder {
 				}
 			}
 			for (const [runColor, runLength] of waiting.values()) {
-				cursor = this.fillRun(pixels, cursor, runColor, runLength, translation);
+				cursor = fill(cursor, runColor, runLength);
 			}
 			waiting = [];
 		}
 
 		if (holder !== null) {
 			[color, length] = holder as [number, number];
-			length = this.adjustTailLength(length, cursor * 4, expectedLength);
+			length = this.adjustTailLength(length, cursor * 4, totalPixels * 4);
 			if (length > 0) {
-				cursor = this.fillRun(pixels, cursor, color, length, translation);
+				cursor = fill(cursor, color, length);
 			}
 		}
 
-		if (cursor !== totalPixels)
-			throw new Error(
-				`Uint8Array length ${cursor * 4} doesn't match expected length ${expectedLength}.`,
-			);
-		return result;
+		return cursor;
 	}
 
 	/** Fills `length` pixels starting at `cursor` with the color for
@@ -340,6 +452,57 @@ export class RattaRLEDecoder {
 		// caller once the whole buffer has been walked.
 		const end = Math.min(cursor + length, pixels.length);
 		pixels.fill(packed, cursor, end);
+		return cursor + length;
+	}
+
+	/** Like `fillRun`, but writes into a `factor`-downsampled output buffer
+	 * instead of a full `fullWidth` x (`totalPixels`/`fullWidth`) one, only
+	 * computing/writing the sample pixels (nearest-neighbor, the top-left
+	 * corner of each `factor` x `factor` block) that fall within this run --
+	 * skipping whole sample rows/columns between them arithmetically rather
+	 * than iterating every full-resolution pixel the run covers, so the cost
+	 * of a run scales with the *output* pixels it contains, not the
+	 * full-resolution ones. */
+	fillRunAtScale(
+		outPixels: Uint32Array,
+		outWidth: number,
+		fullWidth: number,
+		totalPixels: number,
+		factor: number,
+		cursor: number,
+		length: number,
+		encodedColor: number,
+		translation: Record<number, number>,
+	): number {
+		const packed = translation[encodedColor] ?? this.unknownColorPacked;
+		const start = cursor;
+		// Mirrors fillRun's clamp against the full-resolution pixel count
+		// (there, `pixels.length`), even though nothing here is actually
+		// sized to totalPixels -- it's just the bound for what full-res rows
+		// this run could possibly touch.
+		const end = Math.min(cursor + length, totalPixels);
+
+		if (start < end) {
+			const rowStart = Math.floor(start / fullWidth);
+			const rowEndInclusive = Math.floor((end - 1) / fullWidth);
+			const firstSampleRow = Math.ceil(rowStart / factor) * factor;
+			for (let row = firstSampleRow; row <= rowEndInclusive; row += factor) {
+				const rowLinearStart = row * fullWidth;
+				const rowLinearEnd = rowLinearStart + fullWidth;
+				const segStart = Math.max(start, rowLinearStart);
+				const segEnd = Math.min(end, rowLinearEnd);
+				if (segStart >= segEnd) continue;
+
+				const colStart = segStart - rowLinearStart;
+				const colEndInclusive = segEnd - 1 - rowLinearStart;
+				const firstSampleCol = Math.ceil(colStart / factor) * factor;
+				const outRowBase = (row / factor) * outWidth;
+				for (let col = firstSampleCol; col <= colEndInclusive; col += factor) {
+					outPixels[outRowBase + col / factor] = packed;
+				}
+			}
+		}
+
 		return cursor + length;
 	}
 

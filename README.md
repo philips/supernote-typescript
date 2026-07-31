@@ -53,6 +53,18 @@ const pdfBytes = await ctx.pdfDoc.save();
 
 Note that only page rendering (`toImage`/`encodePng`) is parallelizable this way — PDF assembly, including the final `pdfDoc.save()`, is a single main-thread operation regardless of how many Workers rendered pages.
 
+### Cheap thumbnails: rendering at a reduced resolution
+
+`toImage` always rasterizes at the note's native `pageWidth`×`pageHeight` — fine for a main view or export, but wasteful for something like a small thumbnail sidebar, where decoding and holding a full-resolution page in memory per thumbnail adds up fast on memory-constrained devices (this is what motivated [#40](https://github.com/philips/supernote-typescript/issues/40)). Pass `{ scale }` to render directly at a reduced resolution instead:
+
+```ts
+const thumbnails = await toImage(note, undefined, { scale: 10 });
+```
+
+`scale` is an integer downsample factor; output pages are `ceil(pageWidth / scale)` × `ceil(pageHeight / scale)`. This isn't full-resolution decoding followed by a resize — each layer is decoded directly at the reduced resolution (`RattaRLEDecoder.decodeAtScale`, nearest-neighbor sampled), so the full-resolution buffer is never allocated at all. On a 1404×1872 page, `scale: 10` produces a ~104 KB output buffer instead of the ~10 MB a full decode would need.
+
+Omitting `scale` (or passing `{ scale: 1 }`) renders at full resolution exactly as before.
+
 ### Reading Atelier `.spd` files
 
 `.spd` files, produced by the Supernote Atelier app, are a different format from `.note` files: a SQLite database of image tiles rather than the custom binary layout `SupernoteX` parses. `SupernoteAtelier.open` reads it (via [sql.js](https://github.com/sql-js/sql.js)) and exposes the tiles per surface (layer — surface names vary per file, e.g. `surface_1` or a `surface_9999` "Reference Layer"), plus best-effort decoded metadata (viewport, canvas size, layer names). Its `.spd` schema and `ls` layer encoding aren't officially documented; the reverse-engineered details are noted in [src/atelier.ts](./src/atelier.ts).

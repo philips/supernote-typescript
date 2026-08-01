@@ -106,6 +106,42 @@ export function compositeImages(sourceImage: Image, destinationImage: Image) {
 	}
 }
 
+/** Flattens an image with an alpha channel onto an opaque white background,
+ * producing a plain image (RGB, or GREY for a GREYA source) with no alpha
+ * channel at all - for a destination (e.g. a PDF page, see
+ * addPdfPage()/toPdf()) that has no "behind" for a transparent pixel to
+ * show, unlike an on-screen `<img>` sitting over a page background.
+ *
+ * This is *not* the same as just discarding the alpha channel
+ * (`convertColor()` to a non-alpha model, which keeps each pixel's existing
+ * color channels untouched and only drops alpha): background/unwritten
+ * pixels here are packed with their color channels at 0 - i.e. black - and
+ * alpha at 0 (see RattaRLEDecoder.buildPackedTranslation()), specifically
+ * *because* nothing ever looks at their color when alpha is respected. Only
+ * actually blending each pixel toward white by its own alpha (standard
+ * "flatten onto a background color" alpha compositing) gives the right
+ * result for both fully-transparent (-> white) and fully-opaque (-> its own
+ * color, unchanged) pixels, and everything anti-aliased in between; simply
+ * dropping alpha would instead reveal every background pixel's *actual*
+ * stored color - black - as if it had been solid ink all along. */
+export function flattenToWhite(image: Image): Image {
+	if (!image.alpha) return image;
+
+	const { width, height, data, channels } = image.getRawImage();
+	const colorChannels = channels - 1;
+	const out = new Uint8Array(width * height * colorChannels);
+
+	for (let i = 0, o = 0; i < data.length; i += channels, o += colorChannels) {
+		const alpha = data[i + colorChannels] / 255;
+		for (let c = 0; c < colorChannels; c++) {
+			out[o + c] = Math.round(data[i + c] * alpha + 255 * (1 - alpha));
+		}
+	}
+
+	const colorModel = image.colorModel === 'RGBA' ? ImageColorModel.RGB : ImageColorModel.GREY;
+	return new Image(width, height, { colorModel, data: out });
+}
+
 export interface ToImageOptions {
 	/** Downsample factor (positive integer, default 1 = full resolution).
 	 * Output pages are `ceil(pageWidth / scale)` x `ceil(pageHeight / scale)`.

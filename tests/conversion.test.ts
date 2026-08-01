@@ -1,7 +1,8 @@
 import * as fs from "fs-extra"
 import * as imagejs from "image-js"
+import { Image, ImageColorModel } from "image-js"
 import { describe, test, expect } from 'vitest'
-import { toImage, RattaRLEDecoder } from "../src/conversion"
+import { toImage, RattaRLEDecoder, flattenToWhite } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 
 function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
@@ -105,6 +106,42 @@ describe("RattaRLEDecoder.decodeAtScale", () => {
     expect(() => decoder.decodeAtScale(buffer, 1, 1, 0)).toThrow(RangeError);
     expect(() => decoder.decodeAtScale(buffer, 1, 1, 1.5)).toThrow(RangeError);
     expect(() => decoder.decodeAtScale(buffer, 1, 1, -1)).toThrow(RangeError);
+  })
+})
+
+describe("flattenToWhite", () => {
+  test("blends toward white by alpha, not just dropping the alpha channel", () => {
+    // Pixel 0: fully-transparent background, packed as black+alpha 0 (see
+    // RattaRLEDecoder.buildPackedTranslation) - must come out white, not
+    // black, or a PDF/PNG export with no alpha channel to fall back on would
+    // show ink-black everywhere nothing was actually drawn.
+    // Pixel 1: fully-opaque red ink - unchanged.
+    // Pixel 2: 50%-alpha black (an anti-aliased edge) - should land roughly
+    // halfway to white, not stay black.
+    const data = new Uint8Array([
+      0, 0, 0, 0,
+      255, 0, 0, 255,
+      0, 0, 0, 128,
+    ]);
+    const image = new Image(3, 1, { colorModel: ImageColorModel.RGBA, data });
+
+    const flattened = flattenToWhite(image);
+
+    expect(flattened.colorModel).toBe('RGB');
+    expect(flattened.alpha).toBe(false);
+    expect(Array.from(flattened.getPixel(0, 0))).toEqual([255, 255, 255]);
+    expect(Array.from(flattened.getPixel(1, 0))).toEqual([255, 0, 0]);
+    const [r, g, b] = flattened.getPixel(2, 0);
+    for (const channel of [r, g, b]) {
+      expect(channel).toBeGreaterThan(100);
+      expect(channel).toBeLessThan(155);
+    }
+  })
+
+  test("returns the same image unchanged when it has no alpha channel", () => {
+    const data = new Uint8Array([10, 20, 30]);
+    const image = new Image(1, 1, { colorModel: ImageColorModel.RGB, data });
+    expect(flattenToWhite(image)).toBe(image);
   })
 })
 

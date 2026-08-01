@@ -1,5 +1,5 @@
 export { SupernoteX, extractText, extractParagraphs } from './parsing.js';
-export { toImage, extractPageRenderData, extractPdfPageData } from './conversion.js';
+export { toImage, extractPageRenderData, extractPdfPageData, flattenToWhite } from './conversion.js';
 export type { IRenderableNote, IRenderablePage, IRenderableLayer, IPdfPage, ToImageOptions } from './conversion.js';
 export type { ILink, IPage } from './format.js';
 export { RecognitionStatuses } from './format.js';

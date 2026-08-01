@@ -1,4 +1,4 @@
-import { ILayerNames, ISupernote } from './format.js';
+import { ILayerNames, ISupernote, IRecognitionElement } from './format.js';
 import { Image, ImageColorModel, decodePng } from "image-js";
 import Color, { ColorInstance } from 'color';
 
@@ -27,6 +27,19 @@ export interface IRenderableNote {
 	pageWidth: number;
 	pageHeight: number;
 	pages: IRenderablePage[];
+}
+
+/** The minimal page shape `addPdfPage`/`addTextOnlyPdfPage` need: everything
+ * `IRenderablePage` carries for rasterization, plus the already-parsed
+ * recognition data for the invisible searchable-text layer, without `IPage`'s
+ * various protocol/address/raw-file metadata fields neither function reads.
+ * `IPage` continues to satisfy this structurally, so existing callers
+ * passing a full parsed `IPage` are unaffected; this only additionally lets
+ * a minimal, Worker-clonable slice (see `extractPdfPageData`) be passed
+ * directly, e.g. to build a whole PDF inside a Worker without reconstructing
+ * a fake `IPage` there. */
+export interface IPdfPage extends IRenderablePage {
+	recognitionElements: IRecognitionElement[];
 }
 
 // True when the platform stores the least-significant byte of a multi-byte
@@ -202,6 +215,38 @@ export function extractPageRenderData(note: ISupernote, pageNumber: number): IRe
 		pageWidth: note.pageWidth,
 		pageHeight: note.pageHeight,
 		pages: [renderablePage],
+	};
+}
+
+/**
+ * Same as `extractPageRenderData`, but for building a PDF page (see
+ * `IPdfPage`) rather than just rasterizing one: additionally carries the
+ * recognized-text data `addPdfPage`/`addTextOnlyPdfPage` need for the
+ * invisible searchable-text layer. Lets a whole PDF be assembled
+ * off-main-thread (e.g. inside a Worker, alongside `createPdfContext` +
+ * `addPdfPage` there too - `pdf-lib` itself has no DOM dependency and runs
+ * fine in a Worker; only its *objects* aren't structured-clone-safe, so the
+ * whole `createPdfContext`-through-`save()` sequence has to happen in one
+ * place; see the Worker's own comment for why that matters for keeping a
+ * host UI responsive during a large export).
+ * @param note Parsed Supernote.
+ * @param pageNumber Page number to extract (1-indexed).
+ */
+export function extractPdfPageData(note: ISupernote, pageNumber: number): { pageWidth: number; pageHeight: number; pages: IPdfPage[] } {
+	const page = note.pages[pageNumber - 1];
+	const pdfPage: IPdfPage = {
+		PAGESTYLE: page.PAGESTYLE,
+		LAYERSEQ: page.LAYERSEQ,
+		recognitionElements: page.recognitionElements,
+	};
+	for (const name of page.LAYERSEQ) {
+		const layer = page[name];
+		pdfPage[name] = { LAYERNAME: layer.LAYERNAME, bitmapBuffer: layer.bitmapBuffer };
+	}
+	return {
+		pageWidth: note.pageWidth,
+		pageHeight: note.pageHeight,
+		pages: [pdfPage],
 	};
 }
 

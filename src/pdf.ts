@@ -15,8 +15,8 @@ import {
 } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { Image, encodePng } from 'image-js';
-import { toImage } from './conversion.js';
-import { ISupernote, IPage } from './format.js';
+import { toImage, IPdfPage } from './conversion.js';
+import { ISupernote } from './format.js';
 
 // Empirically-verified constant used by Supernote's own recognition format:
 // recognized word bounding boxes are stored in raster-pixel units divided by
@@ -78,7 +78,7 @@ function drawRecognitionText(
 	pdfPage: PDFPage,
 	fontKey: PDFName,
 	font: PDFFont,
-	page: IPage,
+	page: IPdfPage,
 	pointsPerPixel: number,
 	heightPts: number,
 ): void {
@@ -150,7 +150,7 @@ function drawRecognitionText(
  */
 export async function addPdfPage(
 	ctx: PdfContext,
-	page: IPage,
+	page: IPdfPage,
 	image: Image | Uint8Array,
 	options: AddPdfPageOptions = {},
 ): Promise<void> {
@@ -187,7 +187,7 @@ export async function addPdfPage(
  */
 export async function addTextOnlyPdfPage(
 	ctx: PdfContext,
-	page: IPage,
+	page: IPdfPage,
 	pageWidth: number,
 	pageHeight: number,
 	options: AddPdfPageOptions = {},

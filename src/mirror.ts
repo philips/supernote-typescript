@@ -14,72 +14,17 @@ export async function fetchMirrorFrame(ipAddress: string): Promise<Image> {
 		throw new Error('Failed to fetch the resource.');
 	}
 
-	const contentType = response.headers.get('content-type');
-	if (!contentType || !contentType.includes('multipart')) {
-		throw new Error('Invalid response. Expected multipart content type.');
-	}
+	const boundary = boundaryFromContentType(response.headers.get('content-type'));
 
 	const reader = response.body?.getReader();
 	if (!reader) {
 		throw new Error('Failed to get reader for response body.');
 	}
 
-	const boundary = contentType.split('boundary=')[1];
-	if (!boundary) {
-		throw new Error('Boundary not found in response headers.');
-	}
-
-	let currentPartHeaders: string[] = [];
 	let buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
 
 	return new Promise((resolve, reject) => {
 		let found = false;
-		const headerEnd = '\r\n\r\n';
-
-		const processChunk = async (chunk: Uint8Array<ArrayBufferLike>) => {
-			buffer = concatUint8Arrays(buffer, chunk);
-
-			const start = new TextDecoder().decode(buffer).indexOf('Content-Type:', 0);
-			const end = findBoundary(buffer, boundary, start + 2);
-
-			const part = buffer.slice(start, end);
-			const headerEndIndex = new TextDecoder().decode(part).indexOf(headerEnd);
-
-			if (currentPartHeaders.length === 0) {
-				if (headerEndIndex !== -1) {
-					const headerStr = new TextDecoder().decode(
-						part.slice(0, headerEndIndex),
-					);
-					currentPartHeaders = headerStr.split('\r\n');
-				}
-			}
-
-			const contentTypeHeader = currentPartHeaders.find((header) =>
-				header.toLowerCase().startsWith('content-type:'),
-			);
-			const contentLengthHeader = currentPartHeaders.find((header) =>
-				header.toLowerCase().startsWith('content-length:'),
-			);
-
-			if (contentTypeHeader && contentTypeHeader.includes('image/jpeg')) {
-				if (contentLengthHeader) {
-					found = true;
-					const contentLength = parseInt(
-						contentLengthHeader.split(':')[1].trim(),
-					);
-					if (buffer.length < headerEndIndex + contentLength + 1) {
-						return;
-					}
-					const imageData = buffer.slice(
-						headerEndIndex + headerEnd.length,
-						headerEndIndex + contentLength + 1,
-					);
-					const image = decode(imageData);
-					resolve(image);
-					controller.abort();
-				}
-			}
-		};
 
 		const read = async () => {
 			const { done, value } = await reader.read();
@@ -89,12 +34,93 @@ export async function fetchMirrorFrame(ipAddress: string): Promise<Image> {
 				}
 				return;
 			}
-			await processChunk(value);
+			buffer = concatUint8Arrays(buffer, value);
+			const image = extractJpegFrame(buffer, boundary);
+			if (image) {
+				found = true;
+				resolve(image);
+				controller.abort();
+				return;
+			}
 			await read();
 		};
 
 		read().catch((error) => reject(error));
 	});
+}
+
+// Parses a `Content-Type: multipart/x-mixed-replace; boundary=...` header
+// into its boundary token. Shared by `extractMjpegFrame` below, which
+// callers use when they can't stream the response body incrementally (e.g.
+// Obsidian mobile's `requestUrl`, which only hands back a complete,
+// already-buffered response) and instead fetch a bounded slice of the
+// stream up front via a `Range` header.
+export function boundaryFromContentType(contentType: string | null): string {
+	if (!contentType || !contentType.includes('multipart')) {
+		throw new Error('Invalid response. Expected multipart content type.');
+	}
+	const boundary = contentType.split('boundary=')[1];
+	if (!boundary) {
+		throw new Error('Boundary not found in response headers.');
+	}
+	return boundary;
+}
+
+// Looks for one complete `image/jpeg` multipart part in `buffer` and decodes
+// it. Returns `null` if the buffer doesn't (yet, or ever) contain a full
+// frame - e.g. it was truncated by a `Range` request before the frame's
+// bytes finished arriving.
+export function extractJpegFrame(
+	buffer: Uint8Array<ArrayBufferLike>,
+	boundary: string,
+): Image | null {
+	const headerEnd = '\r\n\r\n';
+
+	const start = new TextDecoder().decode(buffer).indexOf('Content-Type:', 0);
+	if (start === -1) {
+		return null;
+	}
+	const end = findBoundary(buffer, boundary, start + 2);
+
+	const part = buffer.slice(start, end);
+	const headerEndIndex = new TextDecoder().decode(part).indexOf(headerEnd);
+	if (headerEndIndex === -1) {
+		return null;
+	}
+
+	const headerStr = new TextDecoder().decode(part.slice(0, headerEndIndex));
+	const partHeaders = headerStr.split('\r\n');
+
+	const contentTypeHeader = partHeaders.find((header) =>
+		header.toLowerCase().startsWith('content-type:'),
+	);
+	const contentLengthHeader = partHeaders.find((header) =>
+		header.toLowerCase().startsWith('content-length:'),
+	);
+
+	if (!contentTypeHeader || !contentTypeHeader.includes('image/jpeg') || !contentLengthHeader) {
+		return null;
+	}
+
+	const contentLength = parseInt(contentLengthHeader.split(':')[1].trim());
+	if (buffer.length < headerEndIndex + contentLength + 1) {
+		return null;
+	}
+	const imageData = buffer.slice(
+		headerEndIndex + headerEnd.length,
+		headerEndIndex + contentLength + 1,
+	);
+	return decode(imageData);
+}
+
+// Entry point for callers that fetched a single, already-complete buffer
+// (rather than streaming one) - see `extractJpegFrame` above.
+export function extractMjpegFrame(
+	buffer: Uint8Array<ArrayBufferLike>,
+	contentType: string | null,
+): Image | null {
+	const boundary = boundaryFromContentType(contentType);
+	return extractJpegFrame(buffer, boundary);
 }
 
 function findBoundary(

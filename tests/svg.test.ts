@@ -55,12 +55,14 @@ describe("svg", () => {
     const sn = new SupernoteX(await readFileToUint8Array("test.note"))
     const svgs = await toSvg(sn)
     expect(svgs.length).toBe(sn.pages.length)
+    await fs.writeFile("tests/output/test.note.0.svg", svgs[0])
   })
 
   test("handles a user-uploaded background template and unencodable recognition glyphs", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("moonchild-user-bg-and-bad-glyph.note"))
     const svgs = await toSvg(sn)
     expect(svgs.length).toBe(sn.pages.length)
+    await fs.writeFile("tests/output/moonchild-user-bg-and-bad-glyph.note.0.svg", svgs[0])
 
     for (const word of ["Saturn", "Mercury", "Moon", "MAGUS"]) {
       expect(svgs.join("")).toContain(word)
@@ -97,31 +99,103 @@ describe("svg", () => {
     expect(svgs.join("")).not.toContain("<text ")
   })
 
-  test("positions recognized text proportionally to pageWidth on a non-Manta device (pageWidth 1404, e.g. A5X)", { timeout: 30000 }, async () => {
-    // rtr.note (used elsewhere in this file) is a Manta-family capture
-    // (pageWidth 1920, where the 11.9 reference scale applies directly);
-    // this fixture is the far more common non-Manta case that exposed
-    // https://github.com/philips/supernote-obsidian-plugin/pull/206 -
-    // applying the fixed 11.9 scale here would overscale every box,
-    // landing "Subject" well below its actual line.
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+  // One fixture per device family whose native `pageWidth` differs (Manta's
+  // reference 1920 vs. every other family's 1404 default - see
+  // recognitionCoordinateScale()'s own comment in pdf.ts), each with a known
+  // word's raw bounding-box pulled directly from the note's own
+  // recognitionElements, so the expected SVG position is derived from that
+  // note's real data rather than a value copied out of the implementation.
+  const deviceFixtures: {
+    device: string;
+    file: string;
+    pageWidth: number;
+    word: string;
+    box: { x: number; y: number; width: number; height: number };
+  }[] = [
+    {
+      device: "Manta",
+      file: "rtr.note",
+      pageWidth: 1920,
+      word: "Real",
+      box: { x: 15.8155, y: 9.816, width: 21.012503, height: 13.0695 },
+    },
+    {
+      device: "A5X",
+      file: "a5x-2.14.28.note",
+      pageWidth: 1404,
+      word: "Subject",
+      box: { x: 12.776001, y: 13.224001, width: 25.072002, height: 9.84 },
+    },
+    {
+      device: "Nomad",
+      file: "nomad-3.15.27-blank-shapes-and-RTR.note",
+      pageWidth: 1404,
+      word: "Square",
+      box: { x: 5.084, y: 12.4355, width: 21.857502, height: 11.802001 },
+    },
+  ]
+
+  test.each(deviceFixtures)(
+    "$device (pageWidth $pageWidth): positions recognized text via recognitionCoordinateScale(pageWidth), not a fixed 11.9",
+    { timeout: 30000 },
+    async ({ file, pageWidth, word, box }) => {
+      const sn = new SupernoteX(await readFileToUint8Array(file))
+      expect(sn.pageWidth).toBe(pageWidth)
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1] })
+      await fs.writeFile(`tests/output/${file}.0.svg`, svg)
+
+      const match = svg.match(new RegExp(`<text x="[^"]*" y="([^"]*)"[^>]*>${word}</text>`))
+      expect(match).not.toBeNull()
+      const actualY = Number(match![1])
+
+      // addSvgPage positions the baseline at (box.y + box.height) * scale.
+      const scale = recognitionCoordinateScale(pageWidth)
+      const expectedY = (box.y + box.height) * scale
+      const wrongY = (box.y + box.height) * 11.9 // what the old fixed-11.9 bug (philips/supernote-obsidian-plugin#206) would have produced
+
+      expect(actualY).toBeCloseTo(expectedY, 1)
+      if (pageWidth !== 1920) {
+        expect(Math.abs(actualY - wrongY)).toBeGreaterThan(20)
+      }
+    },
+  )
+
+  test("Manta device with no recognition data (manta.note) renders the image without a text overlay", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("manta.note"))
+    expect(sn.pageWidth).toBe(1920)
+
+    const [svg] = await toSvg(sn)
+    await fs.writeFile("tests/output/manta.note.0.svg", svg)
+
+    expect(svg).toContain(`viewBox="0 0 ${sn.pageWidth} ${sn.pageHeight}"`)
+    expect(svg).toContain("<image ")
+    expect(svg).not.toContain("<text ")
+  })
+
+  test("multi-page Nomad note keeps each page's recognized words on their own page's SVG", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
     expect(sn.pageWidth).toBe(1404)
+    expect(sn.pages.length).toBe(3)
 
-    const [svg] = await toSvg(sn, { pageNumbers: [1] })
+    const svgs = await toSvg(sn)
+    expect(svgs.length).toBe(3)
+    await Promise.all(
+      svgs.map((svg, i) => fs.writeFile(`tests/output/nomad-3.26.40-link-tag-3p.note.${i}.svg`, svg)),
+    )
 
-    const match = svg.match(/<text x="[^"]*" y="([^"]*)"[^>]*>Subject<\/text>/)
-    expect(match).not.toBeNull()
-    const actualY = Number(match![1])
+    // One word unique to each page (per the note's own recognitionElements),
+    // so a word bleeding onto the wrong page's SVG would be caught.
+    expect(svgs[0]).toContain(">INK</text>")
+    expect(svgs[1]).toContain(">ERASER</text>")
+    expect(svgs[2]).toContain(">TITLE</text>")
 
-    // From the raw recognition data: "Subject" has bounding-box
-    // { x: 12.776001, y: 13.224001, width: 25.072002, height: 9.84 },
-    // and addSvgPage positions the baseline at (box.y + box.height) * scale.
-    const scale = recognitionCoordinateScale(sn.pageWidth)
-    const expectedY = (13.224001 + 9.84) * scale
-    const wrongY = (13.224001 + 9.84) * 11.9 // what the old fixed-11.9 bug would have produced
-
-    expect(actualY).toBeCloseTo(expectedY, 1)
-    expect(Math.abs(actualY - wrongY)).toBeGreaterThan(20)
+    expect(svgs[0]).not.toContain(">ERASER</text>")
+    expect(svgs[0]).not.toContain(">TITLE</text>")
+    expect(svgs[1]).not.toContain(">INK</text>")
+    expect(svgs[1]).not.toContain(">TITLE</text>")
+    expect(svgs[2]).not.toContain(">INK</text>")
+    expect(svgs[2]).not.toContain(">ERASER</text>")
   })
 
   test("dpi sizes the SVG in physical units without changing the pixel viewBox", { timeout: 30000 }, async () => {

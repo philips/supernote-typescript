@@ -55,12 +55,14 @@ describe("svg", () => {
     const sn = new SupernoteX(await readFileToUint8Array("test.note"))
     const svgs = await toSvg(sn)
     expect(svgs.length).toBe(sn.pages.length)
+    await fs.writeFile("tests/output/test.note.0.svg", svgs[0])
   })
 
   test("handles a user-uploaded background template and unencodable recognition glyphs", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("moonchild-user-bg-and-bad-glyph.note"))
     const svgs = await toSvg(sn)
     expect(svgs.length).toBe(sn.pages.length)
+    await fs.writeFile("tests/output/moonchild-user-bg-and-bad-glyph.note.0.svg", svgs[0])
 
     for (const word of ["Saturn", "Mercury", "Moon", "MAGUS"]) {
       expect(svgs.join("")).toContain(word)
@@ -141,6 +143,7 @@ describe("svg", () => {
       expect(sn.pageWidth).toBe(pageWidth)
 
       const [svg] = await toSvg(sn, { pageNumbers: [1] })
+      await fs.writeFile(`tests/output/${file}.0.svg`, svg)
 
       const match = svg.match(new RegExp(`<text x="[^"]*" y="([^"]*)"[^>]*>${word}</text>`))
       expect(match).not.toBeNull()
@@ -163,6 +166,7 @@ describe("svg", () => {
     expect(sn.pageWidth).toBe(1920)
 
     const [svg] = await toSvg(sn)
+    await fs.writeFile("tests/output/manta.note.0.svg", svg)
 
     expect(svg).toContain(`viewBox="0 0 ${sn.pageWidth} ${sn.pageHeight}"`)
     expect(svg).toContain("<image ")
@@ -176,6 +180,9 @@ describe("svg", () => {
 
     const svgs = await toSvg(sn)
     expect(svgs.length).toBe(3)
+    await Promise.all(
+      svgs.map((svg, i) => fs.writeFile(`tests/output/nomad-3.26.40-link-tag-3p.note.${i}.svg`, svg)),
+    )
 
     // One word unique to each page (per the note's own recognitionElements),
     // so a word bleeding onto the wrong page's SVG would be caught.

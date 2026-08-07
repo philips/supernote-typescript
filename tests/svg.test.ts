@@ -1,6 +1,7 @@
 import * as fs from "fs-extra"
 import { encodePng } from "image-js"
 import { toSvg, addSvgPage } from "../src/svg"
+import { recognitionCoordinateScale } from "../src/pdf"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import { describe, test, expect } from 'vitest'
@@ -94,6 +95,33 @@ describe("svg", () => {
     const svgs = await toSvg(sn, { includeText: false })
 
     expect(svgs.join("")).not.toContain("<text ")
+  })
+
+  test("positions recognized text proportionally to pageWidth on a non-Manta device (pageWidth 1404, e.g. A5X)", { timeout: 30000 }, async () => {
+    // rtr.note (used elsewhere in this file) is a Manta-family capture
+    // (pageWidth 1920, where the 11.9 reference scale applies directly);
+    // this fixture is the far more common non-Manta case that exposed
+    // https://github.com/philips/supernote-obsidian-plugin/pull/206 -
+    // applying the fixed 11.9 scale here would overscale every box,
+    // landing "Subject" well below its actual line.
+    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+    expect(sn.pageWidth).toBe(1404)
+
+    const [svg] = await toSvg(sn, { pageNumbers: [1] })
+
+    const match = svg.match(/<text x="[^"]*" y="([^"]*)"[^>]*>Subject<\/text>/)
+    expect(match).not.toBeNull()
+    const actualY = Number(match![1])
+
+    // From the raw recognition data: "Subject" has bounding-box
+    // { x: 12.776001, y: 13.224001, width: 25.072002, height: 9.84 },
+    // and addSvgPage positions the baseline at (box.y + box.height) * scale.
+    const scale = recognitionCoordinateScale(sn.pageWidth)
+    const expectedY = (13.224001 + 9.84) * scale
+    const wrongY = (13.224001 + 9.84) * 11.9 // what the old fixed-11.9 bug would have produced
+
+    expect(actualY).toBeCloseTo(expectedY, 1)
+    expect(Math.abs(actualY - wrongY)).toBeGreaterThan(20)
   })
 
   test("dpi sizes the SVG in physical units without changing the pixel viewBox", { timeout: 30000 }, async () => {

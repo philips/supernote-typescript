@@ -1,6 +1,6 @@
 import { Image, encodePng } from 'image-js';
 import { toImage, IPdfPage } from './conversion.js';
-import { RECOGNITION_COORDINATE_SCALE } from './pdf.js';
+import { recognitionCoordinateScale } from './pdf.js';
 import { ISupernote } from './format.js';
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -46,7 +46,8 @@ function escapeXml(text: string): string {
  * own `textLength`/`lengthAdjust` attributes do the stretch-to-fit-the-box
  * scaling natively instead of needing a manually computed horizontal-scale
  * percentage. */
-function buildRecognitionTextElements(page: IPdfPage): string {
+function buildRecognitionTextElements(page: IPdfPage, pageWidth: number): string {
+	const scale = recognitionCoordinateScale(pageWidth);
 	const elements: string[] = [];
 	for (const element of page.recognitionElements) {
 		if (element.type !== 'Text') continue;
@@ -58,10 +59,10 @@ function buildRecognitionTextElements(page: IPdfPage): string {
 			const label = decodeURIComponent(escape(word.label));
 			if (!label) continue;
 
-			const x = box.x * RECOGNITION_COORDINATE_SCALE;
-			const y = box.y * RECOGNITION_COORDINATE_SCALE;
-			const width = box.width * RECOGNITION_COORDINATE_SCALE;
-			const height = box.height * RECOGNITION_COORDINATE_SCALE;
+			const x = box.x * scale;
+			const y = box.y * scale;
+			const width = box.width * scale;
+			const height = box.height * scale;
 			// SVG positions text by its baseline, not a bounding-box corner;
 			// anchoring at the box's bottom edge approximates the baseline
 			// closely enough for search/selection (exact glyph metrics aren't
@@ -117,7 +118,7 @@ export function addSvgPage(
 	const widthAttr = dpi ? `${pageWidth / dpi}in` : `${pageWidth}`;
 	const heightAttr = dpi ? `${pageHeight / dpi}in` : `${pageHeight}`;
 
-	const textElements = includeText ? buildRecognitionTextElements(page) : '';
+	const textElements = includeText ? buildRecognitionTextElements(page, pageWidth) : '';
 
 	return (
 		`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +

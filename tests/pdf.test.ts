@@ -1,6 +1,6 @@
 import * as fs from "fs-extra"
 import { encodePng } from "image-js"
-import { toPdf, createPdfContext, addPdfPage, addTextOnlyPdfPage } from "../src/pdf"
+import { toPdf, createPdfContext, addPdfPage, addTextOnlyPdfPage, recognitionCoordinateScale } from "../src/pdf"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import { PDFParse } from "pdf-parse"
@@ -149,5 +149,28 @@ describe("pdf", () => {
     for (const word of ["Real", "time", "recognition", "paragraph", "reflow", "together"]) {
       expect(textB.text).toContain(word)
     }
+  })
+
+  test("recognitionCoordinateScale scales proportionally to pageWidth, not a fixed 11.9, for non-Manta devices", () => {
+    // 11.9 only holds at the 1920px-wide reference page (Manta-family
+    // devices); every narrower page (e.g. A5X's default 1404) needs it
+    // scaled down proportionally, or recognized-word positions drift
+    // further from the actual ink the further down the page a word sits.
+    // See https://github.com/philips/supernote-obsidian-plugin/pull/206.
+    expect(recognitionCoordinateScale(1920)).toBeCloseTo(11.9)
+    expect(recognitionCoordinateScale(1404)).toBeCloseTo((1404 * 11.9) / 1920)
+  })
+
+  test("handles a note from a non-Manta device (pageWidth 1404, e.g. A5X) without throwing", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+    expect(sn.pageWidth).toBe(1404)
+
+    const pdfBytes = await toPdf(sn)
+    expect(pdfBytes.byteLength).toBeGreaterThan(0)
+
+    const parser = new PDFParse({ data: pdfBytes })
+    const result = await parser.getText()
+    await parser.destroy()
+    expect(result.text).toContain("Subject")
   })
 })

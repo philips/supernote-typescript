@@ -136,6 +136,16 @@ export interface ToSvgOptions {
 	dpi?: number;
 	/** See `AddSvgPageOptions.includeText`. */
 	includeText?: boolean;
+	/** See `ToImageOptions.upscale`. The resulting SVG's pixel `viewBox` (and
+	 * so the recognized-text overlay's coordinate space, via
+	 * `recognitionCoordinateScale`) scales up right along with the embedded
+	 * raster - both are sized off the actual produced image, not off
+	 * `note.pageWidth`/`pageHeight`, so text stays aligned to the ink at any
+	 * upscale factor. When `dpi` is also set, it's scaled by the same factor
+	 * so the physical `width`/`height` (inches) stay put - `upscale` raises
+	 * pixel density for a sharper render at the same physical size (like a
+	 * "retina" image), it doesn't enlarge the page. */
+	upscale?: number;
 }
 
 /**
@@ -156,9 +166,16 @@ export interface ToSvgOptions {
  * others inside the Worker, since none of it needs the main thread).
  */
 export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promise<string[]> {
-	const { pageNumbers, dpi, includeText } = options;
+	const { pageNumbers, dpi, includeText, upscale = 1 } = options;
 	const pages = pageNumbers ? pageNumbers.map((n) => note.pages[n - 1]) : note.pages;
-	const images = await toImage(note, pageNumbers);
+	const images = await toImage(note, pageNumbers, { upscale });
 
-	return pages.map((page, i) => addSvgPage(page, images[i], note.pageWidth, note.pageHeight, { dpi, includeText }));
+	// Scale dpi along with the raster so widthAttr/heightAttr (pageWidth /
+	// dpi) come out the same physical size regardless of upscale - see
+	// ToSvgOptions.upscale's doc comment.
+	const effectiveDpi = dpi ? dpi * upscale : dpi;
+
+	return pages.map((page, i) =>
+		addSvgPage(page, images[i], images[i].width, images[i].height, { dpi: effectiveDpi, includeText }),
+	);
 }

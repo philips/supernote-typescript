@@ -198,6 +198,43 @@ describe("svg", () => {
     expect(svgs[2]).not.toContain(">ERASER</text>")
   })
 
+  test("upscale grows the embedded raster and the viewBox/text overlay together", { timeout: 60000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const upscale = 2
+
+    const [nativeSvg] = await toSvg(sn, { pageNumbers: [1] })
+    const [upscaledSvg] = await toSvg(sn, { pageNumbers: [1], upscale })
+    await fs.writeFile("tests/output/rtr.note.0.upscaled.svg", upscaledSvg)
+
+    const expectedWidth = Math.round(sn.pageWidth * upscale)
+    const expectedHeight = Math.round(sn.pageHeight * upscale)
+    expect(upscaledSvg).toContain(`viewBox="0 0 ${expectedWidth} ${expectedHeight}"`)
+    expect(upscaledSvg).toContain(`width="${expectedWidth}"`)
+    expect(upscaledSvg).toContain(`height="${expectedHeight}"`)
+
+    // The recognized-text overlay's coordinates scale with the viewBox, so
+    // a word's baseline y should move by ~upscale, not stay put.
+    const nativeMatch = nativeSvg.match(/<text x="[^"]*" y="([^"]*)"[^>]*>Real<\/text>/)
+    const upscaledMatch = upscaledSvg.match(/<text x="[^"]*" y="([^"]*)"[^>]*>Real<\/text>/)
+    expect(nativeMatch).not.toBeNull()
+    expect(upscaledMatch).not.toBeNull()
+    const nativeY = Number(nativeMatch![1])
+    const upscaledY = Number(upscaledMatch![1])
+    expect(upscaledY).toBeCloseTo(nativeY * upscale, 0)
+  })
+
+  test("upscale scales dpi along with it, keeping the physical width/height constant", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+    const dpi = 300
+    const upscale = 2
+
+    const [nativeSvg] = await toSvg(sn, { pageNumbers: [1], dpi })
+    const [upscaledSvg] = await toSvg(sn, { pageNumbers: [1], dpi, upscale })
+
+    const widthMatch = (svg: string) => svg.match(/width="([\d.]+)in"/)
+    expect(widthMatch(upscaledSvg)![1]).toBe(widthMatch(nativeSvg)![1])
+  })
+
   test("dpi sizes the SVG in physical units without changing the pixel viewBox", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("test.note"))
 

@@ -2,7 +2,7 @@ import * as fs from "fs-extra"
 import * as imagejs from "image-js"
 import { Image, ImageColorModel } from "image-js"
 import { describe, test, expect } from 'vitest'
-import { toImage, RattaRLEDecoder, flattenToWhite } from "../src/conversion"
+import { toImage, RattaRLEDecoder, flattenToWhite, upscaleImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 
 function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
@@ -171,5 +171,77 @@ describe("toImage scale option", () => {
     // toImage validates scale synchronously (before ever returning a
     // promise), so this throws immediately rather than rejecting.
     expect(() => toImage(sn, [1], { scale: 0 })).toThrow(RangeError);
+  })
+})
+
+describe("toImage upscale option", () => {
+  test("renders a page bicubic-upscaled by a non-integer factor", { timeout: 60000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"));
+    const upscale = 1.5;
+    const images = await toImage(sn, [1], { upscale });
+    expect(images.length).toBe(1);
+    expect(images[0].width).toBe(Math.round(sn.pageWidth * upscale));
+    expect(images[0].height).toBe(Math.round(sn.pageHeight * upscale));
+    await imagejs.writeSync(`tests/output/upscaled-rtr.png`, images[0]);
+  })
+
+  test("upscale: 1 (default) still matches the previous full-resolution output size", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const [withoutOptions] = await toImage(sn, [1]);
+    const [withUpscale1] = await toImage(sn, [1], { upscale: 1 });
+    expect(withUpscale1.width).toBe(withoutOptions.width);
+    expect(withUpscale1.height).toBe(withoutOptions.height);
+  })
+
+  test("combines with scale: downsamples at decode time, then upscales the result", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"));
+    const scale = 4;
+    const upscale = 2;
+    const images = await toImage(sn, [1], { scale, upscale });
+    const decodedWidth = Math.ceil(sn.pageWidth / scale);
+    const decodedHeight = Math.ceil(sn.pageHeight / scale);
+    expect(images[0].width).toBe(Math.round(decodedWidth * upscale));
+    expect(images[0].height).toBe(Math.round(decodedHeight * upscale));
+  })
+
+  test("rejects an upscale factor below 1", async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    expect(() => toImage(sn, [1], { upscale: 0.5 })).toThrow(RangeError);
+    expect(() => toImage(sn, [1], { upscale: NaN })).toThrow(RangeError);
+  })
+})
+
+describe("upscaleImage", () => {
+  test("does not darken opaque white pixels toward the transparent background's stored black", () => {
+    // A single fully-opaque white pixel surrounded by fully-transparent
+    // pixels. Fully-transparent RGBA is packed as black-at-alpha-0
+    // throughout this codebase (see flattenToWhite()'s own comment on why),
+    // so a resize that interpolates color and alpha independently would
+    // blend that stored black into the anti-aliased edge, darkening it -
+    // exactly what premultiplying by alpha before resizing is meant to
+    // avoid.
+    const width = 3;
+    const height = 3;
+    const data = new Uint8Array(width * height * 4); // defaults to all zeros: transparent black
+    const centerIndex = (1 * width + 1) * 4;
+    data[centerIndex] = 255;
+    data[centerIndex + 1] = 255;
+    data[centerIndex + 2] = 255;
+    data[centerIndex + 3] = 255;
+
+    const image = new Image(width, height, { colorModel: ImageColorModel.RGBA, data });
+    const upscaled = upscaleImage(image, 4);
+
+    const { data: outData } = upscaled.getRawImage();
+    for (let i = 0; i < outData.length; i += 4) {
+      const alpha = outData[i + 3];
+      if (alpha === 0) continue;
+      // A premultiplied-alpha resize keeps color anchored to the source
+      // pixel's own color (white) at every alpha level; a naive resize
+      // would instead pull it toward black as alpha falls off near the edge.
+      expect(outData[i]).toBe(255);
+      expect(outData[i + 1]).toBe(255);
+      expect(outData[i + 2]).toBe(255);
+    }
   })
 })

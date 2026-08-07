@@ -53,6 +53,22 @@ const pdfBytes = await ctx.pdfDoc.save();
 
 Note that only page rendering (`toImage`/`encodePng`) is parallelizable this way — PDF assembly, including the final `pdfDoc.save()`, is a single main-thread operation regardless of how many Workers rendered pages.
 
+### Generating searchable SVGs
+
+`toSvg` renders each page to a standalone SVG document: the rasterized page image embedded as a base64 PNG, with the recognized handwriting (RTR) text overlaid invisibly at the position it was written, same as `toPdf`. SVG has no native multi-page container, so `toSvg` returns one SVG string per page.
+
+```ts
+import { SupernoteX, toSvg } from 'supernote-typescript';
+
+const note = new SupernoteX(buffer);
+const svgs = await toSvg(note); // one SVG document string per page
+await fs.writeFile('page-1.svg', svgs[0]);
+```
+
+Pass `{ dpi }` to size the SVG's `width`/`height` attributes in physical inches (the `viewBox`, and so the coordinate space the image and text sit in, always stays in raw pixels); pass `{ includeText: false }` to skip the text overlay and just embed the image.
+
+Like `toPdf`, `toSvg` is a convenience wrapper around lower-level pieces — `extractPdfPageData`, `toImage`/`encodePng`, and `addSvgPage` — for rendering pages in parallel across Workers. Unlike `addPdfPage`, `addSvgPage` doesn't touch any non-structured-clone-safe objects, so the whole per-page pipeline (`toImage` + `encodePng` + `addSvgPage`) can run inside a Worker, with only the resulting strings posted back to the main thread.
+
 ### Cheap thumbnails: rendering at a reduced resolution
 
 `toImage` always rasterizes at the note's native `pageWidth`×`pageHeight` — fine for a main view or export, but wasteful for something like a small thumbnail sidebar, where decoding and holding a full-resolution page in memory per thumbnail adds up fast on memory-constrained devices (this is what motivated [#40](https://github.com/philips/supernote-typescript/issues/40)). Pass `{ scale }` to render directly at a reduced resolution instead:

@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "clean": "rm -f tests/output/*.png tests/output/*.jpg tests/output/*.pdf tests/output/*.cpuprofile",
+    "clean": "rm -f tests/output/*.png tests/output/*.jpg tests/output/*.pdf tests/output/*.svg tests/output/*.cpuprofile",
     "lint": "eslint .",
     "pretest": "npm run build",
     "test": "vitest run",

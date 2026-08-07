@@ -18,10 +18,29 @@ import { Image, encodePng } from 'image-js';
 import { toImage, IPdfPage } from './conversion.js';
 import { ISupernote } from './format.js';
 
-// Empirically-verified constant used by Supernote's own recognition format:
-// recognized word bounding boxes are stored in raster-pixel units divided by
-// this factor. See plans/rtr-searchable-pdf.md for how this was confirmed.
-const RECOGNITION_COORDINATE_SCALE = 11.9;
+// Recognized word bounding boxes are stored in raster-pixel units divided by
+// a scale factor that is *not* a universal constant: 11.9 (confirmed per
+// plans/rtr-searchable-pdf.md) only holds at the 1920px-wide reference page
+// Manta-family devices (SupernoteX's `header.APPLY_EQUIPMENT === 'N5'`
+// check) render at. Every other device family - including the far more
+// common A5X, whose default pageWidth is 1404 - needs that reference scale
+// shrunk proportionally to its own actual page width, or recognized-word
+// positions drift further from the real ink the further down the page a
+// word sits (the error is multiplicative, so it's barely visible on the
+// first line and lands on blank paper several lines down). Confirmed
+// against a real A5X note fixture in
+// https://github.com/philips/supernote-obsidian-plugin/pull/206.
+const RECOGNITION_REFERENCE_PAGE_WIDTH = 1920;
+const RECOGNITION_REFERENCE_SCALE = 11.9;
+
+/** Scale factor to convert a recognized word's native bounding-box units
+ * into raster-pixel units, for a page whose actual pixel width is
+ * `pageWidth`. Exported so other exporters positioning an invisible text
+ * overlay over the same recognition data (e.g. svg.ts) share this instead
+ * of re-deriving it. */
+export function recognitionCoordinateScale(pageWidth: number): number {
+	return (pageWidth * RECOGNITION_REFERENCE_SCALE) / RECOGNITION_REFERENCE_PAGE_WIDTH;
+}
 
 export interface ToPdfOptions {
 	/** Page numbers to export (1-indexed). Defaults to all pages. */
@@ -79,9 +98,11 @@ function drawRecognitionText(
 	fontKey: PDFName,
 	font: PDFFont,
 	page: IPdfPage,
+	pageWidth: number,
 	pointsPerPixel: number,
 	heightPts: number,
 ): void {
+	const scale = recognitionCoordinateScale(pageWidth);
 	for (const element of page.recognitionElements) {
 		if (element.type !== 'Text') continue;
 
@@ -92,10 +113,10 @@ function drawRecognitionText(
 			const label = decodeURIComponent(escape(word.label));
 			if (!label) continue;
 
-			const xPx = box.x * RECOGNITION_COORDINATE_SCALE;
-			const yPx = box.y * RECOGNITION_COORDINATE_SCALE;
-			const widthPx = box.width * RECOGNITION_COORDINATE_SCALE;
-			const heightPx = box.height * RECOGNITION_COORDINATE_SCALE;
+			const xPx = box.x * scale;
+			const yPx = box.y * scale;
+			const widthPx = box.width * scale;
+			const heightPx = box.height * scale;
 
 			const boxWidthPts = widthPx * pointsPerPixel;
 			const boxHeightPts = heightPx * pointsPerPixel;
@@ -169,7 +190,7 @@ export async function addPdfPage(
 
 	pdfPage.drawImage(pngImage, { x: 0, y: 0, width: widthPts, height: heightPts });
 
-	drawRecognitionText(pdfPage, fontKey, font, page, pointsPerPixel, heightPts);
+	drawRecognitionText(pdfPage, fontKey, font, page, pngImage.width, pointsPerPixel, heightPts);
 }
 
 /**
@@ -202,7 +223,7 @@ export async function addTextOnlyPdfPage(
 	const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
 	const fontKey = pdfPage.node.newFontDictionary(font.name, font.ref);
 
-	drawRecognitionText(pdfPage, fontKey, font, page, pointsPerPixel, heightPts);
+	drawRecognitionText(pdfPage, fontKey, font, page, pageWidth, pointsPerPixel, heightPts);
 }
 
 /**

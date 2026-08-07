@@ -6,6 +6,8 @@ export { RecognitionStatuses } from './format.js';
 export { fetchMirrorFrame } from './mirror.js';
 export { toPdf, createPdfContext, addPdfPage, addTextOnlyPdfPage } from './pdf.js';
 export type { ToPdfOptions, PdfContext, AddPdfPageOptions } from './pdf.js';
+export { toSvg, addSvgPage } from './svg.js';
+export type { ToSvgOptions, AddSvgPageOptions } from './svg.js';
 export { SupernoteAtelier } from './atelier.js';
 export type {
 	IAtelierTile,

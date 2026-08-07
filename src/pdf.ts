@@ -21,7 +21,9 @@ import { ISupernote } from './format.js';
 // Empirically-verified constant used by Supernote's own recognition format:
 // recognized word bounding boxes are stored in raster-pixel units divided by
 // this factor. See plans/rtr-searchable-pdf.md for how this was confirmed.
-const RECOGNITION_COORDINATE_SCALE = 11.9;
+// Exported so other exporters positioning an invisible text overlay over the
+// same recognition data (e.g. svg.ts) share this instead of re-deriving it.
+export const RECOGNITION_COORDINATE_SCALE = 11.9;
 
 export interface ToPdfOptions {
 	/** Page numbers to export (1-indexed). Defaults to all pages. */

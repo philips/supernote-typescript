@@ -81,6 +81,17 @@ const thumbnails = await toImage(note, undefined, { scale: 10 });
 
 Omitting `scale` (or passing `{ scale: 1 }`) renders at full resolution exactly as before.
 
+### Sharper exports: rendering at a higher resolution
+
+Supernote's own export offers a "200%" option that produces a larger raster (e.g. 3840×5120 instead of 1920×2560) for use on high-density displays or print, at the cost of visibly softer pixel-grid edges on ink strokes since there's no extra stroke detail to reveal — it's a resize, not a redraw. Pass `{ upscale }` to `toImage`/`toSvg` for the same effect:
+
+```ts
+const images = await toImage(note, undefined, { upscale: 2 }); // 2x pixel density
+const svgs = await toSvg(note, { upscale: 2 });
+```
+
+`upscale` is a bicubic resize applied after decoding/compositing (any finite number >= 1, not just an integer); it combines with `scale` (applied on top of whatever resolution `scale` decoded at). Unlike a plain resize, edge pixels are premultiplied by alpha before resizing and divided back out after, so anti-aliased edges stay anchored to their own ink color instead of picking up a dark fringe from the fully-transparent background. In `toSvg`, the `viewBox` and recognized-text overlay scale up right along with the raster, and `dpi` (if set) is scaled by the same factor so the physical page size stays put — `upscale` raises pixel density, it doesn't enlarge the page. It's real per-pixel CPU work, worth reserving for an explicit export rather than routine rendering.
+
 ### Reading Atelier `.spd` files
 
 `.spd` files, produced by the Supernote Atelier app, are a different format from `.note` files: a SQLite database of image tiles rather than the custom binary layout `SupernoteX` parses. `SupernoteAtelier.open` reads it (via [sql.js](https://github.com/sql-js/sql.js)) and exposes the tiles per surface (layer — surface names vary per file, e.g. `surface_1` or a `surface_9999` "Reference Layer"), plus best-effort decoded metadata (viewport, canvas size, layer names). Its `.spd` schema and `ls` layer encoding aren't officially documented; the reverse-engineered details are noted in [src/atelier.ts](./src/atelier.ts).

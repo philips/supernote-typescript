@@ -106,6 +106,56 @@ export function compositeImages(sourceImage: Image, destinationImage: Image) {
 	}
 }
 
+/** Bicubic-resizes an 8-bit RGBA image up by `factor`, without the color
+ * fringing a naive resize would produce at ink/transparent edges:
+ * flattenToWhite()'s own comment below notes background pixels are packed
+ * as black at alpha 0, since nothing normally looks at their color. A plain
+ * resize interpolates color and alpha channels independently, so it *would*
+ * look at that stored black and blend it into partially-transparent edge
+ * pixels - darkening non-black ink (white highlighter, gray marker) right
+ * where anti-aliasing should be smoothing it, not tinting it. Premultiplying
+ * by alpha before the resize and dividing it back out after (standard
+ * "premultiplied alpha" compositing) keeps interpolated color anchored to
+ * the actual ink color instead of the meaningless color underneath it. */
+export function upscaleImage(image: Image, factor: number): Image {
+	const { width, height, data, channels, bitDepth } = image.getRawImage();
+	if (bitDepth !== 8 || channels !== 4) {
+		throw new Error('upscale only supports 8-bit RGBA images.');
+	}
+
+	const premultiplied = new Uint8Array(data.length);
+	for (let i = 0; i < data.length; i += 4) {
+		const alpha = data[i + 3];
+		premultiplied[i] = Math.round((data[i] * alpha) / 255);
+		premultiplied[i + 1] = Math.round((data[i + 1] * alpha) / 255);
+		premultiplied[i + 2] = Math.round((data[i + 2] * alpha) / 255);
+		premultiplied[i + 3] = alpha;
+	}
+
+	const resized = new Image(width, height, { colorModel: ImageColorModel.RGBA, data: premultiplied }).resize({
+		xFactor: factor,
+		yFactor: factor,
+		preserveAspectRatio: false,
+		interpolationType: 'bicubic',
+	});
+
+	const raw = resized.getRawImage();
+	const out = new Uint8Array(raw.data.length);
+	for (let i = 0; i < raw.data.length; i += 4) {
+		const alpha = raw.data[i + 3];
+		if (alpha === 0) {
+			out[i] = out[i + 1] = out[i + 2] = 0;
+		} else {
+			out[i] = Math.min(255, Math.round((raw.data[i] * 255) / alpha));
+			out[i + 1] = Math.min(255, Math.round((raw.data[i + 1] * 255) / alpha));
+			out[i + 2] = Math.min(255, Math.round((raw.data[i + 2] * 255) / alpha));
+		}
+		out[i + 3] = alpha;
+	}
+
+	return new Image(raw.width, raw.height, { colorModel: ImageColorModel.RGBA, data: out });
+}
+
 /** Flattens an image with an alpha channel onto an opaque white background,
  * producing a plain image (RGB, or GREY for a GREYA source) with no alpha
  * channel at all - for a destination (e.g. a PDF page, see
@@ -152,6 +202,20 @@ export interface ToImageOptions {
 	 * on memory-constrained devices, see
 	 * https://github.com/philips/supernote-typescript/issues/40. */
 	scale?: number;
+	/** Smooth upscale factor (finite number >= 1, default 1 = no upscaling).
+	 * Applied via upscaleImage() as a bicubic resize *after* decoding/
+	 * compositing, not by decoding at a higher resolution - Supernote's
+	 * layers are fixed-resolution rasters (decodeAtScale samples them, it
+	 * doesn't invent detail), so there's nothing extra to recover, only
+	 * visible stair-stepping on stroke edges to soften. Mirrors Ratta's own
+	 * "200%" export option; combines with `scale` (applied on top of
+	 * whatever resolution `scale` decoded at), see
+	 * https://github.com/philips/supernote-obsidian-plugin/issues/212.
+	 * The bicubic resize is real per-pixel CPU work (~10s for a single
+	 * full-resolution Manta page at `upscale: 1.5` on a dev laptop) -- fine
+	 * for an on-demand export, not something to run on every page of a
+	 * scrolling viewer. */
+	upscale?: number;
 }
 
 /**
@@ -165,6 +229,10 @@ export function toImage(note: IRenderableNote, pageNumbers?: number[], options?:
 	const scale = options?.scale ?? 1;
 	if (!Number.isInteger(scale) || scale < 1) {
 		throw new RangeError(`scale must be a positive integer, received ${scale}`);
+	}
+	const upscale = options?.upscale ?? 1;
+	if (!Number.isFinite(upscale) || upscale < 1) {
+		throw new RangeError(`upscale must be a number >= 1, received ${upscale}`);
 	}
 	const outWidth = Math.ceil(note.pageWidth / scale);
 	const outHeight = Math.ceil(note.pageHeight / scale);
@@ -222,7 +290,7 @@ export function toImage(note: IRenderableNote, pageNumbers?: number[], options?:
 				compositeImages(images[i], output);
 			}
 
-			return output;
+			return upscale === 1 ? output : upscaleImage(output, upscale);
 		}),
 	);
 }

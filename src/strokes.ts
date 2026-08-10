@@ -11,11 +11,14 @@ export interface IStroke {
 	points: IStrokePoint[];
 }
 
-/** Marks the start of a fixed-layout preamble that precedes every stroke
- * record in `TOTALPATH` (not just the first). Landmark bytes sit 76 bytes
- * before the stroke's own point-count field, and 8/4 bytes after the two
- * fields that give the page's native digitizer coordinate bounds -- see
- * `parseStrokes`'s doc comment for how those were found. */
+/** Marks the start of a fixed-layout preamble, used to find the *first*
+ * stroke record and the page's native digitizer coordinate bounds: landmark
+ * bytes sit 76 bytes before the first record's point-count field, and 8/4
+ * bytes after the two bounds fields -- see `parseStrokes`'s doc comment for
+ * how those were found. The same landmark text recurs throughout the rest
+ * of the buffer too, but *not* at a fixed offset before every subsequent
+ * record (see `parseStrokes`'s main loop), so it's only relied on here for
+ * locating the first one. */
 const PREAMBLE_LANDMARK = 'superNoteNote';
 const LANDMARK_TO_RECORD_OFFSET = 76;
 const NATIVE_HEIGHT_BOUND_OFFSET_FROM_LANDMARK = -8;
@@ -30,33 +33,28 @@ const MAX_PLAUSIBLE_POINT_COUNT = 100_000;
 
 interface RawRecord {
 	points: [number, number][];
+	/** Byte offset to resume scanning from after this record -- the exact
+	 * boundary past all three auxiliary streams below, all of which
+	 * `tryParseRecord` requires to validate (see there for why). */
 	end: number;
-	/** Whether `end` is an exact, fully-validated record boundary (all three
-	 * auxiliary streams below matched their checksum) or just "right after
-	 * the coordinate data, true length of whatever follows uncertain" (the
-	 * per-point auxiliary streams didn't validate -- observed on at least
-	 * one confirmed-real, odd point-count stroke, cause unconfirmed: maybe
-	 * their own length formula isn't `Math.round(n / 2)` in every case, or
-	 * they're absent/differently-shaped for some stroke/tool types). See the
-	 * main loop in `parseStrokes` for why this distinction matters for where
-	 * scanning resumes next. */
-	endIsConfirmed: boolean;
 }
 
 /** Tries to parse one stroke record starting at `pos`: a point count,
  * followed by that many uint32 (x, y) coordinate pairs, that count repeated
- * once more as a checksum immediately after them. That alone is already
- * strong evidence of a real record (matching an arbitrary position's count
- * against a value exactly `n` uint32 pairs later isn't a coincidence a
- * false match stumbles into), so it's enough on its own to accept the
- * record; three more count-prefixed auxiliary streams normally follow
- * (roughly half-rate pressure/width, a per-point counter, and a per-point
- * flag byte -- see the format investigation linked from `parseStrokes`'s
- * doc comment, none of it interpreted yet), each also reconfirming the
- * count, and validating those too is what pins down an *exact* end for the
- * record when they're present in the expected shape (see `RawRecord.
- * endIsConfirmed`). Returns `null` if the bytes at `pos` don't even clear
- * the count+coordinates+checksum bar.
+ * once more as a checksum immediately after them, followed by three more
+ * count-prefixed auxiliary streams (roughly half-rate pressure/width, a
+ * per-point counter, and a per-point flag byte -- see the format
+ * investigation linked from `parseStrokes`'s doc comment, none of it
+ * interpreted yet), each also reconfirming the count. Requires *all four*
+ * checksums (the coordinates' plus the three auxiliary streams') to match,
+ * not just the coordinates' -- `parseStrokes` scans every byte offset
+ * looking for a match rather than just known record boundaries (see its
+ * main loop), and a single checksum is occasionally satisfied by
+ * coincidence inside structured, non-random non-record bytes (an auxiliary
+ * stream's own repetitive per-point values, for instance); four
+ * independent checksums with two different length formulas lining up at
+ * once is a coincidence none of the fixtures this decoder is tested
+ * against has produced yet. Returns `null` otherwise.
  *
  * A minority of real strokes store coordinates as float32 instead of
  * uint32 (cause unconfirmed, possibly a different pen/tool type) --
@@ -66,9 +64,9 @@ interface RawRecord {
  * uint32 transform to them lands consistently near the page's top-right
  * corner instead of on real ink). Rather than emit confidently-wrong
  * points, this decoder doesn't parse float32 records at all:
- * `tryParseRecord` returns `null` for them, and the landmark search in
- * `parseStrokes`'s main loop skips past their bytes to the next real
- * (uint32) record instead. */
+ * `tryParseRecord` returns `null` for them, and `parseStrokes`'s byte-by-byte
+ * scan just steps past their bytes one at a time until it finds the next
+ * real (uint32) record instead. */
 function tryParseRecord(view: DataView, byteLength: number, pos: number, maxCoordinate: number): RawRecord | null {
 	if (pos + 8 > byteLength) return null;
 	const n = view.getUint32(pos, true);
@@ -82,21 +80,37 @@ function tryParseRecord(view: DataView, byteLength: number, pos: number, maxCoor
 	const points = readCoordinatePairs(view, coordsStart, n, maxCoordinate);
 	if (!points) return null; // out of bounds under uint32 -- likely a float32 record; see doc comment above
 
-	const confirmedEnd = tryParseAuxiliaryStreams(view, byteLength, coordsEnd, n);
-	if (confirmedEnd !== null) return { points, end: confirmedEnd, endIsConfirmed: true };
-	return { points, end: coordsEnd + 4, endIsConfirmed: false };
+	const end = tryParseAuxiliaryStreams(view, byteLength, coordsEnd, n);
+	if (end === null) return null;
+	return { points, end };
 }
 
 /** Validates and skips the three count-prefixed auxiliary streams that
  * follow a uint32-coordinate record's points (see `parseStrokes`'s doc
- * comment): a pressure/width-shaped stream at half the point rate, a
- * per-point counter, and a per-point flag byte, each reconfirming `n` as a
- * checksum. Returns the byte offset just past all three (padded to 4-byte
- * alignment), or `null` if any checksum doesn't match. */
+ * comment): a per-point pressure/width stream, a per-point counter, and a
+ * per-point flag byte, each reconfirming `n` as a checksum. Returns the
+ * byte offset just past all three (padded to 4-byte alignment), or `null`
+ * if any checksum doesn't match.
+ *
+ * The pressure/width stream is `n` uint16 values (2 bytes each), not
+ * `Math.round(n / 2)` uint32 values (4 bytes each) as originally guessed --
+ * both give the same total byte length (and so the same checksum position)
+ * when `n` is even, which is how the wrong guess passed validation on
+ * every even-length record it was tried against; only an odd `n` exposes
+ * the 2-byte discrepancy. See
+ * https://github.com/philips/supernote-typescript/issues/56.
+ *
+ * (A 0-byte-stream special case for `n === 1` was tried and reverted: the
+ * `n === 1` "records" it made `tryParseRecord` accept all turned out to be
+ * false positives -- coincidental checksum matches, not real single-point
+ * strokes, recognizable because every one of them decoded to the exact
+ * same point, `(pageWidth, 0)`, the page's top-right corner, matching the
+ * known garbage-decode symptom documented on `tryParseRecord` for
+ * misidentified float32 records. No genuine `n === 1` record has been
+ * confirmed in any fixture so far.) */
 function tryParseAuxiliaryStreams(view: DataView, byteLength: number, coordsEnd: number, n: number): number | null {
 	let p = coordsEnd + 4;
-	const halfN = Math.round(n / 2);
-	const streamBEnd = p + halfN * 4;
+	const streamBEnd = p + n * 2;
 	if (streamBEnd + 4 > byteLength || view.getUint32(streamBEnd, true) !== n) return null;
 
 	p = streamBEnd + 4;
@@ -190,8 +204,9 @@ export function parseStrokes(
 	const maxCoordinate = Math.max(nativeWidthBound, nativeHeightBound) * 1.05;
 
 	const strokes: IStroke[] = [];
+	const scanEnd = totalPathBuffer.length - 16;
 	let pos = firstLandmark + LANDMARK_TO_RECORD_OFFSET;
-	while (pos < totalPathBuffer.length - 16) {
+	while (pos < scanEnd) {
 		const record = tryParseRecord(view, totalPathBuffer.length, pos, maxCoordinate);
 		if (record) {
 			strokes.push({
@@ -200,25 +215,28 @@ export function parseStrokes(
 					y: rawX / scale,
 				})),
 			});
-			if (record.endIsConfirmed) {
-				// Consecutive records are sometimes packed back-to-back behind
-				// a bare LANDMARK_TO_RECORD_OFFSET-byte connector with no
-				// intervening landmark/preamble of their own -- try that fast
-				// path first; if it doesn't land on a record next time through
-				// the loop, the landmark search below recovers (a full
-				// preamble really did intervene instead). Only safe when
-				// `end` is confirmed exact: guessing forward from an
-				// unconfirmed `end` risks landing inside that record's own
-				// not-fully-understood trailing bytes and matching noise
-				// there instead of a real record.
-				pos = record.end + LANDMARK_TO_RECORD_OFFSET;
-				continue;
-			}
+			// Jump straight past this record's own bytes (its fully-validated
+			// end -- tryParseRecord requires all four checksums to match,
+			// see there) rather than re-scanning through them -- that
+			// validation is already strong enough that byte-by-byte
+			// scanning doesn't need a landmark to resynchronize on.
 			pos = record.end;
+			continue;
 		}
-		const nextLandmark = text.indexOf(PREAMBLE_LANDMARK, pos);
-		if (nextLandmark === -1) break;
-		pos = nextLandmark + LANDMARK_TO_RECORD_OFFSET;
+		// No record here -- advance one byte and try again, rather than
+		// jumping to the next `PREAMBLE_LANDMARK` occurrence. Landmark text
+		// recurs throughout the buffer, but not before every record: some
+		// occurrences are followed by a differently-shaped, not yet
+		// understood metadata block instead of `LANDMARK_TO_RECORD_OFFSET`
+		// bytes of connector before the next stroke, so jumping straight to
+		// the next landmark match can overshoot real, checksum-valid
+		// records sitting in between (confirmed on real fixtures -- see
+		// https://github.com/philips/supernote-typescript/issues/56). A
+		// byte-by-byte scan can't overshoot that way: the same
+		// count+coordinates+checksum validation that makes any individual
+		// match trustworthy also means false positives from scanning
+		// through non-record bytes are vanishingly rare in practice.
+		pos++;
 	}
 	return strokes;
 }

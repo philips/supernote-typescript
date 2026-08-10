@@ -282,21 +282,36 @@ describe("svg", () => {
     })
 
     test("falls back to normal rasterized ink for a page whose strokes don't decode, instead of rendering blank", { timeout: 30000 }, async () => {
-      // test.note's TOTALPATH doesn't share a5x-2.14.28.note's preamble
-      // layout closely enough to decode (or is blank) - either way,
-      // vectorInk shouldn't silently drop this page's ink.
-      const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+      // moonchild's page 0 has real, substantial rendered ink (~263KB) but a
+      // null totalPathBuffer -- this device/firmware combination just
+      // doesn't populate TOTALPATH at all (see issue #56) -- so parseStrokes
+      // always returns [] for it, guaranteeing this test actually exercises
+      // the fallback path rather than becoming vacuous as decoder coverage
+      // improves.
+      const sn = new SupernoteX(await readFileToUint8Array("moonchild-user-bg-and-bad-glyph.note"))
       const [rasterSvg] = await toSvg(sn, { pageNumbers: [1] })
       const [vectorSvg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
 
-      // whether or not this particular page's strokes decoded, the raster
-      // must still carry the ink for it if they didn't (same base64 image
-      // payload as the plain raster render implies the ink layers weren't
-      // stripped for this page).
-      const hasPaths = vectorSvg.includes("<path ")
-      if (!hasPaths) {
-        expect(vectorSvg).toBe(rasterSvg)
-      }
+      // same base64 image payload as the plain raster render implies the
+      // ink layers weren't stripped for this page.
+      expect(vectorSvg).not.toContain("<path ")
+      expect(vectorSvg).toBe(rasterSvg)
+    })
+
+    test("horizontal_1270.note now crosses the coverage threshold and vectorizes (issue #56)", { timeout: 30000 }, async () => {
+      // Landed at 0.725 coverage (see issue #56's table) before parseStrokes
+      // switched to a byte-by-byte scan: some of this page's real records
+      // sat in the gap after a landmark occurrence that wasn't followed by
+      // a record at the usual 76-byte offset, and the old landmark-jump
+      // recovery skipped straight past them. Recovering those records pushes
+      // this page to full (1.0) coverage, clearing
+      // MIN_INK_COVERAGE_TO_REPLACE_RASTER.
+      const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"))
+      const [rasterSvg] = await toSvg(sn, { pageNumbers: [1] })
+      const [vectorSvg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+
+      expect(vectorSvg).toContain("<path ")
+      expect(vectorSvg).not.toBe(rasterSvg)
     })
 
     test("scales stroke coordinates together with upscale", { timeout: 60000 }, async () => {

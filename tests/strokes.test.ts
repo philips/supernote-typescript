@@ -154,4 +154,63 @@ describe("parseStrokes", () => {
       }
     }
   });
+
+  test("recovers a real record that a landmark-offset mismatch used to cause the scan to skip over (issue #56)", async () => {
+    // Not every `superNoteNote` landmark occurrence is followed by a real
+    // record at the usual 76-byte offset -- some are followed by a
+    // differently-shaped metadata block instead. Before this decoder
+    // switched to a byte-by-byte scan, hitting one of those caused it to
+    // jump straight to the *next* landmark occurrence, silently skipping
+    // everything in between -- including, on this fixture's page 0, a real
+    // 243-point record sitting just 72 bytes past the landmark at byte
+    // 37968 (the next landmark doesn't appear until byte 48128, a ~10KB
+    // gap). This fixture used to decode 3860 points across 54 strokes;
+    // fixed, it should decode meaningfully more.
+    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const page = sn.pages[0];
+    const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
+    const totalPoints = strokes.reduce((sum, s) => sum + s.points.length, 0);
+    expect(strokes.length).toBeGreaterThan(57);
+    expect(totalPoints).toBeGreaterThan(4300);
+  });
+
+  test("decodes records with an odd point count (issue #56)", async () => {
+    // tryParseAuxiliaryStreams originally assumed the pressure/width stream
+    // following a record's coordinates was Math.round(n / 2) uint32 values;
+    // it's actually n uint16 values. Both formulas give the same total byte
+    // length -- and so the same checksum position -- when n is even, which
+    // is how the wrong formula passed validation on every even-length
+    // record it was tried against; only an odd n exposes the 2-byte
+    // discrepancy. Roughly half of this fixture's strokes have an odd point
+    // count, so this also guards against a regression that silently drops
+    // them again (this decoder requires the auxiliary streams to validate
+    // before accepting a record at all, to keep the byte-by-byte scan safe
+    // from false positives -- see parseStrokes' and tryParseRecord's doc
+    // comments).
+    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"));
+    const page = sn.pages[0];
+    const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
+    const oddCountStrokes = strokes.filter((s) => s.points.length % 2 === 1);
+    expect(oddCountStrokes.length).toBeGreaterThan(30);
+  });
+
+  test("rejects a single-point false match rather than placing a phantom point at the page corner", async () => {
+    // A handful of positions across several fixtures satisfy tryParseRecord's
+    // count+coordinates+checksum check for n=1 by coincidence, without being
+    // real records -- recognizable because every one of them decodes to the
+    // exact same point, (pageWidth, 0), the page's top-right corner (the
+    // same garbage-decode symptom documented on tryParseRecord for
+    // misidentified float32 records). A 0-byte special case for the
+    // auxiliary pressure/width stream on n=1 records was tried during the
+    // issue #56 investigation specifically to accept these, and reverted
+    // once they turned out to be false positives rather than genuine
+    // single-point taps -- this guards against reintroducing that.
+    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const page = sn.pages[1];
+    const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
+    const phantomCornerStrokes = strokes.filter(
+      (s) => s.points.length === 1 && s.points[0].x === sn.pageWidth && s.points[0].y === 0,
+    );
+    expect(phantomCornerStrokes.length).toBe(0);
+  });
 });

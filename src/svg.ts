@@ -214,11 +214,70 @@ const INK_LAYER_NAMES: ILayerNames[] = ['MAINLAYER', 'LAYER1', 'LAYER2', 'LAYER3
  * decoded stroke point, `toSvg`'s `vectorInk` option keeps that page's
  * rasterized ink rather than replacing it -- see `estimateInkCoverage`. */
 const MIN_INK_COVERAGE_TO_REPLACE_RASTER = 0.85;
-/** Floor for `estimateInkCoverage`'s per-point coverage radius (see there):
- * never check a band narrower than this even on a page whose own estimated
- * pen width comes out smaller, since a too-tight radius flags even a
- * perfect decode as low-coverage over ordinary rendering/rounding noise. */
+/** Starting point (and floor) for `estimateInkCoverage`'s per-point coverage
+ * radius search: never check a band narrower than this even on a page whose
+ * ink turns out to need no growing at all, since a too-tight radius
+ * false-flags even a perfect decode as low-coverage over ordinary
+ * rendering/rounding noise. */
 const MIN_INK_COVERAGE_RADIUS = 3;
+/** Upper bound on how far `estimateInkCoverage`'s radius search grows --
+ * about 3% of a typical page's shorter dimension, comfortably bigger than
+ * any real pen width observed so far but nowhere near big enough for a
+ * *genuinely* incomplete decode (ink with no nearby stroke at all, however
+ * far the search grows) to be mistaken for a complete one. */
+const MAX_INK_COVERAGE_RADIUS = 40;
+/** Step size, in pixels, `estimateInkCoverage`'s radius search grows by. */
+const INK_COVERAGE_RADIUS_STEP = 2;
+/** `estimateInkCoverage`'s radius search stops growing once a step gains
+ * less than this much additional coverage, on the theory that once growth
+ * stops paying off it's re-covering the same already-explained ink rather
+ * than finding new real ink near a stroke that was just being measured too
+ * tightly. */
+const MIN_INK_COVERAGE_GAIN_PER_STEP = 0.01;
+
+/** Marks every pixel within `radius` of each of `strokes`' decoded points
+ * (and along the line between consecutive points, so fast pen movement
+ * that samples sparsely doesn't leave gaps) as "explained", then returns
+ * what fraction of `isInk`'s `inkPixelCount` pixels that covers. */
+function coverageAtRadius(
+	strokes: IStroke[],
+	pageWidth: number,
+	pageHeight: number,
+	radius: number,
+	isInk: Uint8Array,
+	inkPixelCount: number,
+): number {
+	const explained = new Uint8Array(pageWidth * pageHeight);
+	const markDisk = (cx: number, cy: number) => {
+		for (let y = Math.max(0, cy - radius); y <= Math.min(pageHeight - 1, cy + radius); y++) {
+			const rowStart = y * pageWidth;
+			const xStart = Math.max(0, cx - radius);
+			const xEnd = Math.min(pageWidth - 1, cx + radius);
+			explained.fill(1, rowStart + xStart, rowStart + xEnd + 1);
+		}
+	};
+	for (const stroke of strokes) {
+		for (let i = 0; i < stroke.points.length; i++) {
+			const point = stroke.points[i];
+			markDisk(Math.round(point.x), Math.round(point.y));
+			if (i === 0) continue;
+			const prev = stroke.points[i - 1];
+			const dx = point.x - prev.x;
+			const dy = point.y - prev.y;
+			const steps = Math.ceil(Math.hypot(dx, dy) / radius);
+			for (let s = 1; s < steps; s++) {
+				const t = s / steps;
+				markDisk(Math.round(prev.x + dx * t), Math.round(prev.y + dy * t));
+			}
+		}
+	}
+
+	let explainedInkPixelCount = 0;
+	for (let p = 0; p < isInk.length; p++) {
+		if (isInk[p] && explained[p]) explainedInkPixelCount++;
+	}
+	return explainedInkPixelCount / inkPixelCount;
+}
 
 /**
  * Estimates what fraction of `page`'s actually-rendered ink (from its RLE
@@ -230,6 +289,26 @@ const MIN_INK_COVERAGE_RADIUS = 3;
  * others silently don't -- comparing against the page's own rendered ink,
  * rather than trusting `strokes` to be complete just because it's
  * non-empty, is what catches that case.
+ *
+ * The per-point coverage radius is found by growing it from
+ * `MIN_INK_COVERAGE_RADIUS` while doing so keeps meaningfully increasing
+ * coverage, rather than estimating it once from the page's overall ink
+ * density (total ink area / total decoded path length ~ average stroke
+ * width). That density estimate reads low on pages with a lot of
+ * self-overlapping ink -- dense cursive, retraced letters -- because
+ * overlapping ink doesn't add new pixels to the area term, so the same
+ * total path length appears to explain more area than any single pass of
+ * the pen actually covers, even though the true per-point radius needed is
+ * no different than a sparser page's (confirmed across multiple real
+ * fixtures: growing the radius recovers the "missing" coverage almost
+ * entirely). Searching directly against the actual rendered ink instead
+ * sidesteps that bias, and can't produce a false sense of completeness: it
+ * only ever recovers ink that's genuinely near a correctly-placed stroke,
+ * never ink that has no nearby stroke at all, so a genuinely incomplete
+ * decode still reads as incomplete regardless of how far the radius grows
+ * (verified by re-running this search with half a known-complete page's
+ * strokes withheld). See
+ * https://github.com/philips/supernote-typescript/issues/56.
  *
  * Returns a number in `[0, 1]`; `1` both when coverage is perfect and when
  * the page has no rendered ink at all (nothing to lose either way).
@@ -257,62 +336,16 @@ function estimateInkCoverage(page: IPage, strokes: IStroke[], pageWidth: number,
 	}
 	if (inkPixelCount === 0) return 1;
 
-	// Pen stroke thickness varies a lot -- observed roughly 13x more ink per
-	// decoded point on one real device/pen combination than another -- so a
-	// single fixed radius either false-flags a thick-pen page's perfect
-	// decode as incomplete, or is too loose to catch a genuinely-incomplete
-	// thin-pen one. Deriving it from this page's own ink density instead
-	// (total ink area / total decoded path length ~ stroke width) scales
-	// automatically: area = length * width for a thin stroke, so width =
-	// area / length, and the coverage radius should track that width.
-	let totalPathLength = 0;
-	for (const stroke of strokes) {
-		for (let i = 1; i < stroke.points.length; i++) {
-			totalPathLength += Math.hypot(
-				stroke.points[i].x - stroke.points[i - 1].x,
-				stroke.points[i].y - stroke.points[i - 1].y,
-			);
-		}
+	let radius = MIN_INK_COVERAGE_RADIUS;
+	let coverage = coverageAtRadius(strokes, pageWidth, pageHeight, radius, isInk, inkPixelCount);
+	while (radius < MAX_INK_COVERAGE_RADIUS && coverage < 1) {
+		const nextRadius = radius + INK_COVERAGE_RADIUS_STEP;
+		const nextCoverage = coverageAtRadius(strokes, pageWidth, pageHeight, nextRadius, isInk, inkPixelCount);
+		if (nextCoverage - coverage < MIN_INK_COVERAGE_GAIN_PER_STEP) break;
+		radius = nextRadius;
+		coverage = nextCoverage;
 	}
-	const estimatedStrokeWidth = totalPathLength > 0 ? inkPixelCount / totalPathLength : 0;
-	const radius = Math.max(MIN_INK_COVERAGE_RADIUS, Math.round(estimatedStrokeWidth / 2 + 1));
-
-	const explained = new Uint8Array(pageWidth * pageHeight);
-	const markDisk = (cx: number, cy: number) => {
-		for (let y = Math.max(0, cy - radius); y <= Math.min(pageHeight - 1, cy + radius); y++) {
-			const rowStart = y * pageWidth;
-			const xStart = Math.max(0, cx - radius);
-			const xEnd = Math.min(pageWidth - 1, cx + radius);
-			explained.fill(1, rowStart + xStart, rowStart + xEnd + 1);
-		}
-	};
-	for (const stroke of strokes) {
-		for (let i = 0; i < stroke.points.length; i++) {
-			const point = stroke.points[i];
-			markDisk(Math.round(point.x), Math.round(point.y));
-			if (i === 0) continue;
-			// Consecutive decoded points can be spaced several pixels apart
-			// (faster pen movement samples less densely), but the ink
-			// actually rendered between them is a continuous line -- marking
-			// only a disk at each point leaves that line's middle
-			// unexplained and undercounts coverage. Stepping along the
-			// segment between each pair of points closes that gap.
-			const prev = stroke.points[i - 1];
-			const dx = point.x - prev.x;
-			const dy = point.y - prev.y;
-			const steps = Math.ceil(Math.hypot(dx, dy) / radius);
-			for (let s = 1; s < steps; s++) {
-				const t = s / steps;
-				markDisk(Math.round(prev.x + dx * t), Math.round(prev.y + dy * t));
-			}
-		}
-	}
-
-	let explainedInkPixelCount = 0;
-	for (let p = 0; p < isInk.length; p++) {
-		if (isInk[p] && explained[p]) explainedInkPixelCount++;
-	}
-	return explainedInkPixelCount / inkPixelCount;
+	return coverage;
 }
 
 /**

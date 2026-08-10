@@ -246,4 +246,127 @@ describe("svg", () => {
     expect(pixelSvg).toContain(`viewBox="0 0 ${sn.pageWidth} ${sn.pageHeight}"`)
     expect(dpiSvg).toContain(`viewBox="0 0 ${sn.pageWidth} ${sn.pageHeight}"`)
   })
+
+  describe("vectorInk", () => {
+    test("draws decoded pen strokes as <path> elements instead of relying on the raster for ink", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+
+      const [rasterSvg] = await toSvg(sn, { pageNumbers: [1] })
+      const [vectorSvg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      await fs.writeFile("tests/output/a5x-2.14.28.note.0.vector.svg", vectorSvg)
+
+      expect(rasterSvg).not.toContain("<path ")
+      expect(vectorSvg).toContain("<path ")
+      // both still carry a background raster (template lines, etc.) - only
+      // the ink layers are excluded from it, not the whole image
+      expect(vectorSvg).toContain("<image ")
+
+      const pathCount = vectorSvg.match(/<path /g)?.length ?? 0
+      expect(pathCount).toBeGreaterThan(50)
+    })
+
+    test("every decoded path's points fall inside the page's own viewBox", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+      const [vectorSvg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+
+      const pathData = [...vectorSvg.matchAll(/<path d="([^"]+)"/g)].map((m) => m[1])
+      expect(pathData.length).toBeGreaterThan(0)
+      for (const d of pathData) {
+        for (const [, x, y] of d.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)) {
+          expect(Number(x)).toBeGreaterThanOrEqual(0)
+          expect(Number(x)).toBeLessThanOrEqual(sn.pageWidth)
+          expect(Number(y)).toBeGreaterThanOrEqual(0)
+          expect(Number(y)).toBeLessThanOrEqual(sn.pageHeight)
+        }
+      }
+    })
+
+    test("falls back to normal rasterized ink for a page whose strokes don't decode, instead of rendering blank", { timeout: 30000 }, async () => {
+      // test.note's TOTALPATH doesn't share a5x-2.14.28.note's preamble
+      // layout closely enough to decode (or is blank) - either way,
+      // vectorInk shouldn't silently drop this page's ink.
+      const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+      const [rasterSvg] = await toSvg(sn, { pageNumbers: [1] })
+      const [vectorSvg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+
+      // whether or not this particular page's strokes decoded, the raster
+      // must still carry the ink for it if they didn't (same base64 image
+      // payload as the plain raster render implies the ink layers weren't
+      // stripped for this page).
+      const hasPaths = vectorSvg.includes("<path ")
+      if (!hasPaths) {
+        expect(vectorSvg).toBe(rasterSvg)
+      }
+    })
+
+    test("scales stroke coordinates together with upscale", { timeout: 60000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+      const upscale = 2
+
+      const [nativeSvg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const [upscaledSvg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true, upscale })
+
+      const firstPoint = (svg: string) => {
+        const match = svg.match(/<path d="M(-?[\d.]+),(-?[\d.]+)/)
+        expect(match).not.toBeNull()
+        return { x: Number(match![1]), y: Number(match![2]) }
+      }
+      const native = firstPoint(nativeSvg)
+      const upscaled = firstPoint(upscaledSvg)
+      expect(upscaled.x).toBeCloseTo(native.x * upscale, 0)
+      expect(upscaled.y).toBeCloseTo(native.y * upscale, 0)
+
+      expect(upscaledSvg).toContain(`viewBox="0 0 ${sn.pageWidth * upscale} ${sn.pageHeight * upscale}"`)
+    })
+
+    // Every .note fixture in tests/input, discovered dynamically so a newly
+    // added fixture is automatically covered without remembering to list it
+    // here. Most of these were never written with vectorInk in mind (some
+    // predate parseStrokes entirely) - the point isn't that all of them
+    // vectorize, it's that vectorInk must never crash or silently corrupt
+    // output on a real file it wasn't specifically tuned against, and must
+    // never produce a stroke point outside the page.
+    const allNoteFixtures = fs
+      .readdirSync("tests/input")
+      .filter((name) => name.endsWith(".note"))
+      .sort()
+
+    test.each(allNoteFixtures)(
+      "%s: vectorInk produces well-formed output on every page without dropping ink",
+      { timeout: 60000 },
+      async (file) => {
+        const sn = new SupernoteX(await readFileToUint8Array(file))
+
+        const rasterSvgs = await toSvg(sn)
+        const vectorSvgs = await toSvg(sn, { vectorInk: true })
+
+        expect(vectorSvgs.length).toBe(sn.pages.length)
+
+        vectorSvgs.forEach((svg, i) => {
+          expect(svg.startsWith("<svg ")).toBe(true)
+          expect(svg.endsWith("</svg>")).toBe(true)
+          expect(svg).toContain("<image ")
+
+          const hasPaths = svg.includes("<path ")
+          // A page vectorInk didn't (fully) decode must fall back to
+          // exactly the plain raster render for that page, not some
+          // in-between state missing ink.
+          if (!hasPaths) {
+            expect(svg).toBe(rasterSvgs[i])
+          }
+
+          for (const [, d] of svg.matchAll(/<path d="([^"]+)"/g)) {
+            for (const [, x, y] of d.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)) {
+              expect(Number.isFinite(Number(x))).toBe(true)
+              expect(Number.isFinite(Number(y))).toBe(true)
+              expect(Number(x)).toBeGreaterThanOrEqual(0)
+              expect(Number(x)).toBeLessThanOrEqual(sn.pageWidth)
+              expect(Number(y)).toBeGreaterThanOrEqual(0)
+              expect(Number(y)).toBeLessThanOrEqual(sn.pageHeight)
+            }
+          }
+        })
+      },
+    )
+  })
 })

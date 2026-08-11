@@ -859,13 +859,22 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 						// overlay rather than ink to look for, and a `'rect'` carries
 						// no meaningful color of its own to match (see StrokeStyle) --
 						// both already answer "is this still there?" their own way.
-						strokeStylesPerPage[i] = displayStyles.map((style, j) => {
+						const finalStyles = displayStyles.map((style, j): StrokeStyle => {
 							if (!mask || style.shape !== 'path' || nativeStrokes[j].isEraser) return style;
 							return strokeInkPresence(nativeStrokes[j], style.color, mask, note.pageWidth, note.pageHeight) <=
 								MAX_ERASED_INK_PRESENCE
 								? { shape: 'skip' }
 								: style;
 						});
+						// Safety net for the one way this could destroy content:
+						// vectorizing a page strips its rasterized ink, so if every
+						// stroke came back undrawable while the page demonstrably
+						// still has ink, something was decoded wrong -- keep that
+						// page's raster instead of publishing a blank one. (A page
+						// with no ink at all is the genuinely-all-erased case, which
+						// *should* come out blank -- there is nothing to lose.)
+						if (mask && finalStyles.every((style) => style.shape === 'skip')) return -1;
+						strokeStylesPerPage[i] = finalStyles;
 						return pageNumber;
 					})
 					.filter((pageNumber) => pageNumber !== -1),

@@ -979,12 +979,18 @@ describe("svg", () => {
         expect(vectorSvgs.length).toBe(sn.pages.length)
 
         await Promise.all(
-          vectorSvgs.map((svg, i) =>
-            // Only pages that actually vectorized are worth keeping around
-            // for visual inspection -- pages that fell back to the plain
-            // raster are already identical to a plain toSvg() render.
-            svg.includes("<path ") ? fs.writeFile(`tests/output/${file}.${i}.vector.svg`, svg) : Promise.resolve(),
-          ),
+          vectorSvgs.map((svg, i) => {
+            // Keep every page vectorInk actually handled -- which is the
+            // ones whose strokes decoded, the same test toSvg itself uses.
+            // Deliberately not "has <path>": a page whose strokes were all
+            // erased renders blank *on purpose* (erase-no-white-pen.note),
+            // and that is exactly the output worth being able to look at.
+            // Pages with nothing to decode fall back to the plain raster
+            // and would just duplicate a toSvg() render.
+            const vectorized =
+              parseStrokes(sn.pages[i].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true }).length > 0
+            return vectorized ? fs.writeFile(`tests/output/${file}.${i}.vector.svg`, svg) : Promise.resolve()
+          }),
         )
 
         vectorSvgs.forEach((svg, i) => {
@@ -995,7 +1001,9 @@ describe("svg", () => {
           const hasPaths = svg.includes("<path ")
           // A page vectorInk didn't (fully) decode must fall back to
           // exactly the plain raster render for that page, not some
-          // in-between state missing ink.
+          // in-between state missing ink. This holds for an all-erased
+          // page too: its ink layers are empty, so stripping them changes
+          // nothing and the blank vector render *is* the raster render.
           if (!hasPaths) {
             expect(svg).toBe(rasterSvgs[i])
           }

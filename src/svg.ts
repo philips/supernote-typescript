@@ -91,16 +91,17 @@ function buildRecognitionTextElements(page: IPdfPage, pageWidth: number): string
  * fields are *not* meaningful (confirmed against a real fixture with four
  * differently-colored heading backgrounds on one page: every one of their
  * 2-point records reads the same, uninformative `color` regardless of the
- * background's real, visibly different color) -- the real color must live
- * elsewhere, most likely `RECOGNFILE`'s `page.bdom`
- * (https://github.com/philips/supernote-typescript/issues/60), not yet
- * decoded. So `deriveStrokeStyle` still samples a rect's color/fill from the
- * page's own rendered ink, the same way every stroke's style used to be
- * sampled before real per-stroke metadata was found: checking what fraction
- * of the rectangle's own bounding box is already real ink separates a
- * genuine rect (a solid background measures ~97-99% filled, a diagonal
- * cross-hatch background ~25% -- both confirmed against Supernote's own
- * "Heading" feature, see
+ * background's real, visibly different color). For a Heading's rect (the
+ * common case), the real color lives losslessly in the `.note` footer's own
+ * `TITLE_*` metadata instead -- see `findMatchingTitleStyle` -- so
+ * `deriveStrokeStyle` looks that up first. Only a 2-point rect with no
+ * matching `TITLE_*` entry (badges/highlight boxes, which aren't Headings)
+ * falls back to sampling the page's own rendered ink for color/fill, the way
+ * every stroke's style used to be sampled before real per-stroke metadata
+ * was found: checking what fraction of the rectangle's own bounding box is
+ * already real ink separates a genuine rect (a solid background measures
+ * ~97-99% filled, a diagonal cross-hatch background ~25% -- both confirmed
+ * against Supernote's own "Heading" feature, see
  * https://support.supernote.com/1759244-using-titles-keywords-and-stars)
  * from a real but unrelated short 2-point ink stroke (measures ~0%, `'skip'`
  * so as to not draw a phantom diagonal line for it). `fill` records solid
@@ -322,9 +323,11 @@ function withoutInkLayers(page: IPage): IPage {
 
 const INK_LAYER_NAMES: ILayerNames[] = ['MAINLAYER', 'LAYER1', 'LAYER2', 'LAYER3'];
 
-/** A page's rendered ink, decoded once per page -- used only for `'rect'`
- * strokes' color/fill (see `deriveStrokeStyle`), since a rect's own
- * `TOTALPATH` metadata isn't meaningful the way a `'path'` stroke's is. */
+/** A page's rendered ink, decoded once per page -- the fallback source for a
+ * `'rect'` stroke's color/fill (see `deriveStrokeStyle`) when it has no
+ * matching `TITLE_*` footer entry (a rect's own `TOTALPATH` metadata isn't
+ * meaningful the way a `'path'` stroke's is, and only Headings carry
+ * `TITLE_*` metadata -- badges/highlight boxes still need this). */
 interface InkMask {
 	/** 1 where that pixel (row-major, `y * pageWidth + x`) is real rendered
 	 * ink, 0 otherwise. */
@@ -413,6 +416,98 @@ function rectBounds(p0: IStrokePoint, p1: IStrokePoint, pageWidth: number, pageH
 	};
 }
 
+/** A Heading rect's real fill/text color, decoded from its `TITLE_*` footer
+ * metadata (see `buildTitleIndex`) instead of sampled from the raster. */
+interface TitleStyle {
+	fill: 'solid' | 'hatch';
+	/** The rect's own background color, e.g. `rgb(157,157,157)`. */
+	backgroundColor: string;
+	/** The Heading's label text color, auto-recolored for contrast against
+	 * `backgroundColor` -- see `applyHeadingContrastOverrides`. */
+	textColor: string;
+}
+
+/** Decodes an `ITitle.TITLESTYLE` value (7 decimal digits, `1BBBFFF`) into a
+ * `TitleStyle` -- `BBB` is the background's grey level, `FFF` the displayed
+ * label text's grey level, confirmed against real fixtures on two devices
+ * (see plans/vector-format-spec.md, "TITLE_ / KEYWORD_ footer metadata").
+ * The cross-hatch pattern is the one variant whose background and text
+ * digits are both `000`: a solid-black heading always carries white text, so
+ * `1000000` can't mean "solid black" -- it's the hatch case instead, whose
+ * pattern color is black. */
+function parseTitleStyle(titleStyle: string): TitleStyle {
+	const backgroundDigits = titleStyle.slice(1, 4);
+	const textDigits = titleStyle.slice(4, 7);
+	const isHatch = backgroundDigits === '000' && textDigits === '000';
+	const backgroundGrey = Number(backgroundDigits);
+	const textGrey = Number(textDigits);
+	return {
+		fill: isHatch ? 'hatch' : 'solid',
+		backgroundColor: `rgb(${backgroundGrey},${backgroundGrey},${backgroundGrey})`,
+		textColor: `rgb(${textGrey},${textGrey},${textGrey})`,
+	};
+}
+
+/** One page's `TITLE_*` footer entries (Headings), reduced to their page-pixel
+ * rect and decoded `TitleStyle` -- built once per page and matched against
+ * each 2-point rect stroke by position (see `findMatchingTitleStyle`), since
+ * `ITitle` itself carries no stroke-record link, only its own independently
+ * recorded `TITLERECT`. */
+interface TitleRectEntry {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	style: TitleStyle;
+}
+
+/** `note.titles` is keyed by the footer's `TITLE_PPPPYYYYXXXX` suffix --
+ * 4-digit page number, then the title's own `y`/`x` -- across the whole
+ * note, not scoped per page, so filtering by the page-number prefix is how
+ * one page's own Headings are found. */
+function buildTitleIndex(note: ISupernote, pageNumber: number): TitleRectEntry[] {
+	const pagePrefix = String(pageNumber).padStart(4, '0');
+	const entries: TitleRectEntry[] = [];
+	for (const [key, titles] of Object.entries(note.titles)) {
+		if (!key.startsWith(pagePrefix)) continue;
+		for (const title of titles) {
+			// ITitle.TITLERECT is typed as a 4-tuple (IRectangle), but
+			// _parseTitle's actual value is the raw, still-comma-joined
+			// "x,y,w,h" string (parseKeyValue never splits it) -- normalize
+			// either shape rather than trusting the declared type.
+			const rectParts = Array.isArray(title.TITLERECT) ? title.TITLERECT : String(title.TITLERECT).split(',');
+			const [x, y, width, height] = rectParts.map(Number);
+			entries.push({ x, y, width, height, style: parseTitleStyle(title.TITLESTYLE) });
+		}
+	}
+	return entries;
+}
+
+/** A rect stroke's transformed corners land within ~1px of its `TITLERECT`
+ * counterpart (confirmed pixel-exact against a real fixture -- see
+ * plans/vector-format-spec.md), so a small tolerance absorbs float rounding
+ * from the coordinate transform without risking a false match between two
+ * distinct, unrelated rects on the same page. */
+const TITLE_RECT_MATCH_TOLERANCE_PX = 2;
+
+/** Finds the `TitleStyle` for a 2-point rect stroke's corners `p0`/`p1`, by
+ * position against `titleIndex` -- or `undefined` if this rect isn't a
+ * Heading (no matching `TITLE_*` entry), e.g. a badge or highlight box. */
+function findMatchingTitleStyle(titleIndex: TitleRectEntry[], p0: IStrokePoint, p1: IStrokePoint): TitleStyle | undefined {
+	const x = Math.min(p0.x, p1.x);
+	const y = Math.min(p0.y, p1.y);
+	const width = Math.abs(p1.x - p0.x);
+	const height = Math.abs(p1.y - p0.y);
+	const entry = titleIndex.find(
+		(candidate) =>
+			Math.abs(candidate.x - x) <= TITLE_RECT_MATCH_TOLERANCE_PX &&
+			Math.abs(candidate.y - y) <= TITLE_RECT_MATCH_TOLERANCE_PX &&
+			Math.abs(candidate.width - width) <= TITLE_RECT_MATCH_TOLERANCE_PX &&
+			Math.abs(candidate.height - height) <= TITLE_RECT_MATCH_TOLERANCE_PX,
+	);
+	return entry?.style;
+}
+
 /** What fraction of the rectangle spanned by `p0`/`p1` (a 2-point stroke's
  * decoded points, i.e. its opposite corners) is already real ink in `mask`,
  * and that ink's most common color within the rectangle (`undefined` if
@@ -461,14 +556,25 @@ const THICKNESS_TO_PIXEL_SCALE = 150;
  * pure, direct read of the stroke's own real `TOTALPATH` metadata -- no
  * raster involved at all (see `StrokeStyle`'s doc comment for why that
  * metadata, not raster sampling, is now the source of truth). A 2-point
- * `'rect'` is the one exception: its own `color` field isn't meaningful
- * (see `StrokeStyle`), so its color/fill still comes from `mask`, the
- * page's own rendered ink -- `sampleRect`.
+ * `'rect'` is the one exception: its own `color` field isn't meaningful (see
+ * `StrokeStyle`), so its color/fill instead comes from `titleIndex` (a
+ * Heading's real `TITLE_*` footer metadata -- see `findMatchingTitleStyle`)
+ * when it matches; only a rect with no `TITLE_*` match (a badge/highlight
+ * box, not a Heading) falls back to `mask`, the page's own rendered ink.
  */
-function deriveStrokeStyle(stroke: IStroke, mask: InkMask | null, pageWidth: number, pageHeight: number): StrokeStyle {
+function deriveStrokeStyle(
+	stroke: IStroke,
+	mask: InkMask | null,
+	titleIndex: TitleRectEntry[],
+	pageWidth: number,
+	pageHeight: number,
+): StrokeStyle {
 	if (stroke.points.length === 2) {
-		if (!mask) return { shape: 'skip' };
 		const [p0, p1] = stroke.points;
+		const titleStyle = findMatchingTitleStyle(titleIndex, p0, p1);
+		if (titleStyle) return { shape: 'rect', color: titleStyle.backgroundColor, fill: titleStyle.fill };
+
+		if (!mask) return { shape: 'skip' };
 		const { fillFraction, color } = sampleRect(mask, pageWidth, pageHeight, p0, p1);
 		if (fillFraction < MIN_RECT_FILL_FRACTION) return { shape: 'skip' };
 		return {
@@ -510,34 +616,45 @@ function isInsideRectBounds(point: IStrokePoint, bounds: { minX: number; maxX: n
  * Handled here as a narrow, targeted exception rather than by discarding
  * real per-stroke color generally: a `'path'` whose own points mostly land
  * inside a `'rect'`'s bounds (a heading background, or any other 2-point
- * rect -- see `StrokeStyle`) gets its *displayed* color resampled from
- * `mask`, the same page-own-rendered-ink source `'rect'` styles already
- * rely on, instead of trusting `IStroke.color`. Every other stroke keeps
- * its real, raster-free color untouched.
+ * rect -- see `StrokeStyle`) gets its *displayed* color overridden. When
+ * that rect is a real Heading (a `TITLE_*` match), the override is an exact
+ * read of `TITLESTYLE`'s own text-color digits (see `TitleStyle`) -- no
+ * raster involved. Only a rect with no `TITLE_*` match falls back to
+ * resampling `mask`, the page's own rendered ink, the way this used to work
+ * for every rect. Every other stroke keeps its real, raster-free color
+ * untouched.
  */
 function applyHeadingContrastOverrides(
 	strokes: IStroke[],
 	styles: StrokeStyle[],
+	titleIndex: TitleRectEntry[],
 	mask: InkMask | null,
 	pageWidth: number,
 	pageHeight: number,
 ): StrokeStyle[] {
-	if (!mask) return styles;
-
-	const rectBoundsList = strokes
-		.map((stroke, i) => (styles[i].shape === 'rect' ? rectBounds(stroke.points[0], stroke.points[1], pageWidth, pageHeight) : null))
-		.filter((bounds) => bounds !== null);
-	if (rectBoundsList.length === 0) return styles;
+	const rectInfoList = strokes
+		.map((stroke, i) => {
+			if (styles[i].shape !== 'rect') return null;
+			const [p0, p1] = stroke.points;
+			return {
+				bounds: rectBounds(p0, p1, pageWidth, pageHeight),
+				textColor: findMatchingTitleStyle(titleIndex, p0, p1)?.textColor,
+			};
+		})
+		.filter((info) => info !== null);
+	if (rectInfoList.length === 0) return styles;
 
 	return styles.map((style, i) => {
 		if (style.shape !== 'path') return style;
 		const stroke = strokes[i];
-		const isLabelText = rectBoundsList.some((bounds) => {
-			const insideCount = stroke.points.filter((point) => isInsideRectBounds(point, bounds)).length;
+		const matchedRect = rectInfoList.find((info) => {
+			const insideCount = stroke.points.filter((point) => isInsideRectBounds(point, info.bounds)).length;
 			return insideCount / stroke.points.length >= MIN_INSIDE_RECT_FRACTION;
 		});
-		if (!isLabelText) return style;
+		if (!matchedRect) return style;
+		if (matchedRect.textColor) return { ...style, color: matchedRect.textColor };
 
+		if (!mask) return style;
 		const colorCounts = new Map<string, number>();
 		for (const point of stroke.points) {
 			const xi = Math.round(point.x);
@@ -587,11 +704,15 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 	// exact question -- no coverage estimate needed. A page whose strokes
 	// don't decode (no TOTALPATH data, or a structure this hasn't been
 	// validated against) keeps its raster ink instead of replacing it with
-	// nothing. A 'rect' stroke is the one case that still needs the page's
-	// own rendered ink (see deriveStrokeStyle) -- built once per decoded page,
-	// at native resolution (matching the mask's own pixel space; rect styles
-	// don't need to be recomputed per upscale factor, only their already-
-	// upscaled points do).
+	// nothing. A 'rect' stroke is the one case that still needs a lookup
+	// beyond its own TOTALPATH record (see deriveStrokeStyle): titleIndex
+	// (that page's Heading metadata, from the note's own footer -- built
+	// once per decoded page since it's a plain-value lookup, no decoding
+	// needed) covers Headings exactly; mask (the page's own rendered ink,
+	// decoded once per page at native resolution) is only the fallback for a
+	// 2-point rect with no titleIndex match (badges/highlight boxes). Rect
+	// styles don't need to be recomputed per upscale factor, only their
+	// already-upscaled points do.
 	const strokeStylesPerPage: StrokeStyle[][] = pages.map(() => []);
 	const decodedPageNumbers = vectorInk
 		? new Set(
@@ -601,8 +722,18 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 						const pageNumber = pageNumbers ? pageNumbers[i] : i + 1;
 						if (nativeStrokes.length === 0) return -1;
 						const mask = buildInkMask(page, note.pageWidth, note.pageHeight);
-						const styles = nativeStrokes.map((stroke) => deriveStrokeStyle(stroke, mask, note.pageWidth, note.pageHeight));
-						strokeStylesPerPage[i] = applyHeadingContrastOverrides(nativeStrokes, styles, mask, note.pageWidth, note.pageHeight);
+						const titleIndex = buildTitleIndex(note, pageNumber);
+						const styles = nativeStrokes.map((stroke) =>
+							deriveStrokeStyle(stroke, mask, titleIndex, note.pageWidth, note.pageHeight),
+						);
+						strokeStylesPerPage[i] = applyHeadingContrastOverrides(
+							nativeStrokes,
+							styles,
+							titleIndex,
+							mask,
+							note.pageWidth,
+							note.pageHeight,
+						);
 						return pageNumber;
 					})
 					.filter((pageNumber) => pageNumber !== -1),

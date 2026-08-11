@@ -595,9 +595,19 @@ pass; the findings are folded into the sections above. In brief:
 1. **Act on the thickness fix**: `THICKNESS_TO_PIXEL_SCALE` should be 100,
    not 150 (see the thickness section) — this is a code change plus
    re-checking the SVG output against `headings-and-marker.pdf`.
-2. **Replace the two remaining raster dependencies in `src/svg.ts`**
-   (`sampleRect`, `applyHeadingContrastOverrides`) with `TITLE_` metadata
-   lookups (Part 1.5).
+2. ~~Replace the two remaining raster dependencies in `src/svg.ts`~~ —
+   done: `deriveStrokeStyle`/`applyHeadingContrastOverrides` now look up a
+   `'rect'` stroke's `TITLE_*` footer entry first (`findMatchingTitleStyle`,
+   matched by position against `buildTitleIndex`), and fall back to
+   `sampleRect`/raster sampling only when a 2-point rect has no match (a
+   badge/highlight box, not a Heading — those still have no known metadata
+   source). Confirmed exact against `headings-and-marker.pdf`'s own fill
+   colors (`0/157/201`, not the raster's quantized `0/128/169`) and the
+   label-text contrast colors. This also surfaced and fixed a real bug along
+   the way: `_parseFooter` (`src/parsing.ts`) dropped journaled/append-only
+   `TITLE_*` keys entirely (unlike `KEYWORD_`/`LINKO_`, which already had a
+   workaround) — a re-saved/edited Heading could have silently lost its
+   `TITLE_*` metadata before this was fixed.
 3. **`pen=5`'s meaning** — used by the star mark and by some ordinary
    strokes in `test.note`; not yet isolated to a tool.
 4. **`"straightLine"`** — still never observed; needs a fixture drawn with

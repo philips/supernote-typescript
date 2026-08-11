@@ -427,11 +427,14 @@ describe("svg", () => {
     test("a cross-hatch rect background renders as an actual hatch pattern, not a solid block (issue #56 follow-up)", { timeout: 30000 }, async () => {
       // headings-and-marker.note's page 2 (1-indexed) has four "Heading"
       // boxes with backgrounds black, dark grey, light grey, and
-      // cross-hatch, in that order -- ground truth confirmed by measuring
-      // each 2-point rect's own fill fraction against the raster: ~99% for
-      // the three solid ones, ~26% for the hatch one. Collapsing the hatch
-      // one to a solid fill (its previous behavior) hid anything drawn on
-      // top of it, since its own label happens to share the hatch's color.
+      // cross-hatch, in that order. Fill/color now comes from each
+      // Heading's own TITLE_* footer metadata (TITLESTYLE), not raster
+      // sampling -- so the colors are the exact 0/157/201 design palette,
+      // not the e-ink raster's quantized 0/128/169 (see the vector-format
+      // spec's "TITLE_ / KEYWORD_ footer metadata" section). Collapsing the
+      // hatch one to a solid fill (its previous behavior) hid anything
+      // drawn on top of it, since its own label happens to share the
+      // hatch's color.
       const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
 
@@ -440,8 +443,8 @@ describe("svg", () => {
       )
       expect(rects.length).toBe(4)
       expect(rects[0]).toBe("rgb(0,0,0)")
-      expect(rects[1]).toBe("rgb(128,128,128)")
-      expect(rects[2]).toBe("rgb(169,169,169)")
+      expect(rects[1]).toBe("rgb(157,157,157)")
+      expect(rects[2]).toBe("rgb(201,201,201)")
       expect(rects[3]).toMatch(/^url\(#hatch-[\w-]+\)$/)
 
       // the referenced pattern must actually be defined, and be visibly
@@ -451,6 +454,40 @@ describe("svg", () => {
       expect(svg).toContain(`<defs>`)
       expect(svg).toContain(`<pattern id="${patternId}"`)
       expect(svg).toContain(`fill="white"`)
+    })
+
+    test("a heading's label text is recolored for contrast, exact from its own TITLE_* footer metadata (issue #60)", { timeout: 30000 }, async () => {
+      // Same four headings-and-marker.note page 2 headings as above (black,
+      // dark grey, light grey, cross-hatch backgrounds). Supernote
+      // auto-recolors each heading's label text for contrast against its
+      // own background -- applyHeadingContrastOverrides now reads that
+      // displayed color as the exact last-3-digits of the heading's own
+      // TITLESTYLE (see findMatchingTitleStyle) instead of resampling the
+      // raster: white text on the two dark backgrounds, black text on the
+      // two light/hatch ones -- matching
+      // https://support.supernote.com/1759244-using-titles-keywords-and-stars's
+      // own described behavior.
+      const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
+      const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
+
+      const rects = [...svg.matchAll(/<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)" fill="[^"]+"\/>/g)]
+      const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="([^"]+)"/g)]
+      expect(rects.length).toBe(4)
+
+      const expectedTextColors = ["rgb(254,254,254)", "rgb(254,254,254)", "rgb(0,0,0)", "rgb(0,0,0)"]
+      rects.forEach(([, xStr, yStr, wStr, hStr], i) => {
+        const left = Number(xStr), top = Number(yStr)
+        const right = left + Number(wStr), bottom = top + Number(hStr)
+        const textColors = new Set(
+          paths
+            .filter(([, xStr2, yStr2]) => {
+              const x = Number(xStr2), y = Number(yStr2)
+              return x >= left && x <= right && y >= top && y <= bottom
+            })
+            .map(([, , , color]) => color),
+        )
+        expect([...textColors]).toEqual([expectedTextColors[i]])
+      })
     })
 
     test("a 2-point stroke over no real ink is skipped, not drawn as a phantom line (issue #56 follow-up)", { timeout: 30000 }, async () => {
@@ -713,18 +750,18 @@ describe("svg", () => {
       }
     })
 
-    test("page 2's heading background colors still only preserve relative order, not exact value (rect color isn't real per-stroke metadata -- issue #60)", { timeout: 30000 }, async () => {
+    test("page 2's heading background colors read exact from TITLE_* footer metadata, matching Supernote's own PDF export (headings-and-marker.pdf ground truth, issue #60)", { timeout: 30000 }, async () => {
       // Unlike page 3's marker strokes, page 2's headings are the 2-point
       // 'rect' record TOTALPATH also uses for badges -- and a rect's own
       // color/pen fields aren't meaningful (confirmed against a real
       // fixture: every heading here reads the same uninformative color
       // regardless of its actual, visibly different background -- see
-      // StrokeStyle's doc comment). So rect color still comes from
-      // sampleRect, the page's own rendered ink, with the same
-      // e-ink-quantization gap from the PDF's true design color that
-      // path/stroke colors no longer have (see the previous test) --
-      // recovering the real value would mean decoding RECOGNFILE's
-      // page.bdom, tracked separately as issue #60.
+      // StrokeStyle's doc comment). The real color instead lives in the
+      // note's own `.note` footer, keyed by TITLE_PPPPYYYYXXXX -- resolving
+      // TITLESTYLE (see findMatchingTitleStyle/buildTitleIndex) recovers the
+      // exact design palette (0/157/201), with none of the e-ink raster's
+      // quantization gap that sampleRect (the pre-issue-#60 fallback, still
+      // used for non-Heading rects like badges) has.
       //
       // The PDF's own 4th color (white) has no counterpart to compare here:
       // it's the cross-hatch heading's *background*, and this decode
@@ -741,9 +778,7 @@ describe("svg", () => {
       const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
       const sampledGreys = groupNearDuplicates([...svg.matchAll(/<rect[^>]*fill="rgb\((\d+),\d+,\d+\)"/g)].map((m) => Number(m[1])))
 
-      expect(sampledGreys.length).toBe(groundTruthGreys.length) // still 3 distinct rect colors found
-      expect(sampledGreys[0]).toBe(groundTruthGreys[0]) // black, exact -- pure black isn't subject to grey quantization
-      expect(sampledGreys[1]).toBeLessThan(sampledGreys[2]) // dark grey still measures darker than light grey, i.e. still relative-order-preserving
+      expect(sampledGreys).toEqual(groundTruthGreys) // exact match, not just relative order
     })
 
     // Every .note fixture in tests/input, discovered dynamically so a newly

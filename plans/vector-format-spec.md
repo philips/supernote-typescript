@@ -1,10 +1,12 @@
 # Supernote `.note` vector ink format: what we know and don't
 
-Reference doc, not an implementation plan. Covers the two undocumented binary
+Reference doc, not an implementation plan. Covers the undocumented binary
 formats relevant to `vectorInk` (`src/svg.ts`, `src/strokes.ts`): `TOTALPATH`
-(per-page pen stroke data, **fully decoded**) and `RECOGNFILE` (per-page
-MyScript recognition-engine data, **mostly unknown** — the one thing we still
-need from it, per-element color, remains unresolved). See issues
+(per-page pen stroke data, **fully decoded**), the `.note` footer's
+`TITLE_`/`KEYWORD_` metadata blocks (**decoded** — this, not `RECOGNFILE`,
+turned out to be where per-heading color lives), and `RECOGNFILE` (per-page
+MyScript recognition-engine data — `ink.bink` now decoded, `page.bdom`
+partially). See issues
 [#55](https://github.com/philips/supernote-typescript/issues/55),
 [#56](https://github.com/philips/supernote-typescript/issues/56), and
 [#60](https://github.com/philips/supernote-typescript/issues/60) for the
@@ -76,35 +78,55 @@ tool/color/width-isolated pages, `headings-and-marker.note`,
 |---|---|---|
 | 0 | `pen` (u32) | **decoded** — see Pen table below |
 | 4 | `color` (u32) | **decoded** — see Color table below |
-| 8 | `thickness` (u32) | **decoded** — opaque device unit, see below |
-| 12 | `rec_mod` | unconfirmed |
-| 16 | `unk_1` | unconfirmed |
-| 20 | `font_height` | unconfirmed (snlib: "default is 32") |
-| 24 | `unk_2` | unconfirmed (snlib: "only ever seen `u32::MAX`") |
-| 28 | `page_num` (u32) | unconfirmed but plausible — 1-indexed page number per snlib; not used by this repo |
-| 32 | `unk_3` | unconfirmed |
-| 36 | `unk_4` | unconfirmed |
-| 40 | `unk_5` | unconfirmed (snlib: "only ever seen `5000`") |
-| 44 | `stroke_layer` (u32) | unconfirmed (snlib: 0-indexed, ignoring background layer) |
-| 48 | `stroke_kind` (52-byte C string) | partially confirmed — see below |
-| 100 | `bounding_tl` (i32 y, i32 x) | unconfirmed |
-| 108 | `bounding_mid` (i32 y, i32 x) | unconfirmed |
-| 116 | `bounding_br` (i32 y, i32 x) | unconfirmed |
-| 124 | `unk_6` | unconfirmed |
+| 8 | `thickness` (u32) | **decoded** — `thickness / 100` = stroke width in page pixels, see below |
+| 12 | `rec_mod` | reads `10` on every stroke in every fixture checked; meaning unknown |
+| 16 | `unk_1` | reads `0` everywhere |
+| 20 | `font_height` | **confirmed** — reads `32` everywhere (snlib: "default is 32") |
+| 24 | `unk_2` | **confirmed** always `u32::MAX`, every stroke, every fixture (matches snlib) |
+| 28 | `page_num` (u32) | **confirmed** — 1-indexed page number, matches the containing page exactly in every fixture |
+| 32 | `unk_3` | reads `0` everywhere |
+| 36 | `unk_4` | reads `0` everywhere |
+| 40 | `unk_5` | **confirmed** always `5000` (matches snlib) |
+| 44 | `stroke_layer` (u32) | **confirmed** — `test.note` has real `LAYER1` content; its strokes read `1` here, `MAINLAYER` strokes read `0` (0-indexed ignoring background, exactly as snlib says) |
+| 48 | `stroke_kind` (52-byte C string) | **confirmed** — see below |
+| 100 | `bounding_tl` (i32 x, i32 y) | **decoded** — see below |
+| 108 | `bounding_mid` (i32 x, i32 y) | **decoded** — exactly `(tl + br) / 2` |
+| 116 | `bounding_br` (i32 x, i32 y) | **decoded** — see below |
+| 124 | `unk_6` | reads `26` everywhere |
 | 128 | `screen_height` (u32) | **decoded** — used directly for the coordinate `scale` (see below) |
 | 132 | `screen_width` (u32) | present but unused by this repo |
 | 136 | `doc_kind` (52-byte C string) | confirmed — see below |
-| 188 | `emr_point_axis` (u32) | unconfirmed (snlib: "should always be 1") |
-| 192 | `unk_7` (4 x u32) | unconfirmed |
+| 188 | `emr_point_axis` (u32) | reads `1` everywhere (snlib: "should always be 1") |
+| 192 | `unk_7` (4 x u32) | reads all zeros everywhere |
+
+`bounding_tl`/`bounding_br` are the stroke's bounding box **in page-pixel
+coordinates** — the same space the coordinate transform below produces —
+as (x, y) pairs, x mirrored just like point x. Verified numerically across
+all fixtures: transform every point, take the extents, inflate by half the
+rendered stroke width (`thickness / 100 / 2`, see below) — the declared box
+matches within a couple of pixels on 500+ strokes across three device
+families (max error grows with pen width; a 3800-thickness marker's box is
+inflated by ~19–21px per side ≈ half its 38px rendered width, which is
+itself part of the evidence for the thickness decode). `bounding_mid` is
+exactly the box's center. Note the field order is (x, y), not the (y, x)
+order snlib's `ScreenCoord` naming suggests.
 
 `doc_kind` is `"superNoteNote"` for real ink strokes — this is the literal
 string this repo used as its byte-scanning landmark before the real
 structure was known. For 2-point rect records (see below) it instead reads
-`"name is not set"`. `stroke_kind` reads `"0001"` for every rect record
-checked (four different headings, all identical) — snlib describes this
-field as normally holding `"others"` (freehand) or `"straightLine"` for real
-ink strokes; this repo hasn't independently confirmed that string for a real
-ink stroke, only the `"0001"` value for rects.
+`"name is not set"` on Manta firmware and `""` (empty) on Nomad 3.15.27 —
+firmware-dependent, don't key on it.
+
+`stroke_kind` is now confirmed directly against fixtures:
+
+| Value | Meaning |
+|---|---|
+| `"others"` | every freehand ink stroke, all pens, all fixtures (600+ strokes) — matches snlib |
+| `"0001"` | every 2-point rect record |
+| `"fiveStarsSignal"` | the Stars feature's star mark (`nomad-3.15.27-blank-shapes-and-RTR.note`, drawn with the circled-star gesture; that stroke also reads `pen=5, thickness=100`) |
+
+`"straightLine"` (snlib's other documented value) has still never been
+observed — none of the fixtures used the ruler/straight-line tool.
 
 ### Coordinate transform
 
@@ -125,15 +147,14 @@ reflects which axis needs negating).
 
 | Value | Meaning | Source |
 |---|---|---|
+| 1 | Ink pen (older firmware) | snlib's `Pen::InkPen = 1`; every ordinary stroke in the Nomad 3.15.27 fixtures and `test.note` reads 1 |
+| 5 | unknown | the `fiveStarsSignal` star mark uses it, but `test.note` also has `pen=5, stroke_kind="others"` strokes — not star-specific, meaning unresolved |
 | 10 | Needle-point pen | matches snlib's `Pen::NeedlePoint` exactly |
 | 11 | Marker | matches snlib's `Pen::Marker` exactly |
-| 16 | Ink pen | this repo's own finding; snlib's `Pen` enum doesn't list a value for ink pen (its enum is `#[non_exhaustive]`) |
+| 15 | Calligraphy pen | `stroke-isolation.note` page 2's calligraphy stroke (declared width 0.7 → `thickness=900`) reads 15 — previously misreported here as never isolated; re-decoding with the real structure resolved it |
+| 16 | Ink pen (newer firmware) | this repo's own finding on Manta fixtures; same tool as 1, different id by device/firmware generation |
 | 0 | (seen on 2-point rect records only) | not a real tool; rects use this consistently, see below |
 | anything else | unknown, not guessed at | `parseStrokes` maps to `'unknown'` |
-
-Calligraphy pen's real id was never isolated to a confirmed single value —
-`stroke-isolation.note` page 2's calligraphy stroke read as `'unknown'`
-under this mapping.
 
 ### `color` field — confirmed values
 
@@ -152,10 +173,15 @@ Cross-referenced exactly against
 The 157 vs. 158 (and 201 vs. 202) variance is real, not measurement noise —
 `stroke-isolation.note` page 3 (needle pen, one stroke per color) measured
 157/201; `headings-and-marker.note` page 3 (marker highlights) measured
-158/202, matching the enum exactly. Two adjacent, deliberately close shades
-selected by whoever authored each fixture, not a decode error — confirmed by
-checking both fixtures independently land on internally consistent, exact,
-repeatable values.
+158/202, matching the enum exactly. Two adjacent, deliberately close shades,
+not a decode error.
+
+**157/201 is the canonical design palette.** Supernote's own PDF export
+(`headings-and-marker.pdf`) draws its vector fills at exactly
+`0.6156863 rg` = 157/255 and `0.7882353 rg` = 201/255, and the
+`TITLESTYLE` metadata (see the Titles section below) encodes the same
+157/201 as literal decimal digits. snlib's 158/202 values are the raster-
+quantized variants seen in some marker strokes, not the design colors.
 
 `color === 255` (`Eraser`) is filtered out of `parseStrokes`' return value
 entirely, not surfaced as an `IStroke`. This is the real explanation for
@@ -164,18 +190,30 @@ tool's own physical motion just like any other pen tool, distinguishable
 only by this one reserved value — not a decode bug, and not something that
 ever needed raster cross-checking to detect.
 
-### `thickness` field — confirmed to exist, not confirmed as a physical unit
+### `thickness` field — solved: hundredths of a page pixel
 
-Real, per-stroke, and ordered consistently with the on-device width slider
-(confirmed monotonic across `stroke-isolation.note` page 4's four
-needle-pen strokes at declared widths 1.0/0.6/0.3/0.1). **Not** in the same
-unit space as point coordinates — dividing by the same `scale` used for
-coordinates produces implausibly wide lines. This repo uses an empirically
-calibrated constant, `THICKNESS_TO_PIXEL_SCALE = 150` (`src/svg.ts`), tuned
-so ordinary pens land at 3–6px and a marker lands at ~25px, matching this
-project's own earlier raster-measured widths for the same strokes. No
-confirmed physical unit (e.g. "10 micrometers", the documented unit for
-point coordinates) has been established for `thickness`.
+`thickness / 100` is the rendered stroke width in page pixels. Two
+independent confirmations:
+
+1. **Supernote's own PDF export.** `headings-and-marker.pdf`'s content
+   streams use the page's pixel space directly (`MediaBox 0 0 1920 2560`,
+   identity CTM apart from a y-flip), and draw every `thickness=400`
+   needle-pen stroke with exactly `4 w`. Every slider position maps to a
+   clean integer pixel width: 0.1→200→2px, 0.3→400→4px, 0.5→600→6px,
+   0.6→700→7px, 0.7→900→9px, 1.0→1200→12px, marker→3800→38px.
+2. **The stroke's own bounding box** (`bounding_tl`/`br`, above) is the
+   transformed point extents inflated by `thickness / 100 / 2` per side —
+   consistent on both Manta (400→~2px inflation) and Nomad
+   (200→~1px, 3800→~19–21px) fixtures.
+
+The width slider → thickness mapping is nonlinear on purpose (device
+design choice), but the unit itself is exact.
+
+This means `THICKNESS_TO_PIXEL_SCALE = 150` (`src/svg.ts`) under-draws
+every stroke by 1.5× relative to Supernote's own vector export: the marker
+should render 38px wide, not ~25px. The ~25px raster measurement that
+calibrated the constant likely measured the marker's soft-edged raster
+rendering too conservatively. The constant should be 100.
 
 ### 2-point records — a distinct sub-type, not a style choice
 
@@ -193,10 +231,13 @@ meaningful.** Confirmed by comparing four headings with four different
 visible background colors (black/dark grey/light grey/hatch) on the same
 page — every one of them reads the identical, uninformative
 `pen: 0, color: 0, thickness: 1500`, regardless of the real, visibly
-different background color. `src/svg.ts` still raster-samples a rect's fill
-color/pattern from the page's own rendered ink for this reason (`sampleRect`
-in `deriveStrokeStyle`) — this is the one place `vectorInk` still depends on
-raster data at all, besides the label-text contrast override below.
+different background color (`thickness` reads 2000 on the Nomad fixture —
+also constant per-fixture, also uninformative). `src/svg.ts` still
+raster-samples a rect's fill color/pattern from the page's own rendered ink
+for this reason (`sampleRect` in `deriveStrokeStyle`) — but the real fill
+style is available losslessly from the rect's `TITLE_` metadata block
+instead (Part 1.5), verified pixel-exact: transforming a rect record's two
+corners into page pixels reproduces its `TITLERECT` x,y,w,h within 1px.
 
 ### Exhaustively confirmed: rect color is not anywhere in the stroke record
 
@@ -219,7 +260,9 @@ Nothing varies with color:
 
 This isn't "we didn't look hard enough" — it's a confirmed, exhaustive
 negative result. Rect fill color is not recoverable from `TOTALPATH` at all,
-for any field, at any offset.
+for any field, at any offset. **It is recoverable from the `.note` file's
+own `TITLE_` metadata blocks instead — see the Titles/Keywords section
+below** — so the negative result no longer matters in practice.
 
 ### The heading-text auto-contrast case
 
@@ -235,7 +278,61 @@ mostly fall inside a rect's bounds gets its *displayed* color resampled from
 the raster, on top of (not instead of) the real per-stroke decode used
 everywhere else.
 
-## Part 2 — `RECOGNFILE`: mostly unknown
+The raster resampling is now avoidable: the displayed text color is the
+last three digits of the heading's `TITLESTYLE` value (below).
+
+## Part 1.5 — `TITLE_` / `KEYWORD_` footer metadata: where heading style actually lives
+
+The answer to "where is a Heading's background color?" was never in
+`TOTALPATH` or `RECOGNFILE` — it's in the `.note` footer's keyed metadata,
+alongside `PAGE1`/`FILE_ID`/etc., which this investigation had not swept.
+
+Each Heading gets a footer key `TITLE_PPPPYYYYXXXX` (4-digit page number,
+4-digit y, 4-digit x — matching the rect's position) whose value is an
+address; `getContentAtAddress`-style resolution (u32 length prefix) yields
+a plain metadata block:
+
+```
+<TITLESEQNO:0><TITLELEVEL:1><TITLERECT:500,329,356,148>
+<TITLERECTORI:500,329,356,148><TITLEBITMAP:430>
+<TITLEPROTOCOL:RATTA_RLE><TITLESTYLE:1000254>
+```
+
+- `TITLERECT` is `x,y,w,h` in page pixels — it matches the corresponding
+  2-point rect record in `TOTALPATH`, which is how to associate the two.
+- `TITLEBITMAP` is the address of a standalone `RATTA_RLE` bitmap of the
+  title region (used for the on-device titles sidebar).
+- `TITLESTYLE` encodes the style as decimal digits `1BBBFFF`:
+  `BBB` = background grey level, `FFF` = displayed label-text grey level.
+  Confirmed against all four heading variants, on two different devices
+  (`headings-and-marker.note` Manta, `nomad-3.15.27-blank-shapes-and-RTR.note`
+  Nomad — identical four codes on both):
+
+| `TITLESTYLE` | Background | Label text |
+|---|---|---|
+| `1000254` | solid black (000) | white (254) |
+| `1157254` | solid dark grey (157) | white (254) |
+| `1201000` | solid light grey (201) | black (000) |
+| `1000000` | cross-hatch pattern | black (000) |
+
+  The `BBB` digits match the canonical 157/201 palette exactly (and the
+  PDF export's fill colors). The hatch variant is distinguishable as the
+  one code whose background and text digits are both 000 — a solid-black
+  heading always carries white text, so `1000000` cannot mean "solid black".
+
+The Keywords feature works the same way: `KEYWORD_PPPPYYYY` keys resolve to
+blocks like
+`<KEYWORDPAGE:1><KEYWORDSEQNO:0><KEYWORDRECT:259,1591,404,86>`
+`<KEYWORDRECTORI:...><KEYWORDSITE:440><KEYWORDLEN:7><KEYWORD:KEYWORD>` —
+including the recognized keyword text itself, stored directly in the
+`.note` (no `RECOGNFILE` parsing needed).
+
+Practical consequence for `vectorInk`: both remaining raster dependencies
+in `src/svg.ts` (`sampleRect` fill sampling and
+`applyHeadingContrastOverrides`) can be replaced by a `TITLERECT` →
+`TITLESTYLE` lookup.
+
+## Part 2 — `RECOGNFILE`: `ink.bink` decoded, `page.bdom` partially
 
 `page.RECOGNFILE` is an address, resolved the same way as `TOTALPATH`
 (`getContentAtAddress`). It's `"0"`/absent on pages with no recognition data
@@ -250,7 +347,7 @@ rel.json                     # tiny: { pages: {...}, objects: { "rectangle/1": {
 index.bdom                   # tiny (~233 bytes observed), a document-level skeleton -- see below
 pages/<id>/meta.json         # per-page boilerplate (creationDate, iink renderer settings)
 pages/<id>/page.bdom         # MyScript's structured document model for the page -- see below
-pages/<id>/ink.bink          # never explored (see Open questions)
+pages/<id>/ink.bink          # raw captured ink + the recognition tree -- decoded, see below
 pages/<id>/style.css         # real, human-readable CSS -- see below
 ```
 
@@ -281,10 +378,12 @@ Headings and turned out not to be:
   Color table above) — a different, similar-but-distinct palette.
 
 No class name from `style.css` is ever referenced by literal string
-anywhere in `page.bdom` (checked exhaustively) — whatever selects a class
-per element is a numeric/indexed reference, not a string lookup.
+anywhere in `page.bdom` (checked exhaustively). The string lookups happen
+in `ink.bink` instead — its element table names classes literally
+(`black-color`, `pen-035`, ...) and `page.bdom` references those elements
+by numeric node id (see both sections below).
 
-### `page.bdom` — partially understood structure, unsolved reference encoding
+### `page.bdom` — partially understood structure, reference encoding characterized
 
 No public spec exists (MyScript documents `ContentPackage`/JIIX, not this
 internal schema — confirmed via web search). What's confirmed:
@@ -350,14 +449,27 @@ lattice. Observed tag bytes immediately preceding a literal string: `0x01`
 spans, confidence scores, character candidates, other literal content
 values). `0xff` and `0x00` appear structurally too, not yet characterized.
 
-**Unsolved**: how a table-index *reference* (as opposed to a literal string
-*value*) is encoded. Tried treating a bare matching byte value in the data
-section as "this is index N" — collides constantly with ordinary ASCII text
-content for common small indices (false positives), and doesn't appear at
-all as a raw byte for others (e.g. index 161 for `lastDecoration`, tested
-directly, zero hits). This is the actual blocker to resolving per-element
-style/decoration from `page.bdom` — not a matter of not having looked, but
-of not yet having the right grammar for this one construct.
+**Reference encoding — now characterized**: the earlier hunt for
+string-table-index references was chasing the wrong construct. `page.bdom`'s
+data section references **`ink.bink` node ids** (the `id`/`DWTagId` space
+above) as plain little-endian u32s, prefixed by a tag byte `0x04`. Verified
+by searching for every distinctive node id from the same page's `ink.bink`
+table (88, 141, 192, 245, 250, 251...) — each appears exactly once in
+`page.bdom` as a u32, inside a recurring construct:
+
+```
+ff 03 <u32> ff 00 00 00 00 <u32> 04 <u32 node-id> ...
+```
+
+with tag `0x02` prefixing length-prefixed literal strings (as already
+known) and `0x04` prefixing a u32 node-id reference. (Small ids like 16
+also match length-prefix bytes in the string table — the previously
+documented false-positive trap — but the high, distinctive ids each hit
+exactly once, in the data section, in this same construct.) The remaining
+unknowns are the `03`-tagged u32s' meaning and the overall record framing,
+but with per-element style now known to live in `ink.bink`'s table (by
+class-name string) and heading color in `TITLE_` metadata, nothing needed
+by `vectorInk` is blocked on finishing this grammar.
 
 **Confirmed dead ends** (don't re-chase without new evidence):
 - `"p2Decoration"` — doesn't exist as a real field; see the zero-length-entry gotcha above.
@@ -380,39 +492,124 @@ feature Headings feeds into) is built from exported data at all, it isn't
 from a precomputed index file here — it would have to be reconstructed by
 scanning page content at render time.
 
-### `ink.bink` — never explored
+### `ink.bink` — decoded
 
-Present in every `RECOGNFILE` zip alongside `page.bdom`, never opened or
-examined this investigation. Unknown format, unknown content. Worth
-checking before investing further in `page.bdom`'s reference-encoding
-puzzle — it might be a more direct source (raw ink replay data for the
-recognition engine) than `page.bdom`'s indirect, partially-encoded
-structure.
+`"BINK"` magic, then a header, then per-stroke captured ink, then a typed
+element table (the recognition tree). Parses byte-exact end-to-end on every
+fixture tried (`headings-and-marker`, `stroke-isolation`, `rtr`,
+`nomad-3.15.27-blank-shapes-and-RTR`), all little-endian:
 
-## Open questions, in rough priority order
+```
+"BINK"                                  # magic
+u8 x2                                   # version-ish (00 05 observed)
+u32 x2                                  # 0, 1 observed
+u32 channelCount                        # 4 observed: X, Y, F, T
+per channel:
+  u32 nameLen + name                    # "X", "Y", "F", "T"
+  u8 x4                                 # type descriptor (20 04 01 00 = f32? / 20 02 01 00 for T)
+  u32 hasUnit; if 1: u32 len + unit     # "mm", "mm", (none), "ms"
+u32 layoutLen + layout block            # per-channel offset/stride records
+u32 x2                                  # 1000, 1000 (resolution?)
+u32                                     # 3 observed
+u8                                      # 0 observed
+u32 strokeCount
+per stroke:
+  u32 unk                               # 0 observed
+  u64 timestamp                         # microseconds since epoch (matches fixture creation time)
+  u32 duration                          # ms-ish; identical across strokes in some fixtures
+  u32 npts
+  npts x (f32 x, f32 y)                 # in mm (per channel decl)
+  npts x f32 force                      # all zeros in every fixture checked
+  npts x u32 t                          # sample index 0..npts-1
+element table:
+  u32                                   # 0
+  u32 entryCount
+  u8                                    # 0
+  per entry:
+    u32 nameLen + name                  # class or node type, see below
+    u32 hasAttrs (0/1)
+    if 1:
+      u32                               # 3 observed
+      u32 A                             # start stroke index of this node's range
+      u8 05, u8 ff, u16 B               # B varies; meaning unresolved
+      u32 C                             # end stroke index of this node's range
+      u32 payloadLen + payload          # 0 for most; inline CSS for ".STYLE"; Supernote JSON for "DIAGRAM"
+    else: u32                           # 0
+    u32 kind                            # 0x0c = style class, 0x64/0x67/0x69 = tree node kinds, 0x0b, 0x00 seen
+    u32 id                              # node id -- the SAME id space page.bdom references (see below)
+    u32                                 # 0
+trailer                                 # one 44-byte terminator-ish record (ids 0xfd/0xfe)
+```
 
-1. **`page.bdom`'s reference-encoding grammar** — the actual blocker to
-   recovering real Heading/decoration color. Needs a proper tag-byte
-   tokenizer for the data section, built the same way `TOTALPATH` was
-   cracked (byte-by-byte, differential, controlled fixtures) — not more
-   targeted byte-value guessing. See issue #60 for a scoped plan.
-2. **`ink.bink`** — completely unopened. Check this before sinking more
-   time into `page.bdom` specifically.
-3. **Whether Heading colors are exported at all.** It's possible the
-   client app hard-codes its 4-color heading palette and only exports an
-   index (0–3) that has no meaning outside the app itself — in which case
-   no amount of file inspection recovers the real RGB value, only which of
-   4 known slots was used (which the raster sampling this repo already does
-   effectively achieves anyway).
-4. **Unconfirmed `StrokeConfig` fields** — `rec_mod`, `unk_1`–`unk_7`,
-   `stroke_layer`, `bounding_tl/mid/br`, `emr_point_axis`. None block
-   current functionality; `stroke_layer` in particular might matter for
-   correctly handling multi-layer notes (`MAINLAYER` vs `LAYER1`–`3`) if
-   that ever becomes a requirement — `vectorInk` currently treats all ink
-   layers uniformly.
-5. **Confirm `stroke_kind`'s normal values for real ink strokes**
-   (`"others"`/`"straightLine"` per snlib) directly against a fixture —
-   this repo has only confirmed `"0001"` for rect records so far.
+What the element table holds:
+
+- **Style-class entries** (kind `0x0c`): names like `defaultPenBrushStyle`,
+  `black-color`, `pen-035`, `raw-content`, `.STYLE` (the latter with a raw
+  CSS declaration as inline payload, e.g. `"line-height: 1.5"`). These are
+  **literal string references into `style.css`** — `.black-color { color:
+  #000000FF; }`, `.pen-035 { -myscript-pen-width:0.625; }` are real rules
+  there. So MyScript's per-element styling is resolved by class-name
+  string, not by the numeric string-table index this investigation
+  previously assumed.
+- **Recognition-tree nodes**: `INPUT`, `TEXT_STROKES`, `TEXT_LINE`,
+  `TEXT_BLOCK`, `WORD`, `CHAR`, `TEXT`, `DIAGRAM`, `LAYOUT_STROKES`, with
+  `A`/`C` spanning the stroke indices the node covers (verified: `CHAR`
+  nodes cover 1–2 strokes each, their parent `WORD` covers the union, the
+  page-level `TEXT` covers all).
+- **`DIAGRAM` nodes carry Supernote's own JSON** (not MyScript's): keys
+  `DWShape`, `DWContentFieldName`, `DWTagId`, `DWLabel` (the recognized
+  text), `DWAlignment`, etc. The `DWTagId` equals the entry's own `id`
+  field.
+
+Two negative results: stroke `force` is always zero (pressure is only in
+`TOTALPATH`), and nothing in `ink.bink` varies with heading background
+color — the only color class present on the four-heading page is
+`black-color`, once, globally. Consistent with heading color living in the
+`TITLE_` metadata (Part 1.5), not in the recognition data.
+
+## Resolved questions (2026-08 investigation)
+
+All five previously open questions were resolved in one investigation
+pass; the findings are folded into the sections above. In brief:
+
+1. ~~`page.bdom`'s reference-encoding grammar~~ — characterized: tag-`0x04`
+   u32 references into `ink.bink`'s node-id space. No longer blocks
+   anything (heading color turned out to live elsewhere entirely).
+2. ~~`ink.bink`~~ — fully decoded (raw ink channels + recognition tree +
+   style-class table with literal `style.css` class-name references).
+3. ~~Whether Heading colors are exported at all~~ — **yes**, as
+   `TITLESTYLE` in the `.note` footer's `TITLE_` blocks (Part 1.5), with
+   the real 157/201 palette values as literal decimal digits. Neither
+   hypothesis (RECOGNFILE encoding vs. app-side palette index) was right.
+4. ~~Unconfirmed `StrokeConfig` fields~~ — `page_num`, `stroke_layer`,
+   `font_height`, `unk_2`, `unk_5` confirmed; `bounding_tl/mid/br` decoded
+   (page-pixel bbox inflated by half stroke width); `thickness`'s unit
+   solved (`/100` = page pixels, via Supernote's own PDF export);
+   `rec_mod`/`unk_1`/`unk_3`/`unk_4`/`unk_6`/`unk_7`/`emr_point_axis`
+   observed constant (10/0/0/0/26/0s/1) across every fixture.
+5. ~~`stroke_kind` for real ink~~ — `"others"` confirmed on 600+ strokes;
+   plus a new value, `"fiveStarsSignal"` (Stars feature).
+
+## Remaining open questions
+
+1. **Act on the thickness fix**: `THICKNESS_TO_PIXEL_SCALE` should be 100,
+   not 150 (see the thickness section) — this is a code change plus
+   re-checking the SVG output against `headings-and-marker.pdf`.
+2. **Replace the two remaining raster dependencies in `src/svg.ts`**
+   (`sampleRect`, `applyHeadingContrastOverrides`) with `TITLE_` metadata
+   lookups (Part 1.5).
+3. **`pen=5`'s meaning** — used by the star mark and by some ordinary
+   strokes in `test.note`; not yet isolated to a tool.
+4. **`"straightLine"`** — still never observed; needs a fixture drawn with
+   the ruler/straight-line tool.
+5. **`ink.bink` element-table `B` field** and the `03`-tagged u32s in
+   `page.bdom` — the last uncharacterized values in otherwise-decoded
+   structures. Nothing depends on them.
+6. **`TITLESTYLE` beyond the 4-slot palette** — newer devices with more
+   heading styles (or color devices) may use other codes; the `1BBBFFF`
+   digit reading is confirmed only for these four values on two greyscale
+   devices. (`test.note` shows non-greyscale stroke colors 48/81 exist in
+   the wild, so a color-device fixture would also extend the Color table.)
 
 ## References
 

@@ -37,6 +37,30 @@ export interface IStroke {
 	 * sharing the same white color (e.g. a white pen on a dark page), even
 	 * though both render identically. */
 	isEraser?: boolean;
+	/** The device's own rendered outline of this stroke (`point_contour` in
+	 * https://github.com/Walnut356/snlib) -- closed polygons in the same
+	 * page-pixel space as `points`, only present when `parseStrokes` was
+	 * called with `includeContours: true`.
+	 *
+	 * Unlike `points` (the pen's sampled *centerline*, which has to be
+	 * stroked at a uniform `thickness` to be drawn), this is the filled
+	 * region the device actually renders, so it carries the real
+	 * pressure-varying width along the stroke -- the same thing Supernote's
+	 * newer PDF exports draw as filled Bezier outlines rather than
+	 * fixed-width polylines. Usually one polygon; a stroke that crosses
+	 * itself can produce several, which is why this is an array of rings
+	 * (fill them with the nonzero winding rule, as SVG/PDF do by default).
+	 *
+	 * Verified against real fixtures on two device families: each ring's
+	 * bounding box matches its stroke's own transformed point extents
+	 * inflated by half the rendered width, and the enclosed area comes out
+	 * within a few percent of `pathLength * thickness / 100`.
+	 *
+	 * **This is not a record of what survived erasing.** A fully erased
+	 * stroke keeps its full-area outline here, byte for byte like a visible
+	 * one -- see `ERASER_COLOR`'s doc comment and
+	 * plans/vector-format-spec.md's erase-records section. */
+	contour?: IStrokePoint[][];
 }
 
 /** Raw pen tool ids observed in `TOTALPATH`'s `pen` field -- reverse
@@ -148,6 +172,19 @@ const STROKE_CONFIG = {
 	SIZE: 208,
 } as const;
 
+/** Sizes of the two fixed-layout sections that sit between `epa_grays` and
+ * `point_contour` in a stroke record -- `Section1` and `Section2` in
+ * https://github.com/Walnut356/snlib, whose declared field lists come out
+ * to different totals than these. Solved directly instead: the only
+ * `(Section1, Section2)` pair that makes *every* record on a page parse
+ * byte-exactly, jointly across pages from two device families (N5/Manta
+ * `erase-no-white-pen.note`, and the older `horizontal_1270.note`). The
+ * resulting contour geometry then independently validates -- see
+ * `IStroke.contour`. Only the span sizes matter here; nothing in either
+ * section is read. */
+const SECTION_1_SIZE = 52;
+const SECTION_2_SIZE = 10;
+
 interface RawStroke {
 	pen: number;
 	color: number;
@@ -155,6 +192,9 @@ interface RawStroke {
 	strokeKind: string;
 	screenHeight: number;
 	points: [number, number][]; // raw (y, x) pairs, undivided device units
+	/** Already in page-pixel space -- unlike `points`, these need no
+	 * transform (see `readContour`). Only populated when asked for. */
+	contour?: IStrokePoint[][];
 }
 
 /** Decodes a fixed-size, NUL-padded C string field (`stroke_kind`/`doc_kind`
@@ -166,13 +206,65 @@ function readFixedCString(view: DataView, pos: number, size: number): string {
 	return new TextDecoder('utf8').decode(nul === -1 ? bytes : bytes.subarray(0, nul));
 }
 
+/** Reads the `point_contour` rings that follow a stroke's `epa_grays`
+ * array, starting at `pos` (the first byte after it) -- see
+ * `IStroke.contour` for what they are and `SECTION_1_SIZE` for how the two
+ * fixed sections in between were sized. Returns `undefined` rather than
+ * throwing if anything doesn't line up (a truncated record, or a firmware
+ * whose section sizes differ), so an unrecognized layout costs the caller
+ * only the contour, never the stroke.
+ *
+ * Unlike `points`, contour coordinates are stored as float32 pairs already
+ * in final page-pixel space -- no `screenHeight` scaling and no x mirroring
+ * (confirmed by matching them against transformed stroke extents on both a
+ * portrait and a landscape fixture). */
+function readContour(view: DataView, byteLength: number, pos: number, strokeEnd: number): IStrokePoint[][] | undefined {
+	let p = pos + SECTION_1_SIZE;
+	if (p + 4 > strokeEnd) return undefined;
+	const controlNumCount = view.getUint32(p, true);
+	p += 4 + controlNumCount * 4 + SECTION_2_SIZE;
+	if (p + 4 > strokeEnd) return undefined;
+
+	const ringCount = view.getUint32(p, true);
+	p += 4;
+	if (ringCount > MAX_CONTOUR_RINGS) return undefined;
+
+	const rings: IStrokePoint[][] = [];
+	for (let i = 0; i < ringCount; i++) {
+		if (p + 4 > strokeEnd) return undefined;
+		const pointCount = view.getUint32(p, true);
+		p += 4;
+		if (p + pointCount * 8 > strokeEnd || p + pointCount * 8 > byteLength) return undefined;
+		const ring: IStrokePoint[] = new Array(pointCount);
+		for (let j = 0; j < pointCount; j++) {
+			const offset = p + j * 8;
+			ring[j] = { x: view.getFloat32(offset, true), y: view.getFloat32(offset + 4, true) };
+		}
+		rings.push(ring);
+		p += pointCount * 8;
+	}
+	return rings;
+}
+
+/** Sanity cap on `point_contour`'s ring count, so a misaligned read on an
+ * unvalidated firmware bails out instead of trying to allocate a bogus
+ * array. Real strokes use one ring, occasionally a handful where the stroke
+ * crosses itself. */
+const MAX_CONTOUR_RINGS = 1000;
+
 /** Reads one stroke record starting at `pos` (immediately after its own
  * `strokeLen` prefix -- see `parseStrokes`), or `null` if there isn't
  * enough buffer left to hold at least a full `StrokeConfig` header plus an
  * empty `disable_area_list`/`points` pair. Never throws on a truncated or
  * corrupt tail -- returns `null` so the caller can stop cleanly rather than
  * crash on a real file this hasn't been validated against. */
-function tryParseStroke(view: DataView, byteLength: number, pos: number): RawStroke | null {
+function tryParseStroke(
+	view: DataView,
+	byteLength: number,
+	pos: number,
+	strokeEnd: number,
+	includeContours: boolean,
+): RawStroke | null {
 	if (pos + STROKE_CONFIG.SIZE + 8 > byteLength) return null;
 
 	const pen = view.getUint32(pos + STROKE_CONFIG.PEN_OFFSET, true);
@@ -203,8 +295,21 @@ function tryParseStroke(view: DataView, byteLength: number, pos: number): RawStr
 		// parseStrokes' doc comment for the coordinate transform this feeds.
 		points[i] = [view.getUint32(offset, true), view.getUint32(offset + 4, true)];
 	}
+	p += pointCount * 8;
 
-	return { pen, color, thickness, strokeKind, screenHeight, points };
+	let contour: IStrokePoint[][] | undefined;
+	if (includeContours) {
+		// pressures (u16), tilts (4 bytes each), flag_draw (1 byte each),
+		// epa_points (8), epa_grays (4) -- all length-prefixed, all skipped
+		// wholesale; readContour picks up immediately after them.
+		for (const elementSize of [2, 4, 1, 8, 4]) {
+			if (p + 4 > strokeEnd) return { pen, color, thickness, strokeKind, screenHeight, points };
+			p += 4 + view.getUint32(p, true) * elementSize;
+		}
+		contour = readContour(view, byteLength, p, strokeEnd);
+	}
+
+	return { pen, color, thickness, strokeKind, screenHeight, points, contour };
 }
 
 /**
@@ -294,6 +399,11 @@ export interface ParseStrokesOptions {
 	 * false, matching every existing caller's assumption that `parseStrokes`
 	 * returns only real, visible ink. */
 	includeErasers?: boolean;
+	/** Also decode each stroke's rendered outline into `IStroke.contour` --
+	 * see that field's doc comment. Default false: it's several times more
+	 * geometry than `points`, and only a caller that actually fills the
+	 * outline (rather than stroking the centerline) needs it. */
+	includeContours?: boolean;
 }
 
 export function parseStrokes(
@@ -319,7 +429,7 @@ export function parseStrokes(
 		const strokeEnd = strokeStart + strokeLen;
 		if (strokeLen === 0 || strokeEnd > byteLength) break;
 
-		const raw = tryParseStroke(view, byteLength, strokeStart);
+		const raw = tryParseStroke(view, byteLength, strokeStart, strokeEnd, options.includeContours === true);
 		const isEraser = raw?.color === ERASER_COLOR;
 		const isLinkTag = raw?.strokeKind === LINK_TAG_STROKE_KIND;
 		const isLassoPath = raw?.pen === LASSO_PEN_ID;
@@ -331,6 +441,7 @@ export function parseStrokes(
 				pen: PEN_IDS[raw.pen] ?? 'unknown',
 				thickness: raw.thickness,
 				...(isEraser ? { isEraser: true } : {}),
+				...(raw.contour ? { contour: raw.contour } : {}),
 			});
 		}
 

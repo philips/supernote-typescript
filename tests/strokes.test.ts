@@ -307,4 +307,141 @@ describe("parseStrokes", () => {
       expect(first).not.toBe("380.84,1439.83");
     }
   });
+
+  describe("point_contour (IStroke.contour)", () => {
+    /** Shoelace area of a closed ring. */
+    function ringArea(ring: { x: number; y: number }[]) {
+      let sum = 0;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        sum += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y);
+      }
+      return Math.abs(sum / 2);
+    }
+    function pathLength(points: { x: number; y: number }[]) {
+      let total = 0;
+      for (let i = 1; i < points.length; i++) total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+      return total;
+    }
+    function bounds(points: { x: number; y: number }[]) {
+      const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
+      return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+    }
+
+    test("is omitted unless includeContours is set", async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
+      const withoutContours = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+      expect(withoutContours.length).toBeGreaterThan(0);
+      expect(withoutContours.every((s) => s.contour === undefined)).toBe(true);
+
+      const withContours = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+        includeContours: true,
+      });
+      expect(withContours.every((s) => s.contour !== undefined && s.contour.length > 0)).toBe(true);
+      // the extra data is the only difference -- geometry is untouched
+      expect(withContours.map((s) => s.points)).toEqual(withoutContours.map((s) => s.points));
+    });
+
+    test("decodes the device's real rendered outline, in the same page-pixel space as points", async () => {
+      // stroke-isolation.note page 2 (1-indexed) is one stroke per pen tool
+      // at a known width. The contour is the filled region the device
+      // renders, so for each stroke it must (a) sit on that stroke's own
+      // transformed extents, centered, and (b) enclose an area on the order
+      // of pathLength * thickness/100 -- the same width unit the thickness
+      // field is documented in. Both hold without any scaling or mirroring
+      // applied to the contour, which is what proves it is already stored
+      // in final page-pixel space (unlike `points`, which needs the
+      // screenHeight transform).
+      //
+      // How close the area lands to nominal is tool-dependent, which is
+      // itself the point of having the contour: the round-tipped tools
+      // (needle pen, marker) really do fill ~1.0x their nominal width, but
+      // the ink pen measures ~0.65x and the chisel-tipped calligraphy pen
+      // only ~0.2-0.3x, because their rendered width narrows with
+      // pressure/tilt along most of a real stroke. Stroking the centerline
+      // at a uniform `thickness` (what vectorInk does today) can only ever
+      // draw the nominal figure, so the area is asserted per-tool rather
+      // than as one global ratio.
+      const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
+      const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
+      expect(strokes.length).toBe(4);
+
+      for (const stroke of strokes) {
+        const ring = stroke.contour!.flat();
+        expect(ring.length).toBeGreaterThan(3);
+
+        const contourBox = bounds(ring), strokeBox = bounds(stroke.points);
+        const halfWidth = stroke.thickness / 200;
+        // centered on the stroke...
+        expect(Math.abs((contourBox.minX + contourBox.maxX) / 2 - (strokeBox.minX + strokeBox.maxX) / 2)).toBeLessThan(halfWidth + 5);
+        expect(Math.abs((contourBox.minY + contourBox.maxY) / 2 - (strokeBox.minY + strokeBox.maxY) / 2)).toBeLessThan(halfWidth + 5);
+        // ...and extending past it by roughly the rendered half width
+        expect(contourBox.minX).toBeLessThanOrEqual(strokeBox.minX + 1);
+        expect(contourBox.maxX).toBeGreaterThanOrEqual(strokeBox.maxX - 1);
+
+        const enclosed = stroke.contour!.reduce((sum, r) => sum + ringArea(r), 0);
+        const nominal = pathLength(stroke.points) * (stroke.thickness / 100);
+        // never meaningfully *wider* than the tool's configured width...
+        expect(enclosed).toBeLessThan(nominal * 1.3);
+        // ...and, for the round-tipped tools, essentially exactly it
+        if (stroke.pen === "needlePoint" || stroke.pen === "marker") {
+          expect(enclosed).toBeGreaterThan(nominal * 0.85);
+        } else {
+          expect(enclosed).toBeGreaterThan(nominal * 0.1);
+        }
+      }
+    });
+
+    test("is present even on fully erased strokes -- it is not a visibility record", async () => {
+      // erase-no-white-pen.note is one page of 4 lines (4 different pens),
+      // every one of them erased -- by the stroke eraser, the lasso eraser,
+      // and select-and-delete respectively, with no white-ink cover-ups
+      // involved. Its rendered page is blank and Supernote's own export
+      // (erase.pdf/erase-no-white-pen.pdf) draws nothing.
+      //
+      // Yet every one of those strokes still carries a full-area contour,
+      // indistinguishable from a visible stroke's. That is the negative
+      // result this fixture exists to pin down: the contour is the outline
+      // the stroke was *drawn* with, not what survived erasing, so it
+      // cannot drive erase-exact export. See plans/vector-format-spec.md's
+      // erase-records section.
+      const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"));
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
+      const ink = strokes.filter((s) => !s.isEraser);
+      expect(ink.length).toBe(5);
+
+      for (const stroke of ink) {
+        expect(stroke.contour!.flat().length).toBeGreaterThan(3);
+      }
+      // and the outlines still span their whole stroke, rather than being
+      // clipped back to the (nonexistent) surviving ink
+      for (const stroke of ink) {
+        const contourBox = bounds(stroke.contour!.flat()), strokeBox = bounds(stroke.points);
+        expect(contourBox.minX).toBeLessThanOrEqual(strokeBox.minX + 1);
+        expect(contourBox.maxX).toBeGreaterThanOrEqual(strokeBox.maxX - 1);
+        expect(stroke.contour!.reduce((sum, r) => sum + ringArea(r), 0)).toBeGreaterThan(0);
+      }
+    });
+
+    test("decodes on every fixture and device family without throwing", async () => {
+      // Regression guard for the section sizes readContour depends on: they
+      // were solved against two device families, so a fixture that silently
+      // stopped decoding would mean a third layout exists.
+      const fixtures = fs.readdirSync("tests/input").filter((name) => name.endsWith(".note")).sort();
+      let total = 0, withContour = 0;
+      for (const fixture of fixtures) {
+        const sn = new SupernoteX(await readFileToUint8Array(fixture));
+        for (const page of sn.pages) {
+          for (const stroke of parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+            includeContours: true,
+            includeErasers: true,
+          })) {
+            total++;
+            if (stroke.contour && stroke.contour.length) withContour++;
+          }
+        }
+      }
+      expect(total).toBeGreaterThan(2000);
+      expect(withContour / total).toBeGreaterThan(0.95);
+    });
+  });
 });

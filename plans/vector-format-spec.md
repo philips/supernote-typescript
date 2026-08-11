@@ -249,25 +249,85 @@ Findings, each confirmed against device ground truth:
      containment; 31/31 erased + 61/61 kept, zero errors) mis-erases
      visible text on this page. Same bytes, opposite meaning — the
      difference lives outside the replayed records.
-2. **Where the real visibility state lives**: per-stroke, in the
-   still-undecoded tail sections — most likely `point_contour` (snlib's
-   name), the device's own rendered-outline polygons, which is also
-   exactly what the newer PDF exports draw (filled Bézier outlines). The
-   `flag_draw` per-point byte array was decoded and ruled out (all-1 even
-   on fully-erased strokes). Partial tail structure established for future
-   work: each stroke ends `…, sized_str(0), sized_str("none"),
-   sized_str("none"), u32 unk_25, sized_array(3 × 8 bytes)`; the fixed
-   sections between `epa_grays` and the contour did not match snlib's
-   declared sizes on these fixtures (no single `(S1..S4)` solved more than
-   132 of 829 strokes), so contour decoding needs a dedicated
-   byte-alignment effort.
-3. **What ships meanwhile**: `pen=4` selection paths are excluded from
+2. **`point_contour` is decoded — and is *not* the visibility record.**
+   The leading hypothesis was that per-stroke visibility lives in
+   `point_contour` (snlib's name), the device's own rendered-outline
+   polygons, since that is also what the newer PDF exports draw (filled
+   Bézier outlines). It is now decoded (see the section below) and the
+   hypothesis is disproved: **a fully erased stroke stores a full-area
+   outline, indistinguishable from a visible stroke's.** Measured on
+   `erase-no-white-pen.note`, whose page is blank on-device and empty in
+   Supernote's own export, yet whose five strokes all carry outlines
+   enclosing their full nominal area. `flag_draw` (the per-point byte
+   array) was decoded and ruled out the same way earlier — all-`1` even on
+   fully-erased strokes.
+
+   That closes off the last per-stroke field plausibly carrying the state,
+   so the working conclusion is that **erase results are not stored in
+   `TOTALPATH` at all**: it is an append-only log of pen motions, and the
+   erased *result* exists only in the rendered `RATTA_RLE` bitmap layers
+   (which is why the device's own exporter, which rasterizes/recomputes,
+   can omit erased strokes while the stroke log cannot say which ones).
+3. **What ships**: `pen=4` selection paths are excluded from
    `parseStrokes` unconditionally (they rendered as phantom black loops;
    never visible on-device in any fixture, whatever the selection did),
    alongside the existing `color=255` filtering + `includeErasers` white
-   overlay. Full erase-exact output (skipping erased strokes and clipping
-   partially-erased ones the way `erase.pdf`/`horizontal_1270.pdf` do)
-   is blocked on the contour decode.
+   overlay. Erase-exact output would now have to come from the raster
+   (e.g. intersecting decoded strokes against the rendered ink mask),
+   not from a smarter read of the stroke log.
+
+### `point_contour` — decoded: the device's own rendered outline
+
+Each stroke stores the filled region the device actually renders, as
+closed polygon rings — the same thing Supernote's newer PDF exports draw
+as filled Bézier outlines instead of fixed-width polylines. Exposed as
+`IStroke.contour` behind `parseStrokes`' `includeContours` option.
+
+Layout, picking up immediately after the fixed 208-byte `StrokeConfig`:
+
+```
+disable_area_list  u32 count + count*24
+points             u32 count + count*8      // the sampled centerline
+pressures          u32 count + count*2
+tilts              u32 count + count*4
+flag_draw          u32 count + count*1
+epa_points         u32 count + count*8
+epa_grays          u32 count + count*4
+<52 bytes>                                  // snlib's Section1
+control_nums       u32 count + count*4
+<10 bytes>                                  // snlib's Section2
+point_contour      u32 ringCount
+                     per ring: u32 pointCount + pointCount*8
+                     // each point: float32 x, float32 y
+```
+
+The two fixed spans are the load-bearing part: snlib's declared field
+lists for `Section1`/`Section2` add up to different totals, so they were
+solved directly instead — 52 and 10 are the only pair that makes *every*
+record on a page parse byte-exactly, jointly across two device families
+(N5/Manta `erase-no-white-pen.note` and the older `horizontal_1270.note`).
+
+Two independent checks confirm the result is real geometry rather than a
+coincidental alignment, across 2,387 decoded strokes in 19 fixtures
+(99.2% of all strokes; the rest are 2-point rect records and similar):
+
+- **Position.** Each ring's bounding box is its own stroke's transformed
+  point extents inflated by about half the rendered width — centered, on
+  both portrait and landscape pages.
+- **Area.** The enclosed area tracks `pathLength × thickness / 100`,
+  the same width unit the `thickness` field is documented in.
+
+Contour coordinates are **float32 pairs already in final page-pixel
+space** — no `screenHeight` scaling and no x mirroring, unlike `points`.
+
+The area check also quantifies what the contour adds over stroking the
+centerline at a uniform width: round-tipped tools (needle pen, marker)
+fill ~1.0× their nominal width, but the ink pen measures ~0.65× and the
+chisel-tipped calligraphy pen only ~0.2–0.3×, because their rendered
+width narrows with pressure and tilt. Filling these rings is therefore
+the route to matching the device's own modern vector export; `vectorInk`
+still strokes the centerline at a uniform `thickness`, which can only
+draw the nominal figure.
 
 ### `thickness` field — solved: hundredths of a page pixel
 
@@ -700,15 +760,23 @@ pass; the findings are folded into the sections above. In brief:
    digit reading is confirmed only for these four values on two greyscale
    devices. (`test.note` shows non-greyscale stroke colors 48/81 exist in
    the wild, so a color-device fixture would also extend the Color table.)
-7. **Decode `point_contour` (the per-stroke rendered-outline polygons)** —
-   the single highest-value remaining decode: it is the device's own
-   authoritative record of what each stroke actually looks like after
-   erasing (fully-erased strokes, partial-erase dash fragments, and
-   probably pressure-varying outline width all at once), and the only
-   sound path to erase-exact `vectorInk` output — the erase-records
-   section above proves replaying the eraser log cannot be made correct.
-   The known tail anchors and the failed section-size solve are documented
-   there as the starting point.
+7. ~~Decode `point_contour`~~ — done, see its section above: it is the
+   device's real rendered outline (with true pressure-varying width), but
+   it is **not** a record of what survived erasing, which was the reason
+   it was prioritized. Two follow-ons remain:
+   - **Render from the contour** instead of stroking the centerline at a
+     uniform `thickness`, to match Supernote's own modern vector export.
+     Measured gap: the ink and calligraphy pens fill only ~0.65× and
+     ~0.2–0.3× of the nominal width that `vectorInk` currently draws.
+   - **Erase-exact export now has to come from the raster**, since no
+     per-stroke field carries visibility (see the erase-records section):
+     something like intersecting each decoded stroke, or its contour,
+     against the page's own rendered ink mask.
+8. **The remaining stroke-record tail** — `unk_17`, `unk_22`, and the
+   `Section3`/`Section4` spans after `point_contour` are still
+   uncharacterized (their combined size also varies by 4 bytes between
+   firmware generations, which is why the contour decode deliberately
+   parses forward only and never depends on them). Nothing needs them.
 
 ## References
 

@@ -646,6 +646,66 @@ function sampleRect(
  * plans/vector-format-spec.md's "thickness field" section. */
 const THICKNESS_TO_PIXEL_SCALE = 100;
 
+/** Shoelace area of a closed ring, *signed* -- its sign is the ring's
+ * winding direction. Summing signed areas across a contour's rings is what
+ * subtracts holes from the shape they sit in rather than adding them: a
+ * stroke that closes a loop (any `e`, `o` or `a`) stores the enclosed gap
+ * as its own oppositely-wound ring, and counting that as more ink made
+ * such letters measure up to 3x too wide. */
+function signedRingArea(ring: IStrokePoint[]): number {
+	let sum = 0;
+	for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+		sum += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y);
+	}
+	return sum / 2;
+}
+
+function polylineLength(points: IStrokePoint[]): number {
+	let total = 0;
+	for (let i = 1; i < points.length; i++) total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+	return total;
+}
+
+/**
+ * The width to actually draw `stroke` at, in page pixels.
+ *
+ * `thickness / THICKNESS_TO_PIXEL_SCALE` is the tool's *configured* width,
+ * and for the newer pens it is also the rendered one -- but for others it
+ * is badly off, so it can't be used alone. Measured against the device's
+ * own rendered outline (`IStroke.contour`) across every fixture: the
+ * needle pen and the marker land within a few percent of nominal, but the
+ * older ink pen (`pen=1`, everything from the A5X and Nomad fixtures)
+ * renders **1.5-2x wider** than nominal, which is what made `vectorInk`
+ * output look consistently too thin next to the same page's raster.
+ * Confirmed end-to-end against `a5x-2.14.28.pdf`, Supernote's own vector
+ * export of one of those pages: drawing every stroke at nominal width laid
+ * down only 40% of the ink the device does.
+ *
+ * So the contour is used when it's available, since it is a direct
+ * measurement of the real thing rather than an assumption about the
+ * thickness unit, and it needs no per-pen or per-firmware table. The
+ * width it implies is recovered from the area it encloses, treating the
+ * stroke as a rectangle of that length with a round cap at each end
+ * (`area = length * w + PI * (w/2)^2`, solved for `w`) -- without the cap
+ * term a short stroke's area, which is mostly cap, would imply an
+ * implausibly wide line.
+ *
+ * Falls back to nominal when there's no contour (a firmware whose layout
+ * `readContour` doesn't recognize) or when the contour is degenerate.
+ */
+function strokeRenderWidth(stroke: IStroke): number {
+	const nominalWidth = stroke.thickness / THICKNESS_TO_PIXEL_SCALE;
+	if (!stroke.contour || stroke.contour.length === 0) return nominalWidth;
+
+	const enclosedArea = Math.abs(stroke.contour.reduce((sum, ring) => sum + signedRingArea(ring), 0));
+	if (enclosedArea <= 0) return nominalWidth;
+
+	const length = polylineLength(stroke.points);
+	// area = length * w + PI * (w/2)^2  ->  (PI/4)w^2 + length*w - area = 0
+	const measuredWidth = (Math.sqrt(length * length + Math.PI * enclosedArea) - length) / (Math.PI / 2);
+	return measuredWidth > 0 ? measuredWidth : nominalWidth;
+}
+
 /**
  * Derives a `StrokeStyle` for one decoded stroke. For a `'path'`, this is a
  * pure, direct read of the stroke's own real `TOTALPATH` metadata -- no
@@ -688,7 +748,7 @@ function deriveStrokeStyle(
 	return {
 		shape: 'path',
 		color: stroke.color,
-		width: stroke.thickness / THICKNESS_TO_PIXEL_SCALE,
+		width: strokeRenderWidth(stroke),
 		tier: stroke.pen === 'marker' ? 'marker' : 'pen',
 	};
 }
@@ -830,7 +890,14 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 		? new Set(
 				pages
 					.map((page, i) => {
-						const nativeStrokes = parseStrokes(page.totalPathBuffer, note.pageWidth, note.pageHeight, { includeErasers: true });
+						// includeContours: strokeRenderWidth measures each stroke's
+						// real rendered width from its own outline. Only needed on
+						// this native-resolution pass, which is what derives styles;
+						// the upscaled decode above just needs geometry.
+						const nativeStrokes = parseStrokes(page.totalPathBuffer, note.pageWidth, note.pageHeight, {
+							includeErasers: true,
+							includeContours: true,
+						});
 						const pageNumber = pageNumbers ? pageNumbers[i] : i + 1;
 						if (nativeStrokes.length === 0) return -1;
 						const mask = buildInkMask(page, note.pageWidth, note.pageHeight);

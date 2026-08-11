@@ -376,6 +376,37 @@ should render 38px wide, not ~25px. The ~25px raster measurement that
 calibrated the constant likely measured the marker's soft-edged raster
 rendering too conservatively. The constant should be 100.
 
+**But `thickness` is the tool's *configured* width, not always its rendered
+one.** Measuring each stroke's own `point_contour` outline (below) against
+its nominal width, across every fixture, splits the pens in two:
+
+| Pen | Nominal vs. rendered |
+|---|---|
+| `pen=10` needle point | 0.94–1.04× — nominal is correct |
+| `pen=11` marker @3800 | 1.06× — nominal is correct |
+| **`pen=1` ink pen (older)** | **1.5–2.0×** — renders far wider than nominal |
+| `pen=11` marker @1500 | 2.02× |
+| `pen=16` ink pen (newer) | 0.77× |
+| `pen=15` calligraphy | ~0.2–0.3× (chisel tip: much less ink than its width implies) |
+
+`pen=1` is what every A5X and Nomad fixture writes with, so drawing at
+nominal width made `vectorInk` output visibly thinner than the same page's
+raster. Confirmed end-to-end against `a5x-2.14.28.pdf` (Supernote's own
+export of one of those pages, and a rare 1:1 case — 146 filled outlines for
+exactly 146 decoded strokes): drawing at nominal laid down **40%** of the
+ink the device does; measuring each stroke's own outline instead brings
+that to **84%**.
+
+So `src/svg.ts`'s `strokeRenderWidth` derives width from the contour when
+it's available (falling back to nominal otherwise), which needs no per-pen
+or per-firmware table. It recovers the width from the enclosed area by
+treating the stroke as a rectangle with a round cap at each end
+(`area = length·w + π(w/2)²`, solved for `w`) — without the cap term, a
+short stroke's area is mostly cap and implies an implausibly wide line.
+The ring areas must be summed **signed**, so that a closed letter's inner
+hole subtracts: counting it as more ink made every `e`/`o`/`a` measure up
+to 3× too wide.
+
 ### 2-point records — a distinct sub-type, not a style choice
 
 A stroke record whose `points` array has exactly 2 entries is a filled
@@ -786,11 +817,18 @@ pass; the findings are folded into the sections above. In brief:
    device's real rendered outline (with true pressure-varying width), but
    it is **not** a record of what survived erasing, which was the reason
    it was prioritized (that is now handled from the raster instead — see
-   the erase-records section). One follow-on remains:
-   - **Render from the contour** instead of stroking the centerline at a
-     uniform `thickness`, to match Supernote's own modern vector export.
-     Measured gap: the ink and calligraphy pens fill only ~0.65× and
-     ~0.2–0.3× of the nominal width that `vectorInk` currently draws.
+   the erase-records section). It is now used for stroke width instead
+   (`strokeRenderWidth`, see the thickness section), which is what the
+   decode turned out to be worth. One follow-on remains:
+   - **Fill the contour** rather than stroking the centerline at the single
+     width derived from it, which is the last of the gap to Supernote's own
+     modern vector export: a uniform width can't express the variation
+     along a stroke, and can't represent a chisel-tipped calligraphy pen at
+     all (its area-correct width, ~0.2–0.3× nominal, is right on average
+     but thin everywhere the nib is broad). Would close the remaining
+     ~16% area gap measured against `a5x-2.14.28.pdf`. The main work is
+     that contour coordinates are absolute page pixels, so they need
+     explicit scaling under `toSvg`'s `upscale` option, unlike points.
 8. **The remaining stroke-record tail** — `unk_17`, `unk_22`, and the
    `Section3`/`Section4` spans after `point_contour` are still
    uncharacterized (their combined size also varies by 4 bytes between

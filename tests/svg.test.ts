@@ -850,14 +850,21 @@ describe("svg", () => {
       expect(strokes.length).toBe(subpathCount)
     })
 
-    test("stroke width matches Supernote's own PDF export exactly, not under-drawn (thickness/100, not /150)", { timeout: 30000 }, async () => {
+    test("stroke width matches Supernote's own PDF export (headings-and-marker.pdf's literal `4 w`)", { timeout: 30000 }, async () => {
       // Same page 1 as the previous test: every one of its 32 subpaths is a
       // needle-point-pen stroke at the same width setting, and the PDF's own
       // content stream draws every one of them with a literal `4 w` (4
-      // page-pixel line width -- `headings-and-marker.pdf`'s MediaBox is the
+      // page-pixel line width -- headings-and-marker.pdf's MediaBox is the
       // page's own pixel space, see plans/vector-format-spec.md's "thickness
-      // field" section). thickness/150 (this constant's old, raster-
-      // calibrated value) would under-draw this to ~2.67px instead.
+      // field" section).
+      //
+      // Widths are measured per stroke from its own rendered outline
+      // (strokeRenderWidth) rather than taken from the nominal thickness
+      // setting, so they cluster around 4 rather than all sitting exactly
+      // on it -- real strokes narrow with pressure, and this export style
+      // draws every stroke at one `w` precisely because it *can't* express
+      // that. So the median is what's comparable to the PDF's figure; the
+      // spread below it is real ink, not error.
       const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/headings-and-marker.pdf"))
       const page1Stream = pdfStreams[0].toString("latin1")
       const pdfWidths = [...new Set([...page1Stream.matchAll(/([\d.]+) w\b/g)].map((m) => Number(m[1])))]
@@ -865,13 +872,45 @@ describe("svg", () => {
 
       const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
-      const widths = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)].map((m) =>
-        Number(m[1]),
-      )
+      const widths = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)]
+        .map((m) => Number(m[1]))
+        .sort((a, b) => a - b)
       expect(widths.length).toBe(32)
-      for (const width of widths) {
-        expect(width).toBe(4)
-      }
+
+      const median = widths[Math.floor(widths.length / 2)]
+      expect(median).toBeGreaterThan(pdfWidths[0] * 0.85)
+      expect(median).toBeLessThan(pdfWidths[0] * 1.15)
+      // and no individual stroke is wildly off -- in particular none is
+      // double, which is what summing a letter's inner hole as if it were
+      // more ink used to do to every `e`/`o`/`a` (see signedRingArea).
+      expect(widths[0]).toBeGreaterThan(pdfWidths[0] * 0.5)
+      expect(widths[widths.length - 1]).toBeLessThan(pdfWidths[0] * 1.5)
+    })
+
+    test("an older ink pen is drawn at its real rendered width, not its much thinner nominal one (a5x-2.14.28.pdf)", { timeout: 30000 }, async () => {
+      // a5x-2.14.28.note's page is 146 strokes of the older ink pen
+      // (pen=1, thickness=200 -> 2px nominal), and a5x-2.14.28.pdf is
+      // Supernote's own vector export of it: 146 filled outlines, one per
+      // stroke. Measuring those outlines shows the device actually renders
+      // this pen ~4.4px wide, more than twice nominal -- which is why
+      // vectorInk output used to look visibly thinner than the same page's
+      // raster. strokeRenderWidth measures each stroke's own outline
+      // instead, closing most of that gap.
+      const pdfBytes = await fs.readFile("tests/input/a5x-2.14.28.pdf")
+      const fillCount = (extractPdfFormXObjectStreams(pdfBytes)[0].toString("latin1").match(/(?:^|\s)f(?:\s|$)/g) ?? []).length
+      expect(fillCount).toBe(146)
+
+      const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(strokes.length).toBe(fillCount)
+      expect(new Set(strokes.map((s) => s.thickness))).toEqual(new Set([200])) // 2px nominal
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const widths = [...svg.matchAll(/stroke-width="([\d.]+)"/g)].map((m) => Number(m[1])).sort((a, b) => a - b)
+      expect(widths.length).toBe(fillCount)
+      const median = widths[Math.floor(widths.length / 2)]
+      expect(median).toBeGreaterThan(3) // nominal would put every one of these at 2.0
+      expect(median).toBeLessThan(5.5)
     })
 
     const NEAR_DUPLICATE_TOLERANCE = 5

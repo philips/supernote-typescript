@@ -86,24 +86,30 @@ function buildRecognitionTextElements(page: IPdfPage, pageWidth: number): string
  * and https://github.com/Walnut356/snlib for how that metadata was found.
  *
  * `'rect'` is a distinct record shape TOTALPATH itself encodes, not a style
- * choice: a stroke decoded down to exactly two points is a filled
- * rectangle's opposite corners. Unlike `'path'`, a rect's own `color`/`pen`
+ * choice: such a record's two points are a filled rectangle's opposite
+ * corners rather than a pen path, and it says so in its own `stroke_kind`
+ * (`IStroke.isFilledRect`). Having two points is *not* the test -- the
+ * ruler tool and the odd two-sample ink stroke store two points too, and
+ * treating those as rectangles drew a straight line as a filled box or
+ * nothing at all.
+ *
+ * Unlike `'path'`, a rect's own `color`/`pen`
  * fields are *not* meaningful (confirmed against a real fixture with four
  * differently-colored heading backgrounds on one page: every one of their
  * 2-point records reads the same, uninformative `color` regardless of the
- * background's real, visibly different color) -- the real color must live
- * elsewhere, most likely `RECOGNFILE`'s `page.bdom`
- * (https://github.com/philips/supernote-typescript/issues/60), not yet
- * decoded. So `deriveStrokeStyle` still samples a rect's color/fill from the
- * page's own rendered ink, the same way every stroke's style used to be
- * sampled before real per-stroke metadata was found: checking what fraction
- * of the rectangle's own bounding box is already real ink separates a
- * genuine rect (a solid background measures ~97-99% filled, a diagonal
- * cross-hatch background ~25% -- both confirmed against Supernote's own
+ * background's real, visibly different color). For a Heading's rect (the
+ * common case), the real color lives losslessly in the `.note` footer's own
+ * `TITLE_*` metadata instead -- see `findMatchingTitleStyle` -- so
+ * `deriveStrokeStyle` looks that up first. Only a rect with no
+ * matching `TITLE_*` entry (badges/highlight boxes, which aren't Headings)
+ * falls back to sampling the page's own rendered ink for color/fill, the way
+ * every stroke's style used to be sampled before real per-stroke metadata
+ * was found: what fraction of the rectangle's own bounding box is already
+ * real ink also separates a solid background (~97-99% filled) from a
+ * diagonal cross-hatch one (~25%) -- both confirmed against Supernote's own
  * "Heading" feature, see
- * https://support.supernote.com/1759244-using-titles-keywords-and-stars)
- * from a real but unrelated short 2-point ink stroke (measures ~0%, `'skip'`
- * so as to not draw a phantom diagonal line for it). `fill` records solid
+ * https://support.supernote.com/1759244-using-titles-keywords-and-stars.
+ * `fill` records solid
  * vs. hatch so `buildRectElement` can draw the latter as an actual hatch
  * pattern instead of collapsing it to a solid block that would hide
  * anything drawn on top (confirmed on a real fixture: a hatched heading's
@@ -166,7 +172,7 @@ function buildPathElement(stroke: IStroke, style: { color: string; width: number
  * then wide ("marker") `'path'`s, then narrow ("pen") `'path'`s -- instead
  * of strictly in `strokes`' order (i.e. TOTALPATH buffer order, which
  * doesn't reliably match how layered content was actually drawn). Confirmed
- * on real fixtures both ways: a badge's `'rect'` background record sits
+ * on real fixtures both ways: a Heading's `'rect'` background record sits
  * *after* the digit stroke it's meant to sit behind, and a highlighter
  * pass's record can sit after the pen ink drawn over it too -- either way,
  * drawing in plain buffer order (SVG paints later elements on top) paints
@@ -322,9 +328,11 @@ function withoutInkLayers(page: IPage): IPage {
 
 const INK_LAYER_NAMES: ILayerNames[] = ['MAINLAYER', 'LAYER1', 'LAYER2', 'LAYER3'];
 
-/** A page's rendered ink, decoded once per page -- used only for `'rect'`
- * strokes' color/fill (see `deriveStrokeStyle`), since a rect's own
- * `TOTALPATH` metadata isn't meaningful the way a `'path'` stroke's is. */
+/** A page's rendered ink, decoded once per page. Two uses: the fallback
+ * source for a `'rect'` stroke's color/fill (see `deriveStrokeStyle`) when
+ * it has no matching `TITLE_*` footer entry, and -- more fundamentally --
+ * the only available record of which strokes were *erased*
+ * (`strokeInkPresence`). */
 interface InkMask {
 	/** 1 where that pixel (row-major, `y * pageWidth + x`) is real rendered
 	 * ink, 0 otherwise. */
@@ -392,6 +400,114 @@ const MIN_RECT_FILL_FRACTION = 0.15;
  * measured on a real fixture (~97-99% solid, ~25% cross-hatch). */
 const SOLID_RECT_MIN_FILL_FRACTION = 0.5;
 
+/** How many points along a stroke `strokeInkPresence` samples. Enough to
+ * catch a stroke that survives only in part, cheap enough to run on every
+ * stroke of a dense page. */
+const INK_PRESENCE_SAMPLE_COUNT = 60;
+/** Below this fraction of a stroke's sampled points finding matching ink in
+ * the page's own render, `toSvg`'s `vectorInk` treats the stroke as erased
+ * and drops it entirely.
+ *
+ * **Only ever consulted for strokes an eraser actually touched**
+ * (`IStroke.eraserTouched`), which is what lets it sit at a confident 0.5
+ * rather than hugging zero. Within that population the two outcomes are far
+ * apart and nothing lands in between: on `horizontal_1270.note`, whose
+ * device PDF names exactly which strokes survived, the erased ones score
+ * 0.00-0.30 and the survivors 0.86-1.00, and this rule reproduces all 82
+ * of that page's decisions exactly.
+ *
+ * Before there was a flag to lean on, this check ran against *every*
+ * stroke, which forced it down to `MAX_HIDDEN_INK_PRESENCE` -- low enough
+ * to never delete a partially-erased stroke, but too low to catch an erased
+ * one sitting under whatever was written in its place. That is what left a
+ * second `0` visible in `horizontal_1270.note`'s "1270". */
+const MAX_ERASED_INK_PRESENCE = 0.5;
+
+/** The same idea for strokes no eraser ever touched, which can still be
+ * invisible: `erase.note`'s rows were covered over with *white ink* rather
+ * than erased, and Supernote's own export of that page draws only the white.
+ * They have to be dropped rather than drawn-then-covered, because
+ * `buildStrokePathElements` sorts strokes into tiers instead of keeping
+ * `TOTALPATH` order, so a white marker cover-up can end up painted *under*
+ * the pen stroke it was meant to hide.
+ *
+ * Kept hard against zero: with no eraser involved, "not one sampled point
+ * of this stroke has any matching ink" is the only safe reason to discard
+ * something the file still says is there. */
+const MAX_HIDDEN_INK_PRESENCE = 0.05;
+/** How far from a sampled point `strokeInkPresence` looks for matching ink,
+ * beyond the stroke's own rendered half width -- absorbs the point-to-pixel
+ * rounding and the slight spread of the device's own rasterizer. */
+const INK_PRESENCE_SEARCH_MARGIN_PX = 1;
+/** How far a rendered ink pixel's grey level may sit from the stroke's own
+ * declared color and still count as that stroke's ink. Wide enough for the
+ * e-ink quantization already documented for `color` (157 vs. 158, 201 vs.
+ * 202 -- see plans/vector-format-spec.md), narrow enough that black ink
+ * never matches a white-pen stroke or vice versa. */
+const INK_PRESENCE_GREY_TOLERANCE = 48;
+
+/**
+ * What fraction of `stroke` still has matching ink in `mask`, the page's own
+ * rendered output -- i.e. how much of it the device actually still draws.
+ *
+ * This exists because **erasing is not recorded per-stroke anywhere in
+ * `TOTALPATH`**. An erased stroke stays in the stroke log byte for byte
+ * like a live one: its points, its `flag_draw` array, and even its
+ * `point_contour` rendered outline are all unchanged (see
+ * `parseStrokes`' doc comment and plans/vector-format-spec.md's
+ * erase-records section, which rules each of those out in turn against
+ * fixtures where the device's own PDF export proves what survived). The
+ * eraser's own motion is logged as a separate stroke, but replaying it
+ * geometrically is provably wrong -- the same record shapes mean "erase"
+ * on one page and "lasso-select for a Keyword" on another.
+ *
+ * So the rendered bitmap is the only thing that knows, and this asks it
+ * directly. That inverts the usual relationship for `vectorInk` (real
+ * metadata first, raster only as a fallback), but here the raster *is* the
+ * primary record -- there is nothing more authoritative to prefer.
+ *
+ * `displayColor` is the color the stroke is *rendered* in rather than
+ * `IStroke.color`, because those differ exactly where it matters: a
+ * Heading's label text is black ink the device paints white for contrast
+ * (see `applyHeadingContrastOverrides`), so matching its real black would
+ * find no ink and wrongly delete every heading label.
+ */
+function strokeInkPresence(
+	stroke: IStroke,
+	displayColor: string,
+	mask: InkMask,
+	pageWidth: number,
+	pageHeight: number,
+): number {
+	if (stroke.points.length === 0) return 1;
+	const targetGrey = Number(/rgb\((\d+)/.exec(displayColor)?.[1] ?? '0');
+	const radius = Math.max(1, Math.round(stroke.thickness / (THICKNESS_TO_PIXEL_SCALE * 2))) + INK_PRESENCE_SEARCH_MARGIN_PX;
+	const step = Math.max(1, Math.floor(stroke.points.length / INK_PRESENCE_SAMPLE_COUNT));
+
+	let sampled = 0;
+	let found = 0;
+	for (let i = 0; i < stroke.points.length; i += step) {
+		sampled++;
+		const centerX = Math.round(stroke.points[i].x);
+		const centerY = Math.round(stroke.points[i].y);
+		let hit = false;
+		for (let y = centerY - radius; y <= centerY + radius && !hit; y++) {
+			if (y < 0 || y >= pageHeight) continue;
+			for (let x = centerX - radius; x <= centerX + radius; x++) {
+				if (x < 0 || x >= pageWidth) continue;
+				const p = y * pageWidth + x;
+				if (!mask.isInk[p]) continue;
+				if (Math.abs(mask.colors[p * 3] - targetGrey) <= INK_PRESENCE_GREY_TOLERANCE) {
+					hit = true;
+					break;
+				}
+			}
+		}
+		if (hit) found++;
+	}
+	return sampled > 0 ? found / sampled : 1;
+}
+
 function modeColor(colorCounts: Map<string, number>): string | undefined {
 	let bestKey: string | undefined;
 	let bestCount = 0;
@@ -411,6 +527,98 @@ function rectBounds(p0: IStrokePoint, p1: IStrokePoint, pageWidth: number, pageH
 		minY: Math.max(0, Math.floor(Math.min(p0.y, p1.y))),
 		maxY: Math.min(pageHeight - 1, Math.ceil(Math.max(p0.y, p1.y))),
 	};
+}
+
+/** A Heading rect's real fill/text color, decoded from its `TITLE_*` footer
+ * metadata (see `buildTitleIndex`) instead of sampled from the raster. */
+interface TitleStyle {
+	fill: 'solid' | 'hatch';
+	/** The rect's own background color, e.g. `rgb(157,157,157)`. */
+	backgroundColor: string;
+	/** The Heading's label text color, auto-recolored for contrast against
+	 * `backgroundColor` -- see `applyHeadingContrastOverrides`. */
+	textColor: string;
+}
+
+/** Decodes an `ITitle.TITLESTYLE` value (7 decimal digits, `1BBBFFF`) into a
+ * `TitleStyle` -- `BBB` is the background's grey level, `FFF` the displayed
+ * label text's grey level, confirmed against real fixtures on two devices
+ * (see plans/vector-format-spec.md, "TITLE_ / KEYWORD_ footer metadata").
+ * The cross-hatch pattern is the one variant whose background and text
+ * digits are both `000`: a solid-black heading always carries white text, so
+ * `1000000` can't mean "solid black" -- it's the hatch case instead, whose
+ * pattern color is black. */
+function parseTitleStyle(titleStyle: string): TitleStyle {
+	const backgroundDigits = titleStyle.slice(1, 4);
+	const textDigits = titleStyle.slice(4, 7);
+	const isHatch = backgroundDigits === '000' && textDigits === '000';
+	const backgroundGrey = Number(backgroundDigits);
+	const textGrey = Number(textDigits);
+	return {
+		fill: isHatch ? 'hatch' : 'solid',
+		backgroundColor: `rgb(${backgroundGrey},${backgroundGrey},${backgroundGrey})`,
+		textColor: `rgb(${textGrey},${textGrey},${textGrey})`,
+	};
+}
+
+/** One page's `TITLE_*` footer entries (Headings), reduced to their page-pixel
+ * rect and decoded `TitleStyle` -- built once per page and matched against
+ * each 2-point rect stroke by position (see `findMatchingTitleStyle`), since
+ * `ITitle` itself carries no stroke-record link, only its own independently
+ * recorded `TITLERECT`. */
+interface TitleRectEntry {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	style: TitleStyle;
+}
+
+/** `note.titles` is keyed by the footer's `TITLE_PPPPYYYYXXXX` suffix --
+ * 4-digit page number, then the title's own `y`/`x` -- across the whole
+ * note, not scoped per page, so filtering by the page-number prefix is how
+ * one page's own Headings are found. */
+function buildTitleIndex(note: ISupernote, pageNumber: number): TitleRectEntry[] {
+	const pagePrefix = String(pageNumber).padStart(4, '0');
+	const entries: TitleRectEntry[] = [];
+	for (const [key, titles] of Object.entries(note.titles)) {
+		if (!key.startsWith(pagePrefix)) continue;
+		for (const title of titles) {
+			// ITitle.TITLERECT is typed as a 4-tuple (IRectangle), but
+			// _parseTitle's actual value is the raw, still-comma-joined
+			// "x,y,w,h" string (parseKeyValue never splits it) -- normalize
+			// either shape rather than trusting the declared type.
+			const rectParts = Array.isArray(title.TITLERECT) ? title.TITLERECT : String(title.TITLERECT).split(',');
+			const [x, y, width, height] = rectParts.map(Number);
+			entries.push({ x, y, width, height, style: parseTitleStyle(title.TITLESTYLE) });
+		}
+	}
+	return entries;
+}
+
+/** A rect stroke's transformed corners land within ~1px of its `TITLERECT`
+ * counterpart (confirmed pixel-exact against a real fixture -- see
+ * plans/vector-format-spec.md), so a small tolerance absorbs float rounding
+ * from the coordinate transform without risking a false match between two
+ * distinct, unrelated rects on the same page. */
+const TITLE_RECT_MATCH_TOLERANCE_PX = 2;
+
+/** Finds the `TitleStyle` for a 2-point rect stroke's corners `p0`/`p1`, by
+ * position against `titleIndex` -- or `undefined` if this rect isn't a
+ * Heading (no matching `TITLE_*` entry), e.g. a badge or highlight box. */
+function findMatchingTitleStyle(titleIndex: TitleRectEntry[], p0: IStrokePoint, p1: IStrokePoint): TitleStyle | undefined {
+	const x = Math.min(p0.x, p1.x);
+	const y = Math.min(p0.y, p1.y);
+	const width = Math.abs(p1.x - p0.x);
+	const height = Math.abs(p1.y - p0.y);
+	const entry = titleIndex.find(
+		(candidate) =>
+			Math.abs(candidate.x - x) <= TITLE_RECT_MATCH_TOLERANCE_PX &&
+			Math.abs(candidate.y - y) <= TITLE_RECT_MATCH_TOLERANCE_PX &&
+			Math.abs(candidate.width - width) <= TITLE_RECT_MATCH_TOLERANCE_PX &&
+			Math.abs(candidate.height - height) <= TITLE_RECT_MATCH_TOLERANCE_PX,
+	);
+	return entry?.style;
 }
 
 /** What fraction of the rectangle spanned by `p0`/`p1` (a 2-point stroke's
@@ -443,32 +651,113 @@ function sampleRect(
 }
 
 /** Converts `IStroke.thickness` (an opaque on-device unit -- see its own doc
- * comment) to an SVG stroke-width in page pixels. Calibrated empirically
- * against `stroke-isolation.note`'s tool-isolated fixture: dividing by 150
- * lands ordinary pen tools (needle/ink/calligraphy: raw 400-900) at 3-6px
- * and a marker (raw 3800) at ~25px, matching this codebase's own prior
- * raster-measured widths for the same strokes (needle/ink/calligraphy
- * consistently well under a marker's, which measured close to the old
- * raster-search's own 12px-half-width cap) -- not derived from a documented
- * physical unit, since `thickness` isn't confirmed to share the coordinate
- * fields' "10 micrometers per unit" scale (dividing by the same per-page
- * coordinate `scale` `parseStrokes` uses produces implausibly wide lines,
- * confirmed against this same fixture). */
-const THICKNESS_TO_PIXEL_SCALE = 150;
+ * comment) to an SVG stroke-width in page pixels. `thickness / 100` is the
+ * real unit: hundredths of a page pixel, confirmed two independent ways
+ * against `headings-and-marker.pdf` (Supernote's own PDF export, which draws
+ * ink in the page's own pixel space) -- every width-slider position maps to
+ * a clean integer pixel width this way (0.1->200->2px, ... 1.0->1200->12px,
+ * marker->3800->38px), and each stroke's own `bounding_tl`/`br` extents (not
+ * currently decoded by this module, but present in `TOTALPATH`'s own
+ * `StrokeConfig`) are exactly the point extents inflated by
+ * `thickness / 100 / 2` per side. An earlier version of this constant used
+ * 150, calibrated against this codebase's own prior *raster-measured*
+ * widths for the same strokes -- but that raster measurement itself
+ * undercounted a marker's true ~38px width (a soft-edged raster stroke
+ * measures narrower than its real drawn width), so 150 under-drew every
+ * stroke by 1.5x relative to Supernote's own vector export. See
+ * plans/vector-format-spec.md's "thickness field" section. */
+const THICKNESS_TO_PIXEL_SCALE = 100;
+
+/** Shoelace area of a closed ring, *signed* -- its sign is the ring's
+ * winding direction. Summing signed areas across a contour's rings is what
+ * subtracts holes from the shape they sit in rather than adding them: a
+ * stroke that closes a loop (any `e`, `o` or `a`) stores the enclosed gap
+ * as its own oppositely-wound ring, and counting that as more ink made
+ * such letters measure up to 3x too wide. */
+function signedRingArea(ring: IStrokePoint[]): number {
+	let sum = 0;
+	for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+		sum += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y);
+	}
+	return sum / 2;
+}
+
+function polylineLength(points: IStrokePoint[]): number {
+	let total = 0;
+	for (let i = 1; i < points.length; i++) total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+	return total;
+}
+
+/**
+ * The width to actually draw `stroke` at, in page pixels.
+ *
+ * `thickness / THICKNESS_TO_PIXEL_SCALE` is the tool's *configured* width,
+ * and for the newer pens it is also the rendered one -- but for others it
+ * is badly off, so it can't be used alone. Measured against the device's
+ * own rendered outline (`IStroke.contour`) across every fixture: the
+ * needle pen and the marker land within a few percent of nominal, but the
+ * older ink pen (`pen=1`, everything from the A5X and Nomad fixtures)
+ * renders **1.5-2x wider** than nominal, which is what made `vectorInk`
+ * output look consistently too thin next to the same page's raster.
+ * Confirmed end-to-end against `a5x-2.14.28.pdf`, Supernote's own vector
+ * export of one of those pages: drawing every stroke at nominal width laid
+ * down only 40% of the ink the device does.
+ *
+ * So the contour is used when it's available, since it is a direct
+ * measurement of the real thing rather than an assumption about the
+ * thickness unit, and it needs no per-pen or per-firmware table. The
+ * width it implies is recovered from the area it encloses, treating the
+ * stroke as a rectangle of that length with a round cap at each end
+ * (`area = length * w + PI * (w/2)^2`, solved for `w`) -- without the cap
+ * term a short stroke's area, which is mostly cap, would imply an
+ * implausibly wide line.
+ *
+ * Falls back to nominal when there's no contour (a firmware whose layout
+ * `readContour` doesn't recognize) or when the contour is degenerate.
+ */
+function strokeRenderWidth(stroke: IStroke): number {
+	const nominalWidth = stroke.thickness / THICKNESS_TO_PIXEL_SCALE;
+	if (!stroke.contour || stroke.contour.length === 0) return nominalWidth;
+
+	const enclosedArea = Math.abs(stroke.contour.reduce((sum, ring) => sum + signedRingArea(ring), 0));
+	if (enclosedArea <= 0) return nominalWidth;
+
+	const length = polylineLength(stroke.points);
+	// area = length * w + PI * (w/2)^2  ->  (PI/4)w^2 + length*w - area = 0
+	const measuredWidth = (Math.sqrt(length * length + Math.PI * enclosedArea) - length) / (Math.PI / 2);
+	return measuredWidth > 0 ? measuredWidth : nominalWidth;
+}
 
 /**
  * Derives a `StrokeStyle` for one decoded stroke. For a `'path'`, this is a
  * pure, direct read of the stroke's own real `TOTALPATH` metadata -- no
  * raster involved at all (see `StrokeStyle`'s doc comment for why that
  * metadata, not raster sampling, is now the source of truth). A 2-point
- * `'rect'` is the one exception: its own `color` field isn't meaningful
- * (see `StrokeStyle`), so its color/fill still comes from `mask`, the
- * page's own rendered ink -- `sampleRect`.
+ * `'rect'` is the one exception: its own `color` field isn't meaningful (see
+ * `StrokeStyle`), so its color/fill instead comes from `titleIndex` (a
+ * Heading's real `TITLE_*` footer metadata -- see `findMatchingTitleStyle`)
+ * when it matches; only a rect with no `TITLE_*` match (a badge/highlight
+ * box, not a Heading) falls back to `mask`, the page's own rendered ink.
+ *
+ * An eraser stroke (`stroke.isEraser`, only present when the caller decoded
+ * with `includeErasers: true` -- see `parseStrokes`) always renders as a
+ * `'path'`, even with exactly 2 points: it's a real pen motion, not a filled
+ * rectangle, and a short eraser drag hitting exactly 2 sampled points would
+ * otherwise be misread as a 2-point rect record.
  */
-function deriveStrokeStyle(stroke: IStroke, mask: InkMask | null, pageWidth: number, pageHeight: number): StrokeStyle {
-	if (stroke.points.length === 2) {
-		if (!mask) return { shape: 'skip' };
+function deriveStrokeStyle(
+	stroke: IStroke,
+	mask: InkMask | null,
+	titleIndex: TitleRectEntry[],
+	pageWidth: number,
+	pageHeight: number,
+): StrokeStyle {
+	if (stroke.isFilledRect && stroke.points.length >= 2 && !stroke.isEraser) {
 		const [p0, p1] = stroke.points;
+		const titleStyle = findMatchingTitleStyle(titleIndex, p0, p1);
+		if (titleStyle) return { shape: 'rect', color: titleStyle.backgroundColor, fill: titleStyle.fill };
+
+		if (!mask) return { shape: 'skip' };
 		const { fillFraction, color } = sampleRect(mask, pageWidth, pageHeight, p0, p1);
 		if (fillFraction < MIN_RECT_FILL_FRACTION) return { shape: 'skip' };
 		return {
@@ -481,7 +770,7 @@ function deriveStrokeStyle(stroke: IStroke, mask: InkMask | null, pageWidth: num
 	return {
 		shape: 'path',
 		color: stroke.color,
-		width: stroke.thickness / THICKNESS_TO_PIXEL_SCALE,
+		width: strokeRenderWidth(stroke),
 		tier: stroke.pen === 'marker' ? 'marker' : 'pen',
 	};
 }
@@ -510,34 +799,49 @@ function isInsideRectBounds(point: IStrokePoint, bounds: { minX: number; maxX: n
  * Handled here as a narrow, targeted exception rather than by discarding
  * real per-stroke color generally: a `'path'` whose own points mostly land
  * inside a `'rect'`'s bounds (a heading background, or any other 2-point
- * rect -- see `StrokeStyle`) gets its *displayed* color resampled from
- * `mask`, the same page-own-rendered-ink source `'rect'` styles already
- * rely on, instead of trusting `IStroke.color`. Every other stroke keeps
- * its real, raster-free color untouched.
+ * rect -- see `StrokeStyle`) gets its *displayed* color overridden. When
+ * that rect is a real Heading (a `TITLE_*` match), the override is an exact
+ * read of `TITLESTYLE`'s own text-color digits (see `TitleStyle`) -- no
+ * raster involved. Only a rect with no `TITLE_*` match falls back to
+ * resampling `mask`, the page's own rendered ink, the way this used to work
+ * for every rect. Every other stroke keeps its real, raster-free color
+ * untouched -- including an eraser stroke's own already-correct white
+ * "paint over" color (see `parseStrokes`' `includeErasers` option), which
+ * this must never resample away just because it happens to sit inside a
+ * rect's bounds (e.g. erasing part of a Heading's own label text).
  */
 function applyHeadingContrastOverrides(
 	strokes: IStroke[],
 	styles: StrokeStyle[],
+	titleIndex: TitleRectEntry[],
 	mask: InkMask | null,
 	pageWidth: number,
 	pageHeight: number,
 ): StrokeStyle[] {
-	if (!mask) return styles;
-
-	const rectBoundsList = strokes
-		.map((stroke, i) => (styles[i].shape === 'rect' ? rectBounds(stroke.points[0], stroke.points[1], pageWidth, pageHeight) : null))
-		.filter((bounds) => bounds !== null);
-	if (rectBoundsList.length === 0) return styles;
+	const rectInfoList = strokes
+		.map((stroke, i) => {
+			if (styles[i].shape !== 'rect') return null;
+			const [p0, p1] = stroke.points;
+			return {
+				bounds: rectBounds(p0, p1, pageWidth, pageHeight),
+				textColor: findMatchingTitleStyle(titleIndex, p0, p1)?.textColor,
+			};
+		})
+		.filter((info) => info !== null);
+	if (rectInfoList.length === 0) return styles;
 
 	return styles.map((style, i) => {
 		if (style.shape !== 'path') return style;
 		const stroke = strokes[i];
-		const isLabelText = rectBoundsList.some((bounds) => {
-			const insideCount = stroke.points.filter((point) => isInsideRectBounds(point, bounds)).length;
+		if (stroke.isEraser) return style;
+		const matchedRect = rectInfoList.find((info) => {
+			const insideCount = stroke.points.filter((point) => isInsideRectBounds(point, info.bounds)).length;
 			return insideCount / stroke.points.length >= MIN_INSIDE_RECT_FRACTION;
 		});
-		if (!isLabelText) return style;
+		if (!matchedRect) return style;
+		if (matchedRect.textColor) return { ...style, color: matchedRect.textColor };
 
+		if (!mask) return style;
 		const colorCounts = new Map<string, number>();
 		for (const point of stroke.points) {
 			const xi = Math.round(point.x);
@@ -577,9 +881,16 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 	// parseStrokes' transform is linear in pageWidth/pageHeight, so decoding
 	// directly against the upscaled dimensions lands points in the same
 	// coordinate space toImage's upscaled raster (and so images[i].width/
-	// height below) uses, without a separate scaling pass.
+	// height below) uses, without a separate scaling pass. includeErasers
+	// keeps eraser-tool motions as ordinary white strokes, in their real
+	// TOTALPATH position relative to the ink they were dragged over --
+	// needed so a *partial* erase (see parseStrokes' doc comment) still
+	// looks erased once drawn, instead of leaving the covered ink fully
+	// visible.
 	const strokesPerPage = vectorInk
-		? pages.map((page) => parseStrokes(page.totalPathBuffer, note.pageWidth * upscale, note.pageHeight * upscale))
+		? pages.map((page) =>
+				parseStrokes(page.totalPathBuffer, note.pageWidth * upscale, note.pageHeight * upscale, { includeErasers: true }),
+			)
 		: pages.map((): IStroke[] => []);
 
 	// Each real IStroke already carries its own real color/tool/thickness
@@ -587,22 +898,78 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 	// exact question -- no coverage estimate needed. A page whose strokes
 	// don't decode (no TOTALPATH data, or a structure this hasn't been
 	// validated against) keeps its raster ink instead of replacing it with
-	// nothing. A 'rect' stroke is the one case that still needs the page's
-	// own rendered ink (see deriveStrokeStyle) -- built once per decoded page,
-	// at native resolution (matching the mask's own pixel space; rect styles
-	// don't need to be recomputed per upscale factor, only their already-
-	// upscaled points do).
+	// nothing. A 'rect' stroke is the one case that still needs a lookup
+	// beyond its own TOTALPATH record (see deriveStrokeStyle): titleIndex
+	// (that page's Heading metadata, from the note's own footer -- built
+	// once per decoded page since it's a plain-value lookup, no decoding
+	// needed) covers Headings exactly; mask (the page's own rendered ink,
+	// decoded once per page at native resolution) is only the fallback for a
+	// 2-point rect with no titleIndex match (badges/highlight boxes). Rect
+	// styles don't need to be recomputed per upscale factor, only their
+	// already-upscaled points do.
 	const strokeStylesPerPage: StrokeStyle[][] = pages.map(() => []);
 	const decodedPageNumbers = vectorInk
 		? new Set(
 				pages
 					.map((page, i) => {
-						const nativeStrokes = parseStrokes(page.totalPathBuffer, note.pageWidth, note.pageHeight);
+						// includeContours: strokeRenderWidth measures each stroke's
+						// real rendered width from its own outline. Only needed on
+						// this native-resolution pass, which is what derives styles;
+						// the upscaled decode above just needs geometry.
+						const nativeStrokes = parseStrokes(page.totalPathBuffer, note.pageWidth, note.pageHeight, {
+							includeErasers: true,
+							includeContours: true,
+						});
 						const pageNumber = pageNumbers ? pageNumbers[i] : i + 1;
 						if (nativeStrokes.length === 0) return -1;
 						const mask = buildInkMask(page, note.pageWidth, note.pageHeight);
-						const styles = nativeStrokes.map((stroke) => deriveStrokeStyle(stroke, mask, note.pageWidth, note.pageHeight));
-						strokeStylesPerPage[i] = applyHeadingContrastOverrides(nativeStrokes, styles, mask, note.pageWidth, note.pageHeight);
+						const titleIndex = buildTitleIndex(note, pageNumber);
+						// A page whose ink layers are empty has had everything on it
+						// erased, so nothing is drawn at all: not the erased
+						// strokes, and not the white eraser overlays that would
+						// otherwise paint over ink that is no longer there.
+						const styles = mask
+							? nativeStrokes.map((stroke) => deriveStrokeStyle(stroke, mask, titleIndex, note.pageWidth, note.pageHeight))
+							: nativeStrokes.map((): StrokeStyle => ({ shape: 'skip' }));
+						const displayStyles = applyHeadingContrastOverrides(
+							nativeStrokes,
+							styles,
+							titleIndex,
+							mask,
+							note.pageWidth,
+							note.pageHeight,
+						);
+						// A stroke the device no longer draws must not be drawn here
+						// either, and how confidently that can be said depends on
+						// whether an eraser was ever applied to it (`eraserTouched`).
+						// If one was, most of it disappearing means it was erased; if
+						// none was, only its *complete* absence from the render is
+						// evidence enough -- see both thresholds' doc comments.
+						//
+						// Applied last, so a Heading label's displayed
+						// (contrast-flipped) color is the one matched against the
+						// render rather than its real ink color. Limited to `'path'`
+						// styles: an eraser is a deliberate white overlay rather than
+						// ink to look for, and a `'rect'` carries no meaningful color
+						// of its own to match (see StrokeStyle) -- both already answer
+						// "is this still there?" their own way.
+						const finalStyles = displayStyles.map((style, j): StrokeStyle => {
+							const stroke = nativeStrokes[j];
+							if (!mask || style.shape !== 'path' || stroke.isEraser) return style;
+							const limit = stroke.eraserTouched ? MAX_ERASED_INK_PRESENCE : MAX_HIDDEN_INK_PRESENCE;
+							return strokeInkPresence(stroke, style.color, mask, note.pageWidth, note.pageHeight) < limit
+								? { shape: 'skip' }
+								: style;
+						});
+						// Safety net for the one way this could destroy content:
+						// vectorizing a page strips its rasterized ink, so if every
+						// stroke came back undrawable while the page demonstrably
+						// still has ink, something was decoded wrong -- keep that
+						// page's raster instead of publishing a blank one. (A page
+						// with no ink at all is the genuinely-all-erased case, which
+						// *should* come out blank -- there is nothing to lose.)
+						if (mask && finalStyles.every((style) => style.shape === 'skip')) return -1;
+						strokeStylesPerPage[i] = finalStyles;
 						return pageNumber;
 					})
 					.filter((pageNumber) => pageNumber !== -1),

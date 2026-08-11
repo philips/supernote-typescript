@@ -123,10 +123,32 @@ firmware-dependent, don't key on it.
 |---|---|
 | `"others"` | every freehand ink stroke, all pens, all fixtures (600+ strokes) — matches snlib |
 | `"0001"` | every 2-point rect record |
+| `"0000"` | a 5-point closed-rectangle record for the "link tag" feature's own indicator box (`pen=0`, like `"0001"`) — never real ink, confirmed against `nomad-3.26.40-link-tag-3p.note`: every one of its `"0000"` records' bounding box matches one of the note's own footer `LINK_*` entries' `LINKRECT` pixel-exact, and none of them appear in the page's own rendered ink. `src/strokes.ts`'s `parseStrokes` excludes these unconditionally now (they used to render as a phantom stroked-outline box in `vectorInk` output, since nothing distinguished them from ordinary ink before this field was decoded). |
+| `"straightLine"` | the ruler/straight-line tool — also **exactly two points**, being the line's endpoints (`straight-line.note`; those records read `pen=10, thickness=400`, i.e. an ordinary needle pen, and `doc_kind: "name is not set"` like a rect) |
 | `"fiveStarsSignal"` | the Stars feature's star mark (`nomad-3.15.27-blank-shapes-and-RTR.note`, drawn with the circled-star gesture; that stroke also reads `pen=5, thickness=100`) |
 
-`"straightLine"` (snlib's other documented value) has still never been
-observed — none of the fixtures used the ruler/straight-line tool.
+**`stroke_kind` is the only sound way to tell a filled rectangle from a
+two-point *line*.** Three unrelated things store exactly two points, and
+counting points cannot separate them:
+
+| `stroke_kind` | two points mean | count in fixtures |
+|---|---|---|
+| `"0001"` | opposite corners of a filled box | 10 |
+| `"straightLine"` | the two ends of a line | 8 |
+| `"others"` | an ordinary ink stroke that happens to be a dot/tap | 2 |
+
+They never overlap. Before `straight-line.note` existed, `src/svg.ts`
+treated any two-point record as a rectangle and used a raster fill-fraction
+test to reject the ones that "weren't real" — which turned each of that
+fixture's ruler lines into either a degenerate invisible box or nothing at
+all (page 1's six lines rendered as three invisible rects and zero lines).
+`IStroke.isFilledRect` now carries the record's own answer.
+
+The same correction retires an old misreading: `test.note`'s two-point
+`"others"` record was assumed to be non-ink noise sitting "over blank
+raster". The page's own render has ink at exactly that pixel and no other
+stroke passes within 12px of it, so it is a real pen tap — it was only ever
+invisible because the rect path drew it as a 0.13px box.
 
 ### Coordinate transform
 
@@ -183,12 +205,210 @@ not a decode error.
 157/201 as literal decimal digits. snlib's 158/202 values are the raster-
 quantized variants seen in some marker strokes, not the design colors.
 
-`color === 255` (`Eraser`) is filtered out of `parseStrokes`' return value
-entirely, not surfaced as an `IStroke`. This is the real explanation for
-issue #56's original "phantom stroke" report: TOTALPATH records the eraser
-tool's own physical motion just like any other pen tool, distinguishable
-only by this one reserved value — not a decode bug, and not something that
-ever needed raster cross-checking to detect.
+`color === 255` (`Eraser`) is filtered out of `parseStrokes`' return value by
+default, not surfaced as an `IStroke`. This is the real explanation for issue
+#56's original "phantom stroke" report: TOTALPATH records the eraser tool's
+own physical motion just like any other pen tool, distinguishable only by
+this one reserved value — not a decode bug, and not something that ever
+needed raster cross-checking to detect.
+
+**A *partial* (drag) erase's own visual effect is now reproduced, not just
+its phantom-stroke symptom silently fixed.** Excluding eraser strokes
+correctly stops them rendering as their own phantom ink, but on its own
+left a different, subtler bug: the real ink an eraser stroke was dragged
+over stays in TOTALPATH completely unmarked (the erase is its own later,
+separate record, not an edit to the covered ink), so simply dropping the
+eraser stroke left that now-erased ink fully, incorrectly visible —
+confirmed directly on `horizontal_1270.note` (corrected text left as a
+faint ghost underneath the correction) and `nomad-3.26.40-link-tag-3p.note`
+(a "eraser on marker"/"eraser on pen lines" test page, whose erased gaps
+didn't render at all). `parseStrokes`' `includeErasers` option keeps these
+strokes instead, as ordinary opaque white ink (`ERASER_COLOR`'s value of
+255 already *is* a valid white grey level, so no extra color logic is
+needed) — `src/svg.ts`'s `vectorInk` path draws every stroke it decodes in
+`TOTALPATH`'s own order, so a white eraser stroke drawn at its own real
+position paints back over the ink it was meant to erase, the same way the
+device itself does. Not pixel-perfect (a stroke-shaped white overlay only
+approximates a true per-pixel erase, and can leave thin slivers of the
+original ink visible at its edges), but a large, direct improvement over
+leaving the erased ink fully legible.
+
+### Erase and selection records — the 2026-08 erase-fixture investigation
+
+`erase.note`/`erase.pdf` (one page exercising every erase mechanism, with
+Supernote's own vector export as ground truth) plus
+`horizontal_1270.pdf` and `nomad-3.26.40-link-tag-3p.note` pages 2/3
+mapped out the non-ink record types and, more importantly, established
+what can and cannot be recovered from the stroke log:
+
+| Record signature | Meaning | Rendered? |
+|---|---|---|
+| `color=255, pen=3, thickness≈300–400` | eraser (drag and/or region mode; N5/A5X-era id) | never |
+| `color=255, pen=9, thickness=1400` | eraser, another mode/size — also seen on gestures that erased nothing (below) | never |
+| `color=255, pen=1, thickness 400–2200` | eraser on Nomad-era firmware (id reuses the old ink-pen id; `color=255` is the reliable discriminator, not `pen`) | never |
+| `pen=4, color=0, thickness=200` | lasso/selection *path* — the loop drawn to select content for delete, move, or Keyword/Tag creation; frequently stored as two byte-identical consecutive records | never |
+| `color=254` (any pen) | real white ink (paint-over cover-ups) | yes, as white |
+
+Findings, each confirmed against device ground truth:
+
+1. **The device omits fully-erased strokes from its own exports, but the
+   erased ink stays in `TOTALPATH` unmarked** (previously known) — and,
+   new: **which strokes are erased is not recoverable by replaying the
+   eraser records.** Three independent proofs:
+   - `erase.note`'s row-3 line extends well past every recorded eraser
+     path's geometry (the covering `pen=9` record's own points stop ~350px
+     short of the line's right end), yet the whole line is erased.
+   - `horizontal_1270.note`'s eraser #9 is a *closed loop* whose interior
+     strokes (up to ~120px from the path itself) are all erased — a
+     region-select erase — while geometrically similar records elsewhere
+     are plain drags with only the swept band erased.
+   - `nomad-3.26.40-link-tag-3p.note` page 3 has `pen=9 color=255` records
+     and `pen=4` loops sitting exactly on top of fully-visible keyword
+     text: the identical record types there were *selections* (Keyword
+     creation, lasso-move), not erases. A geometric replay model tuned to
+     perfection on the first two fixtures (union of swept-band + polygon
+     containment; 31/31 erased + 61/61 kept, zero errors) mis-erases
+     visible text on this page. Same bytes, opposite meaning — the
+     difference lives outside the replayed records.
+2. **`point_contour` is decoded — and is *not* the visibility record.**
+   The leading hypothesis was that per-stroke visibility lives in
+   `point_contour` (snlib's name), the device's own rendered-outline
+   polygons, since that is also what the newer PDF exports draw (filled
+   Bézier outlines). It is now decoded (see the section below) and the
+   hypothesis is disproved: **a fully erased stroke stores a full-area
+   outline, indistinguishable from a visible stroke's.** Measured on
+   `erase-no-white-pen.note`, whose page is blank on-device and empty in
+   Supernote's own export, yet whose five strokes all carry outlines
+   enclosing their full nominal area. `flag_draw` (the per-point byte
+   array) was decoded and ruled out the same way earlier — all-`1` even on
+   fully-erased strokes.
+
+   (What `TOTALPATH` *does* record is that an eraser was applied at all —
+   see the erase mark below. What it does not record is the resulting
+   geometry: the surviving shape exists only in the rendered `RATTA_RLE`
+   layers, which is why the device's own exporter, which recomputes from
+   them, can omit erased strokes while the stroke log cannot.)
+
+3. **The erase mark — a per-stroke record that an eraser was applied.**
+   `Section1`'s first `u32` (snlib's `unk_8`), immediately after
+   `epa_grays`, reads `0` on a stroke no eraser ever touched and a small
+   negative value otherwise. Exposed as `IStroke.eraserTouched`.
+
+   It marks *contact*, not disappearance — a touched stroke may still be
+   largely visible, because the eraser only clipped part of it — but it is
+   a sound one-way answer, and that is what makes it useful: across every
+   fixture, **all 2,181 strokes reading `0` are fully present in the page's
+   own render**. So a stroke without the mark is definitely still there,
+   and only marked strokes need the render consulted at all.
+
+   Observed values are `-4`, `-16` and `-99`. They correlate with how much
+   survived (every `-16` is completely gone, every `-4` fully intact, `-99`
+   mixed) but the encoding isn't confirmed and nothing keys on the value.
+
+   On `horizontal_1270.note` — the one page with per-stroke ground truth —
+   exactly the 21 strokes its PDF omits carry the mark, and none of the 61
+   it draws do.
+4. **What ships**: `pen=4` selection paths are excluded from
+   `parseStrokes` unconditionally (they rendered as phantom black loops;
+   never visible on-device in any fixture, whatever the selection did),
+   alongside the existing `color=255` filtering + `includeErasers` white
+   overlay.
+5. **Erase-exact output: the mark says *whether*, the raster says *how
+   much*.** `src/svg.ts`'s `vectorInk` combines the two. For a stroke
+   carrying the erase mark it measures how much survives in the page's own
+   render (`strokeInkPresence` — sample along the stroke, look for ink of
+   its *displayed* colour nearby) and drops it below `0.5`. On
+   `horizontal_1270.note` that reproduces all 82 of the page's decisions
+   exactly: erased strokes score `0.00–0.30` there, survivors `0.86–1.00`.
+
+   The mark is what allows a confident threshold. Without it the check had
+   to run against every stroke, forcing it down near zero — safe against
+   deleting live ink, but too low to catch an erased stroke sitting under
+   whatever was written in its place. That is precisely what left a second
+   `0` visible in that page's "1270": the digit was written, erased, and
+   rewritten on the same spot, so ~30% of the erased one's points still
+   found black ink underneath the replacement.
+
+   A near-zero threshold is still applied to *unmarked* strokes, because
+   they can be invisible without ever being erased: `erase.note`'s rows
+   were covered over with **white ink**, and Supernote's own export of that
+   page draws only the white. Those have to be dropped rather than
+   drawn-then-covered, because `buildStrokePathElements` sorts strokes into
+   tiers instead of keeping `TOTALPATH` order, so a white marker cover-up
+   can end up painted *under* the pen stroke it was meant to hide.
+
+   Two subtleties that both caused real regressions while implementing it:
+   the check runs *after* `applyHeadingContrastOverrides` and matches the
+   displayed color, because a Heading's label is black ink the device
+   paints white (matching its real black finds nothing and deletes every
+   heading label); and it is limited to `'path'` styles, because a
+   `'rect'` record's own color field is meaningless (§ 2-point records),
+   so colour-matching drops Heading backgrounds outright.
+
+   A page whose ink layers are empty is the same statement at page scale —
+   everything on it was erased — so nothing renders at all, including the
+   white eraser overlays, which is exactly `erase-no-white-pen.note`.
+
+   **What's still approximate.** A *partially* erased stroke is all-or-
+   nothing here: it renders whole or not at all, where the device shows the
+   surviving fragments. `turkish.note` is the clearest case — its marked
+   strokes' survival runs smoothly from `0.00` to `0.95` with no gap, so no
+   threshold can be right for all of them. Clipping each stroke to the
+   rendered ink mask, rather than deciding per stroke, is what would remove
+   the last threshold entirely.
+
+### `point_contour` — decoded: the device's own rendered outline
+
+Each stroke stores the filled region the device actually renders, as
+closed polygon rings — the same thing Supernote's newer PDF exports draw
+as filled Bézier outlines instead of fixed-width polylines. Exposed as
+`IStroke.contour` behind `parseStrokes`' `includeContours` option.
+
+Layout, picking up immediately after the fixed 208-byte `StrokeConfig`:
+
+```
+disable_area_list  u32 count + count*24
+points             u32 count + count*8      // the sampled centerline
+pressures          u32 count + count*2
+tilts              u32 count + count*4
+flag_draw          u32 count + count*1
+epa_points         u32 count + count*8
+epa_grays          u32 count + count*4
+<52 bytes>                                  // snlib's Section1; its first u32 is the erase mark (above)
+control_nums       u32 count + count*4
+<10 bytes>                                  // snlib's Section2
+point_contour      u32 ringCount
+                     per ring: u32 pointCount + pointCount*8
+                     // each point: float32 x, float32 y
+```
+
+The two fixed spans are the load-bearing part: snlib's declared field
+lists for `Section1`/`Section2` add up to different totals, so they were
+solved directly instead — 52 and 10 are the only pair that makes *every*
+record on a page parse byte-exactly, jointly across two device families
+(N5/Manta `erase-no-white-pen.note` and the older `horizontal_1270.note`).
+
+Two independent checks confirm the result is real geometry rather than a
+coincidental alignment, across 2,387 decoded strokes in 19 fixtures
+(99.2% of all strokes; the rest are 2-point rect records and similar):
+
+- **Position.** Each ring's bounding box is its own stroke's transformed
+  point extents inflated by about half the rendered width — centered, on
+  both portrait and landscape pages.
+- **Area.** The enclosed area tracks `pathLength × thickness / 100`,
+  the same width unit the `thickness` field is documented in.
+
+Contour coordinates are **float32 pairs already in final page-pixel
+space** — no `screenHeight` scaling and no x mirroring, unlike `points`.
+
+The area check also quantifies what the contour adds over stroking the
+centerline at a uniform width: round-tipped tools (needle pen, marker)
+fill ~1.0× their nominal width, but the ink pen measures ~0.65× and the
+chisel-tipped calligraphy pen only ~0.2–0.3×, because their rendered
+width narrows with pressure and tilt. Filling these rings is therefore
+the route to matching the device's own modern vector export; `vectorInk`
+still strokes the centerline at a uniform `thickness`, which can only
+draw the nominal figure.
 
 ### `thickness` field — solved: hundredths of a page pixel
 
@@ -214,6 +434,87 @@ every stroke by 1.5× relative to Supernote's own vector export: the marker
 should render 38px wide, not ~25px. The ~25px raster measurement that
 calibrated the constant likely measured the marker's soft-edged raster
 rendering too conservatively. The constant should be 100.
+
+**But `thickness` is the tool's *configured* width, not always its rendered
+one.** Measuring each stroke's own `point_contour` outline (below) against
+its nominal width, across every fixture, splits the pens in two:
+
+| Pen | Nominal vs. rendered |
+|---|---|
+| `pen=10` needle point | 0.94–1.04× — nominal is correct |
+| `pen=11` marker @3800 | 1.06× — nominal is correct |
+| **`pen=1` ink pen (older)** | **1.5–2.0×** — renders far wider than nominal |
+| `pen=11` marker @1500 | 2.02× |
+| `pen=16` ink pen (newer) | 0.77× |
+| **`pen=15` calligraphy** | **~0.35–0.45×** — chisel nib lays down far *less* ink than its width implies |
+
+`pen=1` is what every A5X and Nomad fixture writes with, so drawing at
+nominal width made `vectorInk` output visibly thinner than the same page's
+raster. Confirmed end-to-end against `a5x-2.14.28.pdf` (Supernote's own
+export of one of those pages, and a rare 1:1 case — 146 filled outlines for
+exactly 146 decoded strokes): drawing at nominal laid down **40%** of the
+ink the device does; measuring each stroke's own outline instead brings
+that to **84%**.
+
+So `src/svg.ts`'s `strokeRenderWidth` derives width from the contour when
+it's available (falling back to nominal otherwise), which needs no per-pen
+or per-firmware table. It recovers the width from the enclosed area by
+treating the stroke as a rectangle with a round cap at each end
+(`area = length·w + π(w/2)²`, solved for `w`) — without the cap term, a
+short stroke's area is mostly cap and implies an implausibly wide line.
+The ring areas must be summed **signed**, so that a closed letter's inner
+hole subtracts: counting it as more ink made every `e`/`o`/`a` measure up
+to 3× too wide.
+
+Both directions of the error are now covered by a dedicated fixture, and
+the correction is large either way:
+
+| Fixture (device PDF as truth) | ink drawn at nominal | measured from contour |
+|---|---|---|
+| `a5x-2.14.28` (ink pen, `pen=1`) | 0.40× | 0.84× |
+| `caligraphy` p1–p3 (`pen=15`) | 1.82–1.97× | 0.67–0.81× |
+| `caligraphy` p4 (mostly erased) | — | 0.84× |
+
+**Calibrated exactly against widths the device states as numbers.**
+Supernote's exporter uses *two* styles, sometimes within one file: filled
+outlines (`f`) for some strokes, and stroked polylines carrying an explicit
+`w` for others. The second kind is far better ground truth, because the
+width is a number the device wrote down rather than a shape to measure —
+and `stroke-isolation.pdf`'s page 4 is exactly that, one needle-pen stroke
+per width setting:
+
+| setting | `thickness` | device `w` | `strokeRenderWidth` |
+|---|---|---|---|
+| 1.0 | 1200 | 12 | 12.01 |
+| 0.6 | 700 | 7 | 7.02 |
+| 0.3 | 400 | 4 | 4.05 |
+| 0.1 | 200 | 2 | 1.99 |
+
+All four within 1%, derived from each stroke's contour without consulting
+the pen id or the thickness setting. That is what makes the measurement
+trustworthy in absolute terms rather than merely self-consistent.
+
+The same file separates the tools cleanly, each page isolating one variable
+(note page 3 is `pen=16`, the newer ink pen, *not* the needle pen):
+
+| Pen | contour ÷ nominal |
+|---|---|
+| `pen=10` needle | 1.00 — nominal is exact |
+| `pen=11` marker | ~1.01 |
+| `pen=16` ink pen (newer) | ~0.82 |
+| `pen=1` ink pen (older) | ~1.95 |
+| `pen=15` calligraphy | ~0.17 |
+
+**Residual, and why nothing is done about it.** Against the *filled-outline*
+exports our ink lands ~15–35% under. But those outlines are the exporter's
+own drawing of the shape, and page 4 shows that where the device states a
+width numerically we match it to 1% — so the gap is in that comparison, not
+in the width. `point_contour`'s own enclosed area sits at the same
+0.67–0.88× of those outlines, so filling the contour would not close it
+either; whatever the exporter does to widen them (feathering, a dilation
+step, a stroke alongside the fill) is not in the stroke record. No
+correction factor is applied, and page 4 is why: adding one would break the
+case that is currently exact.
 
 ### 2-point records — a distinct sub-type, not a style choice
 
@@ -592,16 +893,29 @@ pass; the findings are folded into the sections above. In brief:
 
 ## Remaining open questions
 
-1. **Act on the thickness fix**: `THICKNESS_TO_PIXEL_SCALE` should be 100,
-   not 150 (see the thickness section) — this is a code change plus
-   re-checking the SVG output against `headings-and-marker.pdf`.
-2. **Replace the two remaining raster dependencies in `src/svg.ts`**
-   (`sampleRect`, `applyHeadingContrastOverrides`) with `TITLE_` metadata
-   lookups (Part 1.5).
+1. ~~Act on the thickness fix~~ — done: `THICKNESS_TO_PIXEL_SCALE` is now
+   100, not 150. Confirmed exact (not just closer) against
+   `headings-and-marker.pdf`: every one of page 1's 32 needle-pen subpaths
+   draws with a literal `4 w`, and `400 / 100 = 4` matches precisely.
+2. ~~Replace the two remaining raster dependencies in `src/svg.ts`~~ —
+   done: `deriveStrokeStyle`/`applyHeadingContrastOverrides` now look up a
+   `'rect'` stroke's `TITLE_*` footer entry first (`findMatchingTitleStyle`,
+   matched by position against `buildTitleIndex`), and fall back to
+   `sampleRect`/raster sampling only when a 2-point rect has no match (a
+   badge/highlight box, not a Heading — those still have no known metadata
+   source). Confirmed exact against `headings-and-marker.pdf`'s own fill
+   colors (`0/157/201`, not the raster's quantized `0/128/169`) and the
+   label-text contrast colors. This also surfaced and fixed a real bug along
+   the way: `_parseFooter` (`src/parsing.ts`) dropped journaled/append-only
+   `TITLE_*` keys entirely (unlike `KEYWORD_`/`LINKO_`, which already had a
+   workaround) — a re-saved/edited Heading could have silently lost its
+   `TITLE_*` metadata before this was fixed.
 3. **`pen=5`'s meaning** — used by the star mark and by some ordinary
    strokes in `test.note`; not yet isolated to a tool.
-4. **`"straightLine"`** — still never observed; needs a fixture drawn with
-   the ruler/straight-line tool. This Supernote feature is described [on the blog](https://supernote.com/blogs/supernote-blog/introducing-the-smart-straight-line-feature-and-smoother-handwriting-strokes).
+4. ~~`"straightLine"`~~ — observed, via `straight-line.note`. It turned out
+   to matter rather than being a loose end: those records store two points,
+   which `vectorInk` was reading as a filled rectangle, so every ruler line
+   rendered as an invisible box or not at all. See the `stroke_kind` table.
 5. **`ink.bink` element-table `B` field** and the `03`-tagged u32s in
    `page.bdom` — the last uncharacterized values in otherwise-decoded
    structures. Nothing depends on them.
@@ -610,6 +924,28 @@ pass; the findings are folded into the sections above. In brief:
    digit reading is confirmed only for these four values on two greyscale
    devices. (`test.note` shows non-greyscale stroke colors 48/81 exist in
    the wild, so a color-device fixture would also extend the Color table.)
+7. ~~Decode `point_contour`~~ — done, see its section above: it is the
+   device's real rendered outline (with true pressure-varying width), but
+   it is **not** a record of what survived erasing, which was the reason
+   it was prioritized (that is now handled from the raster instead — see
+   the erase-records section). It is now used for stroke width instead
+   (`strokeRenderWidth`, see the thickness section), which is what the
+   decode turned out to be worth. One follow-on remains:
+   - **Fill the contour** rather than stroking the centerline at the single
+     width derived from it. This buys *shape* fidelity, not area: a uniform
+     width can't express the variation along a stroke, and can't represent
+     a chisel-tipped calligraphy pen at all (its area-correct width is
+     right on average but thin wherever the nib is broad, and thick
+     wherever it's edge-on). It would **not** close the residual area gap
+     documented in the thickness section — the contour's own area is the
+     same ~0.67–0.88× of the device's. The main work is that contour
+     coordinates are absolute page pixels, so they need explicit scaling
+     under `toSvg`'s `upscale` option, unlike points.
+8. **The remaining stroke-record tail** — `unk_17`, `unk_22`, and the
+   `Section3`/`Section4` spans after `point_contour` are still
+   uncharacterized (their combined size also varies by 4 bytes between
+   firmware generations, which is why the contour decode deliberately
+   parses forward only and never depends on them). Nothing needs them.
 
 ## References
 

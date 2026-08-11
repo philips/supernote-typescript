@@ -63,6 +63,70 @@ function extractPdfColors(stream: Buffer): [number, number, number][] {
   return [...colors.values()]
 }
 
+/** Total ink area a PDF content stream fills, in page pixels squared.
+ * Flattens each `c` curve into line segments and sums the subpaths of every
+ * `f` group with *signed* shoelace areas, so a filled letter's inner hole
+ * subtracts instead of adding (see signedRingArea in src/svg.ts). Lets a
+ * page's rendered ink be compared as one number against what vectorInk
+ * draws, for the newer "filled outline" export style that has no `w` widths
+ * to read off directly. */
+function pdfFilledArea(stream: Buffer): number {
+  type P = { x: number; y: number }
+  const signedArea = (ring: P[]) => {
+    let sum = 0
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) sum += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y)
+    return sum / 2
+  }
+  let total = 0
+  let rings: P[][] = []
+  let cur: P[] = []
+  let pen: P = { x: 0, y: 0 }
+  const nums: number[] = []
+  for (const token of stream.toString("latin1").split(/\s+/)) {
+    const value = Number(token)
+    if (token !== "" && Number.isFinite(value)) { nums.push(value); continue }
+    if (token === "m" || token === "l") {
+      if (token === "m" && cur.length > 2) rings.push(cur)
+      pen = { x: nums[nums.length - 2], y: nums[nums.length - 1] }
+      if (token === "m") cur = [pen]
+      else cur.push(pen)
+    } else if (token === "c") {
+      const [x1, y1, x2, y2, x3, y3] = nums.slice(-6)
+      const from = pen
+      for (let step = 1; step <= 12; step++) {
+        const u = step / 12, v = 1 - u
+        cur.push({
+          x: v * v * v * from.x + 3 * v * v * u * x1 + 3 * v * u * u * x2 + u * u * u * x3,
+          y: v * v * v * from.y + 3 * v * v * u * y1 + 3 * v * u * u * y2 + u * u * u * y3,
+        })
+      }
+      pen = { x: x3, y: y3 }
+    } else if (token === "f" || token === "f*") {
+      if (cur.length > 2) rings.push(cur)
+      if (rings.length) total += Math.abs(rings.reduce((sum, ring) => sum + signedArea(ring), 0))
+      rings = []
+      cur = []
+    }
+    nums.length = 0
+  }
+  return total
+}
+
+/** Ink area a vectorInk SVG actually draws: each stroked path's length times
+ * its width. Eraser overlays (pure white) are excluded -- they're a
+ * paint-over, not ink. */
+function svgInkArea(svg: string): number {
+  let total = 0
+  for (const [, d, color, width] of svg.matchAll(/<path d="([^"]+)" fill="none" stroke="([^"]+)" stroke-width="([\d.]+)"/g)) {
+    if (color === "rgb(255,255,255)") continue
+    const points = [...d.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }))
+    let length = 0
+    for (let i = 1; i < points.length; i++) length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
+    total += length * Number(width)
+  }
+  return total
+}
+
 describe("svg", () => {
   test("generates a searchable SVG with an RTR text overlay", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
@@ -397,16 +461,21 @@ describe("svg", () => {
 
     test("a 2-point stroke over real ink renders as a filled rect, not a phantom diagonal line (issue #56 follow-up)", { timeout: 30000 }, async () => {
       // nomad-3.15.27-blank-shapes-and-RTR.note has four small colored
-      // "badges" near the bottom of the page (highlighted digits 1-4), each
-      // with a colored background (three solid, one cross-hatch). TOTALPATH
+      // boxes near the bottom of the page (highlighted digits 1-4), each
+      // with a colored background (three solid, one cross-hatch). These
+      // read as "badges" at a glance, but are actually Headings: each one
+      // has its own real TITLE_* footer entry (TITLERECT matches this
+      // fixture's own 2-point rect strokes pixel-for-pixel, TITLESTYLE
+      // decodes its real background/text colors -- see the vector-format
+      // spec's "TITLE_ / KEYWORD_ footer metadata" section). TOTALPATH
       // decodes each background as a stroke with exactly *2* points -- not
       // a real 2-sample pen line (real strokes, even short ones, sample far
       // more points than that), but that record shape's actual meaning: the
       // two opposite corners of a filled rectangle. Confirmed by measuring
       // how much of each 2-point stroke's own bounding rectangle is already
-      // real ink in the page's raster: ~97% for the three solid badges,
-      // ~25% for the cross-hatch one, nothing like a thin diagonal line
-      // would leave behind.
+      // real ink in the page's raster: ~97% for the three solid ones, ~25%
+      // for the cross-hatch one, nothing like a thin diagonal line would
+      // leave behind.
       const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
 
@@ -427,11 +496,14 @@ describe("svg", () => {
     test("a cross-hatch rect background renders as an actual hatch pattern, not a solid block (issue #56 follow-up)", { timeout: 30000 }, async () => {
       // headings-and-marker.note's page 2 (1-indexed) has four "Heading"
       // boxes with backgrounds black, dark grey, light grey, and
-      // cross-hatch, in that order -- ground truth confirmed by measuring
-      // each 2-point rect's own fill fraction against the raster: ~99% for
-      // the three solid ones, ~26% for the hatch one. Collapsing the hatch
-      // one to a solid fill (its previous behavior) hid anything drawn on
-      // top of it, since its own label happens to share the hatch's color.
+      // cross-hatch, in that order. Fill/color now comes from each
+      // Heading's own TITLE_* footer metadata (TITLESTYLE), not raster
+      // sampling -- so the colors are the exact 0/157/201 design palette,
+      // not the e-ink raster's quantized 0/128/169 (see the vector-format
+      // spec's "TITLE_ / KEYWORD_ footer metadata" section). Collapsing the
+      // hatch one to a solid fill (its previous behavior) hid anything
+      // drawn on top of it, since its own label happens to share the
+      // hatch's color.
       const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
 
@@ -440,8 +512,8 @@ describe("svg", () => {
       )
       expect(rects.length).toBe(4)
       expect(rects[0]).toBe("rgb(0,0,0)")
-      expect(rects[1]).toBe("rgb(128,128,128)")
-      expect(rects[2]).toBe("rgb(169,169,169)")
+      expect(rects[1]).toBe("rgb(157,157,157)")
+      expect(rects[2]).toBe("rgb(201,201,201)")
       expect(rects[3]).toMatch(/^url\(#hatch-[\w-]+\)$/)
 
       // the referenced pattern must actually be defined, and be visibly
@@ -453,30 +525,281 @@ describe("svg", () => {
       expect(svg).toContain(`fill="white"`)
     })
 
-    test("a 2-point stroke over no real ink is skipped, not drawn as a phantom line (issue #56 follow-up)", { timeout: 30000 }, async () => {
-      // test.note has a 2-point-stroke decode that, unlike the rect badges
-      // above, sits over completely blank raster (0% fill fraction) -- some
-      // other, non-ink data that happens to satisfy the same record
-      // checksum, not a real rectangle or a real stroke. It must not render
-      // as either a filled rect or a stroked line.
+    test("a heading's label text is recolored for contrast, exact from its own TITLE_* footer metadata (issue #60)", { timeout: 30000 }, async () => {
+      // Same four headings-and-marker.note page 2 headings as above (black,
+      // dark grey, light grey, cross-hatch backgrounds). Supernote
+      // auto-recolors each heading's label text for contrast against its
+      // own background -- applyHeadingContrastOverrides now reads that
+      // displayed color as the exact last-3-digits of the heading's own
+      // TITLESTYLE (see findMatchingTitleStyle) instead of resampling the
+      // raster: white text on the two dark backgrounds, black text on the
+      // two light/hatch ones -- matching
+      // https://support.supernote.com/1759244-using-titles-keywords-and-stars's
+      // own described behavior.
+      const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
+      const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
+
+      const rects = [...svg.matchAll(/<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)" fill="[^"]+"\/>/g)]
+      const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="([^"]+)"/g)]
+      expect(rects.length).toBe(4)
+
+      const expectedTextColors = ["rgb(254,254,254)", "rgb(254,254,254)", "rgb(0,0,0)", "rgb(0,0,0)"]
+      rects.forEach(([, xStr, yStr, wStr, hStr], i) => {
+        const left = Number(xStr), top = Number(yStr)
+        const right = left + Number(wStr), bottom = top + Number(hStr)
+        const textColors = new Set(
+          paths
+            .filter(([, xStr2, yStr2]) => {
+              const x = Number(xStr2), y = Number(yStr2)
+              return x >= left && x <= right && y >= top && y <= bottom
+            })
+            .map(([, , , color]) => color),
+        )
+        expect([...textColors]).toEqual([expectedTextColors[i]])
+      })
+    })
+
+    test("having two points doesn't make a record a rectangle -- only its stroke_kind does", { timeout: 30000 }, async () => {
+      // Three different things store exactly two points, and TOTALPATH says
+      // which is which in each record's own stroke_kind (IStroke.isFilledRect):
+      //   "0001"         a Heading/badge background -- opposite corners
+      //   "straightLine" the ruler tool -- the ends of a line
+      //   "others"       an ordinary ink stroke that happens to be a dot
+      // Counting points instead drew straight-line.note's lines as filled
+      // boxes or dropped them outright.
+      //
+      // test.note's page 1 holds the third kind: a single pen tap, 0.13px
+      // end to end. It was long assumed to be non-ink noise "over blank
+      // raster", but the page's own render has ink at exactly that pixel
+      // and no other stroke comes within 12px of it, so it is a real (if
+      // tiny) mark and belongs in the output -- as a path, not a rect.
       const sn = new SupernoteX(await readFileToUint8Array("test.note"))
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
-      const noiseStroke = strokes.find((s) => s.points.length === 2)
-      expect(noiseStroke).toBeDefined()
+      const twoPointStrokes = strokes.filter((s) => s.points.length === 2)
+      expect(twoPointStrokes.length).toBeGreaterThanOrEqual(2)
+      // one is a real rect, the other is the pen tap -- same point count,
+      // opposite meanings
+      expect(twoPointStrokes.filter((s) => s.isFilledRect).length).toBe(1)
+      expect(twoPointStrokes.filter((s) => !s.isFilledRect).length).toBe(1)
+
+      const tap = twoPointStrokes.find((s) => !s.isFilledRect)!
+      expect(Math.hypot(tap.points[1].x - tap.points[0].x, tap.points[1].y - tap.points[0].y)).toBeLessThan(1)
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
-      const [p0, p1] = noiseStroke!.points
-      const needle = `${p0.x.toFixed(2)},${p0.y.toFixed(2)}`
-      const needle2 = `${p1.x.toFixed(2)},${p1.y.toFixed(2)}`
-      expect(svg).not.toContain(needle)
-      expect(svg).not.toContain(needle2)
+      expect(svg).toContain(`M${tap.points[0].x.toFixed(2)},${tap.points[0].y.toFixed(2)}`)
+    })
+
+    test("white-pen erasing renders by painting the white ink over the dark, in that order (erase-pen.note)", { timeout: 60000 }, async () => {
+      // Erasing with a white pen isn't erasing at all -- both strokes are
+      // real ink and the white simply covers the dark, so the page renders
+      // correctly by drawing them in order rather than by working out what
+      // survived. Supernote's own export does exactly this: pages 1-3 of
+      // erase-pen.pdf set fill colour black then white, in that sequence.
+      // (Page 4 is the control, one dark stroke and no white; its PDF form
+      // sets no colour at all because black is PDF's default.)
+      //
+      // So the thing worth pinning down is the ordering, which is not free:
+      // buildStrokePathElements sorts strokes into tiers rather than
+      // keeping TOTALPATH order, and a cover-up drawn in a different tier
+      // from the ink it covers ends up painted underneath it.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/erase-pen.pdf"))
+      const deviceOrder = (stream: Buffer) =>
+        [...stream.toString("latin1").matchAll(/([\d.]+) [\d.]+ [\d.]+ rg/g)].map((m) => Math.round(Number(m[1]) * 255))
+      expect(deviceOrder(pdfStreams[0])).toEqual([0, 255])
+
+      const sn = new SupernoteX(await readFileToUint8Array("erase-pen.note"))
+      const svgs = await toSvg(sn, { vectorInk: true })
+
+      for (const pageIndex of [0, 1, 2]) {
+        const drawn = [...svgs[pageIndex].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1])
+        expect(drawn.length).toBe(2)
+        // the dark stroke first (plain black, or the marker's own near-black)
+        expect(drawn[0]).toMatch(/^rgb\([01],[01],[01]\)$/)
+        // then the white cover-up over the top of it
+        expect(drawn[1]).toBe("rgb(254,254,254)")
+      }
+
+      // the control page keeps its single stroke and gains no white
+      const control = [...svgs[3].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1])
+      expect(control).toEqual(["rgb(0,0,0)"])
+    })
+
+    test("the ruler tool's straight lines render as lines, not as filled boxes (straight-line.note)", { timeout: 30000 }, async () => {
+      // straight-line.note is the only fixture using the ruler/straight-line
+      // tool, and the only one producing stroke_kind "straightLine". Each of
+      // those records stores just the two endpoints, which the old
+      // "two points means a rectangle" rule turned into either a degenerate
+      // filled box or nothing at all -- page 1's six lines rendered as three
+      // invisible rects and no lines whatsoever.
+      const sn = new SupernoteX(await readFileToUint8Array("straight-line.note"))
+      const page1 = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(page1.length).toBe(6)
+      expect(page1.every((s) => s.points.length === 2)).toBe(true)
+      expect(page1.some((s) => s.isFilledRect)).toBe(false)
+
+      const svgs = await toSvg(sn, { vectorInk: true })
+      expect([...svgs[0].matchAll(/<path /g)].length).toBe(6)
+      expect(svgs[0]).not.toContain("<rect ")
+      // each line is drawn between its own two endpoints
+      for (const stroke of page1) {
+        const [a, b] = stroke.points
+        expect(svgs[0]).toContain(`M${a.x.toFixed(2)},${a.y.toFixed(2)} L${b.x.toFixed(2)},${b.y.toFixed(2)}`)
+      }
+    })
+
+    test("a partial (drag) erase paints over the erased ink with white, instead of leaving it fully visible (issue #56 follow-up)", { timeout: 30000 }, async () => {
+      // horizontal_1270.note's page 1 is the original issue #56 fixture:
+      // real content ("writing" corrected to "note") was partially erased,
+      // which -- unlike a whole-stroke select-and-delete -- leaves the
+      // erased ink's own strokes in TOTALPATH completely unmarked, plus a
+      // separate real eraser-tool stroke (TOTALPATH color 255) tracing
+      // where it was dragged. Drawing that eraser stroke as ordinary white
+      // ink, at its own real position in TOTALPATH's order (parseStrokes'
+      // includeErasers option), paints back over the covered ink -- so the
+      // erased word must no longer decode as a normal-width black stroke at
+      // its original, now-covered position.
+      const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"))
+      const inkOnly = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      const withErasers = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
+      const erasers = withErasers.filter((s) => s.isEraser)
+      expect(erasers.length).toBeGreaterThan(0)
+      // sanity: parseStrokes' own default (ink-only) output for this page
+      // is unaffected by vectorInk's internal includeErasers use.
+      expect(inkOnly.some((s) => s.isEraser)).toBe(false)
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      // every decoded eraser stroke must be drawn, as plain white ink, at
+      // its own real (unmodified) coordinates -- not skipped the way a
+      // whole-stroke-delete or a 2-point noise record would be.
+      for (const eraser of erasers) {
+        const needle = `M${eraser.points[0].x.toFixed(2)},${eraser.points[0].y.toFixed(2)}`
+        expect(svg).toContain(needle)
+      }
+      expect(svg).toContain('stroke="rgb(255,255,255)"')
+    })
+
+    test("a link-tag indicator box never renders as ink, matching the raster (nomad-3.26.40-link-tag-3p.note)", { timeout: 30000 }, async () => {
+      // Page 2 (1-indexed) has three "link tag" boxes -- confirmed via the
+      // note's own LINK_* footer metadata (see strokes.test.ts) to be a
+      // non-ink UI affordance TOTALPATH still records geometry for. Unlike
+      // the Heading/badge 2-point rects, these must not render at all: no
+      // filled rect (they're not TITLE_*-backed) and no stroked outline
+      // (unlike an ordinary hand-drawn box, which would fall through to a
+      // plain 'path'). Matched by bounding box, not a specific point, since
+      // a 5-point box's own first vertex isn't necessarily its top-left
+      // corner.
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+      const linkRects = Object.values(sn.links)
+        .flat()
+        .map((link) => link.LINKRECT.split(",").map(Number))
+      expect(linkRects.length).toBeGreaterThan(0)
+
+      const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
+      const elementBounds: { minX: number; minY: number; maxX: number; maxY: number }[] = []
+      for (const [, xStr, yStr, wStr, hStr] of svg.matchAll(/<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"/g)) {
+        const x = Number(xStr), y = Number(yStr)
+        elementBounds.push({ minX: x, minY: y, maxX: x + Number(wStr), maxY: y + Number(hStr) })
+      }
+      for (const [, d] of svg.matchAll(/<path d="([^"]+)"/g)) {
+        const coords = [...d.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map(([, x, y]) => [Number(x), Number(y)])
+        const xs = coords.map(([x]) => x), ys = coords.map(([, y]) => y)
+        elementBounds.push({ minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) })
+      }
+
+      for (const [x, y, width, height] of linkRects) {
+        const matchesLinkRect = elementBounds.some(
+          (b) =>
+            Math.abs(b.minX - x) <= 2 &&
+            Math.abs(b.minY - y) <= 2 &&
+            Math.abs(b.maxX - x - width) <= 2 &&
+            Math.abs(b.maxY - y - height) <= 2,
+        )
+        expect(matchesLinkRect).toBe(false)
+      }
+    })
+
+    test("a lasso selection path never renders as a phantom loop (erase.note, pen=4)", { timeout: 30000 }, async () => {
+      // erase.note's final row was lasso-selected and deleted; the
+      // selection loop survives in TOTALPATH as two identical pen=4
+      // records that used to render as a big phantom black loop (and, on
+      // nomad-3.26.40-link-tag-3p.note page 3, as phantom circles around
+      // keyword text whose selection deleted nothing). Neither the device
+      // raster nor erase.pdf (Supernote's own vector export of this page)
+      // draws it. See LASSO_PEN_ID in src/strokes.ts.
+      const sn = new SupernoteX(await readFileToUint8Array("erase.note"))
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+
+      // the loop's own first point (read straight from the raw pen=4
+      // record) must not start any rendered path
+      expect(svg).not.toContain("M462.25,2051.01")
+
+      // Of this page's 18 decodable strokes, every one of the 10 dark ink
+      // strokes was erased, and erase.pdf accordingly draws only the 4
+      // white-ink cover-up strokes. So nothing dark may render: what's left
+      // is those 4 white strokes plus the 4 white eraser overlays, all of
+      // which are white-on-white and so visually blank, matching the PDF.
+      const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="([^"]+)"/g)]
+      expect(paths.length).toBe(8)
+      const whiteCount = paths.filter(([, , , color]) => color === "rgb(255,255,255)" || color === "rgb(254,254,254)").length
+      expect(whiteCount).toBe(8)
+    })
+
+    test("an all-erased page renders completely blank, like the device's own export (erase-no-white-pen.note)", { timeout: 30000 }, async () => {
+      // erase-no-white-pen.note is one page of 4 lines in 4 different pens,
+      // every one erased -- by the drag eraser, the lasso eraser, and
+      // select-and-delete -- with no white-ink cover-ups involved. The
+      // device renders it blank and erase-no-white-pen.pdf (Supernote's own
+      // vector export) draws nothing at all.
+      //
+      // Nothing in TOTALPATH marks those strokes as erased (see
+      // strokeInkPresence), so vectorInk used to draw all five in full plus
+      // white eraser scribbles over them. The page's ink layers are empty,
+      // which is the raster saying everything on it is gone.
+      const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"))
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
+      expect(strokes.length).toBe(8) // 5 ink + 3 erasers still decode...
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      expect(svg).not.toContain("<path ") // ...but none of them render
+      expect(svg).not.toContain("<rect ")
+    })
+
+    test("erased strokes are dropped, and surviving ones kept, matching the device's own PDF export (horizontal_1270)", { timeout: 30000 }, async () => {
+      // horizontal_1270.pdf draws exactly 61 of this page's 82 decodable
+      // ink strokes -- the other 21 were erased (the "writing"/"note"
+      // correction). This page is the tightest ground truth available: it
+      // names per stroke what survived, and all 82 decisions come out right.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/horizontal_1270.pdf"))
+      const drawnByDevice = (pdfStreams[0].toString("latin1").match(/(?:^|\s)S(?:\s|$)/g) ?? []).length
+      expect(drawnByDevice).toBe(61)
+
+      const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"))
+      const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
+      expect(decoded.filter((s) => !s.isEraser).length).toBe(82) // every stroke still decodes...
+      // ...and exactly the 21 the device erased carry the erase mark
+      expect(decoded.filter((s) => s.eraserTouched && !s.isEraser).length).toBe(82 - drawnByDevice)
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const paths = [...svg.matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)]
+      const inkPaths = paths.filter(([, color]) => color !== "rgb(255,255,255)")
+      expect(inkPaths.length).toBe(drawnByDevice)
+
+      // The specific stroke this pins down: the "0" of "1270" was written,
+      // erased, and rewritten in place. Because the replacement sits on top
+      // of it, the erased one still finds ~30% of its own points over black
+      // ink, so a presence check alone kept it and the page rendered "12700"
+      // with a doubled zero. It is the erase mark that settles it.
+      expect(svg).not.toContain("M1308")
+      expect(svg).not.toContain("M1309")
     })
 
     test("rects (highlight backgrounds) always draw before paths, regardless of TOTALPATH order", { timeout: 30000 }, async () => {
-      // On the same badges fixture, each badge's background rect record
-      // sits *after* its digit's ink stroke in TOTALPATH's own buffer
-      // order -- drawing strictly in that order (SVG paints later elements
-      // on top) would paint the background over the digit and hide it.
+      // On the same fixture (each highlighted digit is actually a Heading,
+      // per findMatchingTitleStyle above), each digit's Heading background
+      // rect record sits *after* its digit's ink stroke in TOTALPATH's own
+      // buffer order -- drawing strictly in that order (SVG paints later
+      // elements on top) would paint the background over the digit and hide
+      // it.
       const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
 
@@ -488,12 +811,12 @@ describe("svg", () => {
     })
 
     test("a stroke drawn over a different-colored background measures its own width, not the background's (issue #56 follow-up)", { timeout: 30000 }, async () => {
-      // Each digit badge's foreground digit stroke sits on top of its own
-      // solid-colored background rect (see the two tests above). Walking
-      // outward to measure width used to stop only at *any* non-ink pixel,
-      // so a thin digit surrounded by its own badge's opaque background
-      // color never found an edge until MAX_HALF_WIDTH -- measuring as wide
-      // as the badge itself instead of the actual thin digit stroke.
+      // Each digit's foreground stroke sits on top of its own solid-colored
+      // Heading background rect (see the two tests above). Walking outward
+      // to measure width used to stop only at *any* non-ink pixel, so a
+      // thin digit surrounded by its own Heading's opaque background color
+      // never found an edge until MAX_HALF_WIDTH -- measuring as wide as
+      // the background itself instead of the actual thin digit stroke.
       // Requiring the walk to match the stroke's own sampled color fixes
       // this: none of these digit strokes should measure anywhere near
       // MAX_HALF_WIDTH's ceiling.
@@ -504,9 +827,9 @@ describe("svg", () => {
       const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)]
       expect(rects.length).toBeGreaterThan(0)
 
-      // any path whose first point falls inside a badge rect is a digit
-      // stroke drawn over that badge -- none should be anywhere near as
-      // wide as the badge itself.
+      // any path whose first point falls inside a Heading rect is a digit
+      // stroke drawn over that Heading's background -- none should be
+      // anywhere near as wide as the background itself.
       const digitWidths = paths
         .filter(([, xStr, yStr]) => {
           const x = Number(xStr), y = Number(yStr)
@@ -665,6 +988,194 @@ describe("svg", () => {
       expect(strokes.length).toBe(subpathCount)
     })
 
+    test("stroke width matches Supernote's own PDF export (headings-and-marker.pdf's literal `4 w`)", { timeout: 30000 }, async () => {
+      // Same page 1 as the previous test: every one of its 32 subpaths is a
+      // needle-point-pen stroke at the same width setting, and the PDF's own
+      // content stream draws every one of them with a literal `4 w` (4
+      // page-pixel line width -- headings-and-marker.pdf's MediaBox is the
+      // page's own pixel space, see plans/vector-format-spec.md's "thickness
+      // field" section).
+      //
+      // Widths are measured per stroke from its own rendered outline
+      // (strokeRenderWidth) rather than taken from the nominal thickness
+      // setting, so they cluster around 4 rather than all sitting exactly
+      // on it -- real strokes narrow with pressure, and this export style
+      // draws every stroke at one `w` precisely because it *can't* express
+      // that. So the median is what's comparable to the PDF's figure; the
+      // spread below it is real ink, not error.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/headings-and-marker.pdf"))
+      const page1Stream = pdfStreams[0].toString("latin1")
+      const pdfWidths = [...new Set([...page1Stream.matchAll(/([\d.]+) w\b/g)].map((m) => Number(m[1])))]
+      expect(pdfWidths).toEqual([4])
+
+      const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const widths = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)]
+        .map((m) => Number(m[1]))
+        .sort((a, b) => a - b)
+      expect(widths.length).toBe(32)
+
+      const median = widths[Math.floor(widths.length / 2)]
+      expect(median).toBeGreaterThan(pdfWidths[0] * 0.85)
+      expect(median).toBeLessThan(pdfWidths[0] * 1.15)
+      // and no individual stroke is wildly off -- in particular none is
+      // double, which is what summing a letter's inner hole as if it were
+      // more ink used to do to every `e`/`o`/`a` (see signedRingArea).
+      expect(widths[0]).toBeGreaterThan(pdfWidths[0] * 0.5)
+      expect(widths[widths.length - 1]).toBeLessThan(pdfWidths[0] * 1.5)
+    })
+
+    test("measured stroke widths match the widths the device states outright, across its whole width range (stroke-isolation.pdf p4)", { timeout: 30000 }, async () => {
+      // The strongest width ground truth available. stroke-isolation.note's
+      // page 4 is one needle-pen stroke per width setting (1.0, 0.6, 0.3,
+      // 0.1), and Supernote's own export writes that page as stroked
+      // polylines carrying explicit `w` operators -- so the device states
+      // each width as a number rather than drawing an outline to measure.
+      //
+      // strokeRenderWidth derives its widths from each stroke's own contour
+      // without consulting the pen or the thickness setting, and lands on
+      // all four to within 1%. That is what says the measurement is right
+      // in absolute terms, not merely self-consistent -- and it is why no
+      // correction factor is applied to it: the ~16% by which our widths
+      // sit under the device's *filled outline* exports (see the residual
+      // note in plans/vector-format-spec.md) is a property of those
+      // outlines, not of the width.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/stroke-isolation.pdf"))
+      const deviceWidths = [...pdfStreams[3].toString("latin1").matchAll(/([\d.]+) w\b/g)].map((m) => Number(m[1]))
+      expect(deviceWidths).toEqual([12, 7, 4, 2])
+
+      const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"))
+      const [, , , page4] = await toSvg(sn, { vectorInk: true })
+      const ourWidths = [...page4.matchAll(/stroke-width="([\d.]+)"/g)].map((m) => Number(m[1]))
+      expect(ourWidths.length).toBe(deviceWidths.length)
+      ourWidths.forEach((width, i) => {
+        expect(Math.abs(width - deviceWidths[i]) / deviceWidths[i]).toBeLessThan(0.03)
+      })
+    })
+
+    test("an older ink pen is drawn at its real rendered width, not its much thinner nominal one (a5x-2.14.28.pdf)", { timeout: 30000 }, async () => {
+      // a5x-2.14.28.note's page is 146 strokes of the older ink pen
+      // (pen=1, thickness=200 -> 2px nominal), and a5x-2.14.28.pdf is
+      // Supernote's own vector export of it: 146 filled outlines, one per
+      // stroke. Measuring those outlines shows the device actually renders
+      // this pen ~4.4px wide, more than twice nominal -- which is why
+      // vectorInk output used to look visibly thinner than the same page's
+      // raster. strokeRenderWidth measures each stroke's own outline
+      // instead, closing most of that gap.
+      const pdfBytes = await fs.readFile("tests/input/a5x-2.14.28.pdf")
+      const fillCount = (extractPdfFormXObjectStreams(pdfBytes)[0].toString("latin1").match(/(?:^|\s)f(?:\s|$)/g) ?? []).length
+      expect(fillCount).toBe(146)
+
+      const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(strokes.length).toBe(fillCount)
+      expect(new Set(strokes.map((s) => s.thickness))).toEqual(new Set([200])) // 2px nominal
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const widths = [...svg.matchAll(/stroke-width="([\d.]+)"/g)].map((m) => Number(m[1])).sort((a, b) => a - b)
+      expect(widths.length).toBe(fillCount)
+      const median = widths[Math.floor(widths.length / 2)]
+      expect(median).toBeGreaterThan(3) // nominal would put every one of these at 2.0
+      expect(median).toBeLessThan(5.5)
+    })
+
+    test("erasing among mixed-colour ink doesn't confuse one colour's survival for another's (erase-colors.pdf)", { timeout: 60000 }, async () => {
+      // erase-colors.note interleaves grey (158) marker bands with black
+      // (0) pen writing and then erases some of each. Deciding what
+      // survived matches each stroke's colour against the rendered ink
+      // (strokeInkPresence), so this is the page that would catch that
+      // matching being too loose -- a grey stroke "surviving" because a
+      // black neighbour's ink is nearby, or vice versa.
+      //
+      // Page 1 has no erasers at all and acts as the control: whatever
+      // fraction of the device's ink we draw there is our width accuracy
+      // alone. Page 2 is the same content erased, so if the erase
+      // decisions were skewing, its ratio would drift away from page 1's.
+      // They come out the same.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/erase-colors.pdf"))
+      const sn = new SupernoteX(await readFileToUint8Array("erase-colors.note"))
+      const svgs = await toSvg(sn, { vectorInk: true })
+
+      const control = svgInkArea(svgs[0]) / pdfFilledArea(pdfStreams[0])
+      const erased = svgInkArea(svgs[1]) / pdfFilledArea(pdfStreams[1])
+      expect(control).toBeGreaterThan(0.85)
+      expect(control).toBeLessThan(1.1)
+      expect(Math.abs(erased - control)).toBeLessThan(0.1)
+
+      // page 1 is untouched, so every one of its strokes must survive
+      const page1 = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(page1.every((s) => !s.eraserTouched)).toBe(true)
+      expect([...svgs[0].matchAll(/<path d="M[^"]*" fill="none"/g)].length).toBe(page1.length)
+
+      // and both colours are still drawn on the erased page -- neither got
+      // wholly mistaken for the other and dropped
+      const drawnColours = new Set([...svgs[1].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1]))
+      expect(drawnColours).toContain("rgb(0,0,0)")
+      expect([...drawnColours].some((c) => /rgb\(15[0-9],/.test(c))).toBe(true)
+    })
+
+    test("a calligraphy pen is drawn far narrower than its nominal width, matching the device's own ink (caligraphy.pdf)", { timeout: 60000 }, async () => {
+      // caligraphy.note is three pages of nothing but the calligraphy pen
+      // (pen=15) at three width settings, with caligraphy.pdf as Supernote's
+      // own vector export. The chisel nib lays down far less ink than its
+      // configured width implies, in the opposite direction to the older ink
+      // pen: drawing these at nominal width covers ~1.9x the ink the device
+      // does, where measuring each stroke's own outline lands at ~0.7-0.85x.
+      // Neither is exact, but only one is the right side of the truth, and
+      // the error is a third the size.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/caligraphy.pdf"))
+      const sn = new SupernoteX(await readFileToUint8Array("caligraphy.note"))
+      const svgs = await toSvg(sn, { vectorInk: true })
+
+      for (const pageIndex of [0, 1, 2]) {
+        const strokes = parseStrokes(sn.pages[pageIndex].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+        const nominalWidth = strokes[0].thickness / 100
+        expect(new Set(strokes.map((s) => s.thickness)).size).toBe(1) // one setting per page
+
+        const widths = [...svgs[pageIndex].matchAll(/stroke-width="([\d.]+)"/g)]
+          .map((m) => Number(m[1]))
+          .sort((a, b) => a - b)
+        const median = widths[Math.floor(widths.length / 2)]
+        expect(median).toBeGreaterThan(nominalWidth * 0.25)
+        expect(median).toBeLessThan(nominalWidth * 0.6)
+
+        // and the total ink drawn tracks the device's own, which drawing at
+        // nominal width could not (it would be ~1.9x)
+        const deviceArea = pdfFilledArea(pdfStreams[pageIndex])
+        const drawnArea = svgInkArea(svgs[pageIndex])
+        expect(drawnArea / deviceArea).toBeGreaterThan(0.55)
+        expect(drawnArea / deviceArea).toBeLessThan(1.1)
+
+        const nominalArea = strokes.reduce((sum, s) => {
+          let length = 0
+          for (let i = 1; i < s.points.length; i++)
+            length += Math.hypot(s.points[i].x - s.points[i - 1].x, s.points[i].y - s.points[i - 1].y)
+          return sum + length * nominalWidth
+        }, 0)
+        expect(nominalArea / deviceArea).toBeGreaterThan(1.5) // the bug this replaced
+      }
+    })
+
+    test("caligraphy.note page 4 keeps only the word that survived erasing", { timeout: 30000 }, async () => {
+      // Page 4 of that fixture is a whole page of calligraphy erased down to
+      // the single word "Erase" -- 19 ink strokes decode, but the device's
+      // render and its PDF export both show only the handful that are left.
+      const sn = new SupernoteX(await readFileToUint8Array("caligraphy.note"))
+      const decoded = parseStrokes(sn.pages[3].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(decoded.length).toBe(19)
+
+      const svgs = await toSvg(sn, { vectorInk: true })
+      const inkPaths = [...svgs[3].matchAll(/<path d="[^"]*" fill="none" stroke="([^"]+)"/g)].filter(
+        ([, color]) => color !== "rgb(255,255,255)",
+      )
+      expect(inkPaths.length).toBe(7)
+
+      const deviceArea = pdfFilledArea(extractPdfFormXObjectStreams(await fs.readFile("tests/input/caligraphy.pdf"))[3])
+      const drawnArea = svgInkArea(svgs[3])
+      expect(drawnArea / deviceArea).toBeGreaterThan(0.55)
+      expect(drawnArea / deviceArea).toBeLessThan(1.1)
+    })
+
     const NEAR_DUPLICATE_TOLERANCE = 5
     function groupNearDuplicates(values: number[]): number[] {
       const sorted = [...values].sort((a, b) => a - b)
@@ -713,18 +1224,20 @@ describe("svg", () => {
       }
     })
 
-    test("page 2's heading background colors still only preserve relative order, not exact value (rect color isn't real per-stroke metadata -- issue #60)", { timeout: 30000 }, async () => {
+    test("page 2's heading background colors read exact from TITLE_* footer metadata, matching Supernote's own PDF export (headings-and-marker.pdf ground truth, issue #60)", { timeout: 30000 }, async () => {
       // Unlike page 3's marker strokes, page 2's headings are the 2-point
       // 'rect' record TOTALPATH also uses for badges -- and a rect's own
       // color/pen fields aren't meaningful (confirmed against a real
       // fixture: every heading here reads the same uninformative color
       // regardless of its actual, visibly different background -- see
-      // StrokeStyle's doc comment). So rect color still comes from
-      // sampleRect, the page's own rendered ink, with the same
-      // e-ink-quantization gap from the PDF's true design color that
-      // path/stroke colors no longer have (see the previous test) --
-      // recovering the real value would mean decoding RECOGNFILE's
-      // page.bdom, tracked separately as issue #60.
+      // StrokeStyle's doc comment). The real color instead lives in the
+      // note's own `.note` footer, keyed by TITLE_PPPPYYYYXXXX -- resolving
+      // TITLESTYLE (see findMatchingTitleStyle/buildTitleIndex) recovers the
+      // exact design palette (0/157/201), with none of the e-ink raster's
+      // quantization gap that sampleRect (the pre-issue-#60 fallback, kept
+      // for a 2-point rect with no TITLE_* match -- a badge/highlight box
+      // that isn't a Heading, though no current fixture in tests/input
+      // actually has one without TITLE_* metadata) has.
       //
       // The PDF's own 4th color (white) has no counterpart to compare here:
       // it's the cross-hatch heading's *background*, and this decode
@@ -741,9 +1254,7 @@ describe("svg", () => {
       const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
       const sampledGreys = groupNearDuplicates([...svg.matchAll(/<rect[^>]*fill="rgb\((\d+),\d+,\d+\)"/g)].map((m) => Number(m[1])))
 
-      expect(sampledGreys.length).toBe(groundTruthGreys.length) // still 3 distinct rect colors found
-      expect(sampledGreys[0]).toBe(groundTruthGreys[0]) // black, exact -- pure black isn't subject to grey quantization
-      expect(sampledGreys[1]).toBeLessThan(sampledGreys[2]) // dark grey still measures darker than light grey, i.e. still relative-order-preserving
+      expect(sampledGreys).toEqual(groundTruthGreys) // exact match, not just relative order
     })
 
     // Every .note fixture in tests/input, discovered dynamically so a newly
@@ -770,12 +1281,30 @@ describe("svg", () => {
         expect(vectorSvgs.length).toBe(sn.pages.length)
 
         await Promise.all(
-          vectorSvgs.map((svg, i) =>
-            // Only pages that actually vectorized are worth keeping around
-            // for visual inspection -- pages that fell back to the plain
-            // raster are already identical to a plain toSvg() render.
-            svg.includes("<path ") ? fs.writeFile(`tests/output/${file}.${i}.vector.svg`, svg) : Promise.resolve(),
-          ),
+          vectorSvgs.flatMap((svg, i) => {
+            // Keep every page vectorInk actually handled -- which is the
+            // ones whose strokes decoded, the same test toSvg itself uses.
+            // Deliberately not "has <path>": a page whose strokes were all
+            // erased renders blank *on purpose* (erase-no-white-pen.note),
+            // and that is exactly the output worth being able to look at.
+            // Pages with nothing to decode fall back to the plain raster
+            // and would just duplicate a toSvg() render.
+            const vectorized =
+              parseStrokes(sn.pages[i].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true }).length > 0
+            if (!vectorized) return []
+            // Save the device's own rendering of the same page beside it, so
+            // every vector output has the thing it's supposed to look like
+            // sitting next to it. main.test.ts also writes page rasters, but
+            // only for a hand-listed set of fixtures that no new one joins;
+            // this covers all of them. It's free: the plain toSvg() render
+            // already embeds that raster as a PNG data URI, so it only has
+            // to be unwrapped rather than rendered again.
+            const embeddedPng = /xlink:href="data:image\/png;base64,([^"]+)"/.exec(rasterSvgs[i])
+            return [
+              fs.writeFile(`tests/output/${file}.${i}.vector.svg`, svg),
+              ...(embeddedPng ? [fs.writeFile(`tests/output/${file}.${i}.device.png`, Buffer.from(embeddedPng[1], "base64"))] : []),
+            ]
+          }),
         )
 
         vectorSvgs.forEach((svg, i) => {
@@ -786,7 +1315,9 @@ describe("svg", () => {
           const hasPaths = svg.includes("<path ")
           // A page vectorInk didn't (fully) decode must fall back to
           // exactly the plain raster render for that page, not some
-          // in-between state missing ink.
+          // in-between state missing ink. This holds for an all-erased
+          // page too: its ink layers are empty, so stripping them changes
+          // nothing and the blank vector render *is* the raster render.
           if (!hasPaths) {
             expect(svg).toBe(rasterSvgs[i])
           }

@@ -209,4 +209,239 @@ describe("parseStrokes", () => {
     );
     expect(phantomCornerStrokes.length).toBe(0);
   });
+
+  test("excludes eraser strokes by default, includes them as white isEraser strokes with includeErasers (issue #56 follow-up)", async () => {
+    // horizontal_1270.note's page 1 is exactly the fixture that used to
+    // decode eraser motions as smooth-but-nonexistent phantom ink (issue
+    // #56) -- it has four real eraser-tool strokes (color 255) covering
+    // earlier, now-visually-erased real ink ("writing" corrected to
+    // "note"). The default (ink-only) behavior must stay unchanged (every
+    // other test in this file, and the exact stroke-count regression test
+    // in svg.test.ts, assumes it); includeErasers must add exactly those
+    // strokes back, each real-ink-white and flagged.
+    const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"));
+    const page = sn.pages[0];
+
+    const inkOnly = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
+    expect(inkOnly.some((s) => s.isEraser)).toBe(false);
+
+    const withErasers = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true });
+    const erasers = withErasers.filter((s) => s.isEraser);
+    expect(erasers.length).toBe(4);
+    for (const eraser of erasers) {
+      expect(eraser.color).toBe("rgb(255,255,255)");
+    }
+    // includeErasers only adds eraser strokes -- every ink-only stroke must
+    // still be present, in the same relative order (erasers interleaved at
+    // their own real TOTALPATH position, not appended after).
+    expect(withErasers.length).toBe(inkOnly.length + erasers.length);
+    expect(withErasers.filter((s) => !s.isEraser)).toEqual(inkOnly);
+  });
+
+  test("excludes link-tag indicator boxes unconditionally, ink or not (stroke_kind '0000')", async () => {
+    // nomad-3.26.40-link-tag-3p.note's page 2 has three 5-point "link tag"
+    // boxes (drawn around linked-note source regions) -- confirmed real via
+    // the note's own footer LINK_* metadata: each box's TOTALPATH bounding
+    // box matches one LINKRECT pixel-exact. Supernote's own rendered page
+    // never shows these (they're a UI affordance, not ink the user drew),
+    // so parseStrokes must drop them the same way -- with no opt-in, unlike
+    // eraser strokes, since there's no legitimate reason to want them back.
+    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+    const page = sn.pages[1];
+    const linkRects = Object.values(sn.links)
+      .flat()
+      .map((link) => link.LINKRECT.split(",").map(Number));
+    expect(linkRects.length).toBeGreaterThan(0);
+
+    const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true });
+    for (const [x, y, width, height] of linkRects) {
+      const matchesLinkRect = strokes.some((stroke) => {
+        if (stroke.points.length !== 5) return false;
+        const xs = stroke.points.map((p) => p.x), ys = stroke.points.map((p) => p.y);
+        const strokeX = Math.min(...xs), strokeY = Math.min(...ys);
+        const strokeWidth = Math.max(...xs) - strokeX, strokeHeight = Math.max(...ys) - strokeY;
+        return (
+          Math.abs(strokeX - x) <= 2 &&
+          Math.abs(strokeY - y) <= 2 &&
+          Math.abs(strokeWidth - width) <= 2 &&
+          Math.abs(strokeHeight - height) <= 2
+        );
+      });
+      expect(matchesLinkRect).toBe(false);
+    }
+  });
+
+  test("excludes lasso selection paths unconditionally (pen=4)", async () => {
+    // erase.note ends with a lasso-select-then-delete: the selection loop
+    // is recorded as two byte-identical pen=4 records (color 0,
+    // thickness 200) that the device never renders -- absent from both the
+    // device raster and erase.pdf (Supernote's own vector export). The same
+    // record type also appears where a lasso selection did NOT delete
+    // anything (nomad-3.26.40-link-tag-3p.note page 3's keyword-creation
+    // selections around fully-visible words), so the loop itself must be
+    // dropped regardless of what the selection did -- rendering it drew a
+    // phantom black circle either way.
+    //
+    // erase.note page 1 holds exactly 20 TOTALPATH records: 10 dark ink
+    // strokes, 4 white-ink (color 254) cover-up strokes, 4 eraser (color
+    // 255) strokes, and the 2 lasso records.
+    const sn = new SupernoteX(await readFileToUint8Array("erase.note"));
+    const inkOnly = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+    expect(inkOnly.length).toBe(14); // 10 dark + 4 white, no lasso records
+    const withErasers = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+      includeErasers: true,
+    });
+    expect(withErasers.length).toBe(18); // + the 4 erasers, still no lasso
+
+    // and on the page where lasso selections deleted nothing: same
+    // exclusion, none of the 4 selection loops decode as ink.
+    const sn2 = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+    const p3 = parseStrokes(sn2.pages[2].totalPathBuffer, sn2.pageWidth, sn2.pageHeight, { includeErasers: true });
+    // a pen=4 loop's known first point (from the raw record) must not
+    // appear as any decoded stroke's own first point
+    for (const stroke of p3) {
+      const first = `${stroke.points[0].x.toFixed(2)},${stroke.points[0].y.toFixed(2)}`;
+      expect(first).not.toBe("280.14,841.03");
+      expect(first).not.toBe("397.88,981.38");
+      expect(first).not.toBe("351.50,1257.70");
+      expect(first).not.toBe("380.84,1439.83");
+    }
+  });
+
+  describe("point_contour (IStroke.contour)", () => {
+    /** Shoelace area of a closed ring. */
+    function ringArea(ring: { x: number; y: number }[]) {
+      let sum = 0;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        sum += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y);
+      }
+      return Math.abs(sum / 2);
+    }
+    function pathLength(points: { x: number; y: number }[]) {
+      let total = 0;
+      for (let i = 1; i < points.length; i++) total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+      return total;
+    }
+    function bounds(points: { x: number; y: number }[]) {
+      const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
+      return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+    }
+
+    test("is omitted unless includeContours is set", async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
+      const withoutContours = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+      expect(withoutContours.length).toBeGreaterThan(0);
+      expect(withoutContours.every((s) => s.contour === undefined)).toBe(true);
+
+      const withContours = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+        includeContours: true,
+      });
+      expect(withContours.every((s) => s.contour !== undefined && s.contour.length > 0)).toBe(true);
+      // the extra data is the only difference -- geometry is untouched
+      expect(withContours.map((s) => s.points)).toEqual(withoutContours.map((s) => s.points));
+    });
+
+    test("decodes the device's real rendered outline, in the same page-pixel space as points", async () => {
+      // stroke-isolation.note page 2 (1-indexed) is one stroke per pen tool
+      // at a known width. The contour is the filled region the device
+      // renders, so for each stroke it must (a) sit on that stroke's own
+      // transformed extents, centered, and (b) enclose an area on the order
+      // of pathLength * thickness/100 -- the same width unit the thickness
+      // field is documented in. Both hold without any scaling or mirroring
+      // applied to the contour, which is what proves it is already stored
+      // in final page-pixel space (unlike `points`, which needs the
+      // screenHeight transform).
+      //
+      // How close the area lands to nominal is tool-dependent, which is
+      // itself the point of having the contour: the round-tipped tools
+      // (needle pen, marker) really do fill ~1.0x their nominal width, but
+      // the ink pen measures ~0.65x and the chisel-tipped calligraphy pen
+      // only ~0.2-0.3x, because their rendered width narrows with
+      // pressure/tilt along most of a real stroke. Stroking the centerline
+      // at a uniform `thickness` (what vectorInk does today) can only ever
+      // draw the nominal figure, so the area is asserted per-tool rather
+      // than as one global ratio.
+      const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
+      const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
+      expect(strokes.length).toBe(4);
+
+      for (const stroke of strokes) {
+        const ring = stroke.contour!.flat();
+        expect(ring.length).toBeGreaterThan(3);
+
+        const contourBox = bounds(ring), strokeBox = bounds(stroke.points);
+        const halfWidth = stroke.thickness / 200;
+        // centered on the stroke...
+        expect(Math.abs((contourBox.minX + contourBox.maxX) / 2 - (strokeBox.minX + strokeBox.maxX) / 2)).toBeLessThan(halfWidth + 5);
+        expect(Math.abs((contourBox.minY + contourBox.maxY) / 2 - (strokeBox.minY + strokeBox.maxY) / 2)).toBeLessThan(halfWidth + 5);
+        // ...and extending past it by roughly the rendered half width
+        expect(contourBox.minX).toBeLessThanOrEqual(strokeBox.minX + 1);
+        expect(contourBox.maxX).toBeGreaterThanOrEqual(strokeBox.maxX - 1);
+
+        const enclosed = stroke.contour!.reduce((sum, r) => sum + ringArea(r), 0);
+        const nominal = pathLength(stroke.points) * (stroke.thickness / 100);
+        // never meaningfully *wider* than the tool's configured width...
+        expect(enclosed).toBeLessThan(nominal * 1.3);
+        // ...and, for the round-tipped tools, essentially exactly it
+        if (stroke.pen === "needlePoint" || stroke.pen === "marker") {
+          expect(enclosed).toBeGreaterThan(nominal * 0.85);
+        } else {
+          expect(enclosed).toBeGreaterThan(nominal * 0.1);
+        }
+      }
+    });
+
+    test("is present even on fully erased strokes -- it is not a visibility record", async () => {
+      // erase-no-white-pen.note is one page of 4 lines (4 different pens),
+      // every one of them erased -- by the stroke eraser, the lasso eraser,
+      // and select-and-delete respectively, with no white-ink cover-ups
+      // involved. Its rendered page is blank and Supernote's own export
+      // (erase.pdf/erase-no-white-pen.pdf) draws nothing.
+      //
+      // Yet every one of those strokes still carries a full-area contour,
+      // indistinguishable from a visible stroke's. That is the negative
+      // result this fixture exists to pin down: the contour is the outline
+      // the stroke was *drawn* with, not what survived erasing, so it
+      // cannot drive erase-exact export. See plans/vector-format-spec.md's
+      // erase-records section.
+      const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"));
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
+      const ink = strokes.filter((s) => !s.isEraser);
+      expect(ink.length).toBe(5);
+
+      for (const stroke of ink) {
+        expect(stroke.contour!.flat().length).toBeGreaterThan(3);
+      }
+      // and the outlines still span their whole stroke, rather than being
+      // clipped back to the (nonexistent) surviving ink
+      for (const stroke of ink) {
+        const contourBox = bounds(stroke.contour!.flat()), strokeBox = bounds(stroke.points);
+        expect(contourBox.minX).toBeLessThanOrEqual(strokeBox.minX + 1);
+        expect(contourBox.maxX).toBeGreaterThanOrEqual(strokeBox.maxX - 1);
+        expect(stroke.contour!.reduce((sum, r) => sum + ringArea(r), 0)).toBeGreaterThan(0);
+      }
+    });
+
+    test("decodes on every fixture and device family without throwing", async () => {
+      // Regression guard for the section sizes readContour depends on: they
+      // were solved against two device families, so a fixture that silently
+      // stopped decoding would mean a third layout exists.
+      const fixtures = fs.readdirSync("tests/input").filter((name) => name.endsWith(".note")).sort();
+      let total = 0, withContour = 0;
+      for (const fixture of fixtures) {
+        const sn = new SupernoteX(await readFileToUint8Array(fixture));
+        for (const page of sn.pages) {
+          for (const stroke of parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+            includeContours: true,
+            includeErasers: true,
+          })) {
+            total++;
+            if (stroke.contour && stroke.contour.length) withContour++;
+          }
+        }
+      }
+      expect(total).toBeGreaterThan(2000);
+      expect(withContour / total).toBeGreaterThan(0.95);
+    });
+  });
 });

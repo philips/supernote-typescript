@@ -425,23 +425,27 @@ export class SupernoteX implements ISupernote {
 		const data = parseKeyValue(buffer, address, this.lengthFieldSize);
 		const nested = extractNestedKeyValue(data, '_', ['PAGE']);
 
-		// KEYWORD and LINKO entries can appear multiple times in the footer (the
-		// format is journaled/append-only) causing parseKeyValue to store them as
-		// arrays. extractNestedKeyValue skips array values, so we extract these two
-		// groups directly from the raw data to preserve every entry.
+		// KEYWORD, LINKO, and TITLE entries can appear multiple times in the
+		// footer (the format is journaled/append-only) causing parseKeyValue to
+		// store them as arrays. extractNestedKeyValue skips array values, so we
+		// extract these groups directly from the raw data to preserve every
+		// entry.
 		const keyword: Record<string, string | string[]> = {};
 		const linko: Record<string, string | string[]> = {};
+		const title: Record<string, string | string[]> = {};
 		for (const [key, value] of Object.entries(data)) {
 			if (key.startsWith('KEYWORD_'))
 				keyword[key.slice('KEYWORD_'.length)] = value;
 			else if (key.startsWith('LINKO_'))
 				linko[key.slice('LINKO_'.length)] = value;
+			else if (key.startsWith('TITLE_'))
+				title[key.slice('TITLE_'.length)] = value;
 		}
 
 		this.footer = {
 			FILE: (nested.FILE as Record<string, string>) ?? { FEATURE: '24' },
 			COVER: (nested.COVER as Record<string, string>) ?? { '0': '0' },
-			TITLE: nested.TITLE ?? {},
+			TITLE: title,
 			STYLE: (nested.STYLE as Record<string, string>) ?? {},
 			PAGE: (nested.PAGE as Record<string, string>) ?? {},
 			KEYWORD: keyword,

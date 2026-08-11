@@ -601,7 +601,7 @@ pass; the findings are folded into the sections above. In brief:
 3. **`pen=5`'s meaning** — used by the star mark and by some ordinary
    strokes in `test.note`; not yet isolated to a tool.
 4. **`"straightLine"`** — still never observed; needs a fixture drawn with
-   the ruler/straight-line tool.
+   the ruler/straight-line tool. This Supernote feature is described [on the blog](https://supernote.com/blogs/supernote-blog/introducing-the-smart-straight-line-feature-and-smoother-handwriting-strokes).
 5. **`ink.bink` element-table `B` field** and the `03`-tagged u32s in
    `page.bdom` — the last uncharacterized values in otherwise-decoded
    structures. Nothing depends on them.

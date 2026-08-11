@@ -589,6 +589,41 @@ describe("svg", () => {
       expect(svg).toContain(`M${tap.points[0].x.toFixed(2)},${tap.points[0].y.toFixed(2)}`)
     })
 
+    test("white-pen erasing renders by painting the white ink over the dark, in that order (erase-pen.note)", { timeout: 60000 }, async () => {
+      // Erasing with a white pen isn't erasing at all -- both strokes are
+      // real ink and the white simply covers the dark, so the page renders
+      // correctly by drawing them in order rather than by working out what
+      // survived. Supernote's own export does exactly this: pages 1-3 of
+      // erase-pen.pdf set fill colour black then white, in that sequence.
+      // (Page 4 is the control, one dark stroke and no white; its PDF form
+      // sets no colour at all because black is PDF's default.)
+      //
+      // So the thing worth pinning down is the ordering, which is not free:
+      // buildStrokePathElements sorts strokes into tiers rather than
+      // keeping TOTALPATH order, and a cover-up drawn in a different tier
+      // from the ink it covers ends up painted underneath it.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/erase-pen.pdf"))
+      const deviceOrder = (stream: Buffer) =>
+        [...stream.toString("latin1").matchAll(/([\d.]+) [\d.]+ [\d.]+ rg/g)].map((m) => Math.round(Number(m[1]) * 255))
+      expect(deviceOrder(pdfStreams[0])).toEqual([0, 255])
+
+      const sn = new SupernoteX(await readFileToUint8Array("erase-pen.note"))
+      const svgs = await toSvg(sn, { vectorInk: true })
+
+      for (const pageIndex of [0, 1, 2]) {
+        const drawn = [...svgs[pageIndex].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1])
+        expect(drawn.length).toBe(2)
+        // the dark stroke first (plain black, or the marker's own near-black)
+        expect(drawn[0]).toMatch(/^rgb\([01],[01],[01]\)$/)
+        // then the white cover-up over the top of it
+        expect(drawn[1]).toBe("rgb(254,254,254)")
+      }
+
+      // the control page keeps its single stroke and gains no white
+      const control = [...svgs[3].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1])
+      expect(control).toEqual(["rgb(0,0,0)"])
+    })
+
     test("the ruler tool's straight lines render as lines, not as filled boxes (straight-line.note)", { timeout: 30000 }, async () => {
       // straight-line.note is the only fixture using the ruler/straight-line
       // tool, and the only one producing stroke_kind "straightLine". Each of

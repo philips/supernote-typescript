@@ -37,6 +37,25 @@ export interface IStroke {
 	 * sharing the same white color (e.g. a white pen on a dark page), even
 	 * though both render identically. */
 	isEraser?: boolean;
+	/** True when an eraser has been applied to this stroke at some point --
+	 * decoded from the first field of the record's `Section1`
+	 * (https://github.com/Walnut356/snlib calls it `unk_8`), which reads `0`
+	 * on a stroke no eraser ever touched and a small negative value
+	 * otherwise.
+	 *
+	 * It marks *contact*, not disappearance: a stroke can be touched and
+	 * still be largely visible, because the eraser only clipped part of it.
+	 * Across every fixture, all 2,181 strokes reading `0` are fully present
+	 * in the page's own render, so this is a sound one-way answer -- a
+	 * stroke without it is definitely still there, and only strokes carrying
+	 * it need the render consulted to see how much survived (see
+	 * `strokeInkPresence` in `src/svg.ts`).
+	 *
+	 * The observed values are `-4`, `-16` and `-99`; they correlate with how
+	 * much survived (every `-16` is completely gone, every `-4` is fully
+	 * intact, `-99` is mixed) but the encoding isn't confirmed, so nothing
+	 * keys on the specific value. */
+	eraserTouched?: boolean;
 	/** The device's own rendered outline of this stroke (`point_contour` in
 	 * https://github.com/Walnut356/snlib) -- closed polygons in the same
 	 * page-pixel space as `points`, only present when `parseStrokes` was
@@ -192,6 +211,8 @@ interface RawStroke {
 	strokeKind: string;
 	screenHeight: number;
 	points: [number, number][]; // raw (y, x) pairs, undivided device units
+	/** See `IStroke.eraserTouched`. */
+	eraseMark: number;
 	/** Already in page-pixel space -- unlike `points`, these need no
 	 * transform (see `readContour`). Only populated when asked for. */
 	contour?: IStrokePoint[][];
@@ -297,19 +318,18 @@ function tryParseStroke(
 	}
 	p += pointCount * 8;
 
-	let contour: IStrokePoint[][] | undefined;
-	if (includeContours) {
-		// pressures (u16), tilts (4 bytes each), flag_draw (1 byte each),
-		// epa_points (8), epa_grays (4) -- all length-prefixed, all skipped
-		// wholesale; readContour picks up immediately after them.
-		for (const elementSize of [2, 4, 1, 8, 4]) {
-			if (p + 4 > strokeEnd) return { pen, color, thickness, strokeKind, screenHeight, points };
-			p += 4 + view.getUint32(p, true) * elementSize;
-		}
-		contour = readContour(view, byteLength, p, strokeEnd);
+	// pressures (u16), tilts (4 bytes each), flag_draw (1 byte each),
+	// epa_points (8), epa_grays (4) -- all length-prefixed, all skipped
+	// wholesale; Section1 (and so the erase mark) begins immediately after.
+	for (const elementSize of [2, 4, 1, 8, 4]) {
+		if (p + 4 > strokeEnd) return { pen, color, thickness, strokeKind, screenHeight, points, eraseMark: 0 };
+		p += 4 + view.getUint32(p, true) * elementSize;
 	}
 
-	return { pen, color, thickness, strokeKind, screenHeight, points, contour };
+	const eraseMark = p + 4 <= strokeEnd ? view.getInt32(p, true) : 0;
+	const contour = includeContours ? readContour(view, byteLength, p, strokeEnd) : undefined;
+
+	return { pen, color, thickness, strokeKind, screenHeight, points, eraseMark, contour };
 }
 
 /**
@@ -441,6 +461,7 @@ export function parseStrokes(
 				pen: PEN_IDS[raw.pen] ?? 'unknown',
 				thickness: raw.thickness,
 				...(isEraser ? { isEraser: true } : {}),
+				...(raw.eraseMark !== 0 ? { eraserTouched: true } : {}),
 				...(raw.contour ? { contour: raw.contour } : {}),
 			});
 		}

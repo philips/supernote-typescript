@@ -262,29 +262,59 @@ Findings, each confirmed against device ground truth:
    array) was decoded and ruled out the same way earlier — all-`1` even on
    fully-erased strokes.
 
-   That closes off the last per-stroke field plausibly carrying the state,
-   so the working conclusion is that **erase results are not stored in
-   `TOTALPATH` at all**: it is an append-only log of pen motions, and the
-   erased *result* exists only in the rendered `RATTA_RLE` bitmap layers
-   (which is why the device's own exporter, which rasterizes/recomputes,
-   can omit erased strokes while the stroke log cannot say which ones).
-3. **What ships**: `pen=4` selection paths are excluded from
+   (What `TOTALPATH` *does* record is that an eraser was applied at all —
+   see the erase mark below. What it does not record is the resulting
+   geometry: the surviving shape exists only in the rendered `RATTA_RLE`
+   layers, which is why the device's own exporter, which recomputes from
+   them, can omit erased strokes while the stroke log cannot.)
+
+3. **The erase mark — a per-stroke record that an eraser was applied.**
+   `Section1`'s first `u32` (snlib's `unk_8`), immediately after
+   `epa_grays`, reads `0` on a stroke no eraser ever touched and a small
+   negative value otherwise. Exposed as `IStroke.eraserTouched`.
+
+   It marks *contact*, not disappearance — a touched stroke may still be
+   largely visible, because the eraser only clipped part of it — but it is
+   a sound one-way answer, and that is what makes it useful: across every
+   fixture, **all 2,181 strokes reading `0` are fully present in the page's
+   own render**. So a stroke without the mark is definitely still there,
+   and only marked strokes need the render consulted at all.
+
+   Observed values are `-4`, `-16` and `-99`. They correlate with how much
+   survived (every `-16` is completely gone, every `-4` fully intact, `-99`
+   mixed) but the encoding isn't confirmed and nothing keys on the value.
+
+   On `horizontal_1270.note` — the one page with per-stroke ground truth —
+   exactly the 21 strokes its PDF omits carry the mark, and none of the 61
+   it draws do.
+4. **What ships**: `pen=4` selection paths are excluded from
    `parseStrokes` unconditionally (they rendered as phantom black loops;
    never visible on-device in any fixture, whatever the selection did),
    alongside the existing `color=255` filtering + `includeErasers` white
    overlay.
-4. **Erase-exact output, solved from the raster.** Since no per-stroke
-   field records it, `src/svg.ts`'s `vectorInk` now asks the page's own
-   rendered ink instead (`strokeInkPresence`): sample points along each
-   decoded stroke, look for ink of that stroke's *displayed* color nearby,
-   and drop the stroke if essentially none is there. The separation is
-   clean and the gap is empty — across every fixture with ground truth,
-   erased strokes measure exactly `0.00` (all 10 in `erase.note`, 20 of 21
-   in `horizontal_1270.note`, 29 in `turkish.note`) while surviving ones
-   measure `0.91`+. *Partially* erased strokes measure `0.15`+ and must
-   keep rendering, so the threshold sits at `0.05`: it removes only
-   strokes with no surviving ink at all, never a partial, and errs toward
-   leaving a faint ghost rather than deleting real content.
+5. **Erase-exact output: the mark says *whether*, the raster says *how
+   much*.** `src/svg.ts`'s `vectorInk` combines the two. For a stroke
+   carrying the erase mark it measures how much survives in the page's own
+   render (`strokeInkPresence` — sample along the stroke, look for ink of
+   its *displayed* colour nearby) and drops it below `0.5`. On
+   `horizontal_1270.note` that reproduces all 82 of the page's decisions
+   exactly: erased strokes score `0.00–0.30` there, survivors `0.86–1.00`.
+
+   The mark is what allows a confident threshold. Without it the check had
+   to run against every stroke, forcing it down near zero — safe against
+   deleting live ink, but too low to catch an erased stroke sitting under
+   whatever was written in its place. That is precisely what left a second
+   `0` visible in that page's "1270": the digit was written, erased, and
+   rewritten on the same spot, so ~30% of the erased one's points still
+   found black ink underneath the replacement.
+
+   A near-zero threshold is still applied to *unmarked* strokes, because
+   they can be invisible without ever being erased: `erase.note`'s rows
+   were covered over with **white ink**, and Supernote's own export of that
+   page draws only the white. Those have to be dropped rather than
+   drawn-then-covered, because `buildStrokePathElements` sorts strokes into
+   tiers instead of keeping `TOTALPATH` order, so a white marker cover-up
+   can end up painted *under* the pen stroke it was meant to hide.
 
    Two subtleties that both caused real regressions while implementing it:
    the check runs *after* `applyHeadingContrastOverrides` and matches the
@@ -297,6 +327,14 @@ Findings, each confirmed against device ground truth:
    A page whose ink layers are empty is the same statement at page scale —
    everything on it was erased — so nothing renders at all, including the
    white eraser overlays, which is exactly `erase-no-white-pen.note`.
+
+   **What's still approximate.** A *partially* erased stroke is all-or-
+   nothing here: it renders whole or not at all, where the device shows the
+   surviving fragments. `turkish.note` is the clearest case — its marked
+   strokes' survival runs smoothly from `0.00` to `0.95` with no gap, so no
+   threshold can be right for all of them. Clipping each stroke to the
+   rendered ink mask, rather than deciding per stroke, is what would remove
+   the last threshold entirely.
 
 ### `point_contour` — decoded: the device's own rendered outline
 
@@ -315,7 +353,7 @@ tilts              u32 count + count*4
 flag_draw          u32 count + count*1
 epa_points         u32 count + count*8
 epa_grays          u32 count + count*4
-<52 bytes>                                  // snlib's Section1
+<52 bytes>                                  // snlib's Section1; its first u32 is the erase mark (above)
 control_nums       u32 count + count*4
 <10 bytes>                                  // snlib's Section2
 point_contour      u32 ringCount

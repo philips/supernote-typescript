@@ -698,25 +698,30 @@ describe("svg", () => {
     test("erased strokes are dropped, and surviving ones kept, matching the device's own PDF export (horizontal_1270)", { timeout: 30000 }, async () => {
       // horizontal_1270.pdf draws exactly 61 of this page's 82 decodable
       // ink strokes -- the other 21 were erased (the "writing"/"note"
-      // correction). Ink presence in the page's own render separates them
-      // cleanly: erased strokes measure 0.00 there and surviving ones 0.91+.
+      // correction). This page is the tightest ground truth available: it
+      // names per stroke what survived, and all 82 decisions come out right.
       const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/horizontal_1270.pdf"))
       const drawnByDevice = (pdfStreams[0].toString("latin1").match(/(?:^|\s)S(?:\s|$)/g) ?? []).length
       expect(drawnByDevice).toBe(61)
 
       const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"))
-      const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
-      expect(decoded.length).toBe(82) // every stroke still decodes...
+      const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
+      expect(decoded.filter((s) => !s.isEraser).length).toBe(82) // every stroke still decodes...
+      // ...and exactly the 21 the device erased carry the erase mark
+      expect(decoded.filter((s) => s.eraserTouched && !s.isEraser).length).toBe(82 - drawnByDevice)
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
       const paths = [...svg.matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)]
       const inkPaths = paths.filter(([, color]) => color !== "rgb(255,255,255)")
-      // ...but only the surviving ones render, within one stroke of the
-      // device's own count. (The threshold is deliberately set to never
-      // delete a partially-erased stroke, which leaves one faint remnant
-      // here rather than risking real ink -- see MAX_ERASED_INK_PRESENCE.)
-      expect(inkPaths.length).toBeGreaterThanOrEqual(drawnByDevice)
-      expect(inkPaths.length).toBeLessThanOrEqual(drawnByDevice + 2)
+      expect(inkPaths.length).toBe(drawnByDevice)
+
+      // The specific stroke this pins down: the "0" of "1270" was written,
+      // erased, and rewritten in place. Because the replacement sits on top
+      // of it, the erased one still finds ~30% of its own points over black
+      // ink, so a presence check alone kept it and the page rendered "12700"
+      // with a doubled zero. It is the erase mark that settles it.
+      expect(svg).not.toContain("M1308")
+      expect(svg).not.toContain("M1309")
     })
 
     test("rects (highlight backgrounds) always draw before paths, regardless of TOTALPATH order", { timeout: 30000 }, async () => {

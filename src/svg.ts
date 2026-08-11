@@ -399,20 +399,37 @@ const SOLID_RECT_MIN_FILL_FRACTION = 0.5;
  * catch a stroke that survives only in part, cheap enough to run on every
  * stroke of a dense page. */
 const INK_PRESENCE_SAMPLE_COUNT = 60;
-/** At or below this fraction of a stroke's sampled points finding matching
- * ink in the page's own render, `toSvg`'s `vectorInk` treats the stroke as
- * erased and drops it entirely.
+/** Below this fraction of a stroke's sampled points finding matching ink in
+ * the page's own render, `toSvg`'s `vectorInk` treats the stroke as erased
+ * and drops it entirely.
  *
- * Deliberately near zero, because the two failure modes are not
- * symmetric: leaving an erased stroke in shows a ghost (today's bug), but
- * dropping a live one destroys real content. Measured across every fixture
- * with ground truth, the gap is wide and empty -- strokes the device
- * really erased score exactly 0.00 (all 10 in `erase.note`, 20 of 21 in
- * `horizontal_1270.note`, 29 in `turkish.note`), strokes it still draws
- * score >= 0.91, and *partially* erased strokes -- which must keep
- * rendering -- score 0.15 and up. Sitting at 0.05 removes only strokes
- * with no surviving ink at all, and never touches a partial. */
-const MAX_ERASED_INK_PRESENCE = 0.05;
+ * **Only ever consulted for strokes an eraser actually touched**
+ * (`IStroke.eraserTouched`), which is what lets it sit at a confident 0.5
+ * rather than hugging zero. Within that population the two outcomes are far
+ * apart and nothing lands in between: on `horizontal_1270.note`, whose
+ * device PDF names exactly which strokes survived, the erased ones score
+ * 0.00-0.30 and the survivors 0.86-1.00, and this rule reproduces all 82
+ * of that page's decisions exactly.
+ *
+ * Before there was a flag to lean on, this check ran against *every*
+ * stroke, which forced it down to `MAX_HIDDEN_INK_PRESENCE` -- low enough
+ * to never delete a partially-erased stroke, but too low to catch an erased
+ * one sitting under whatever was written in its place. That is what left a
+ * second `0` visible in `horizontal_1270.note`'s "1270". */
+const MAX_ERASED_INK_PRESENCE = 0.5;
+
+/** The same idea for strokes no eraser ever touched, which can still be
+ * invisible: `erase.note`'s rows were covered over with *white ink* rather
+ * than erased, and Supernote's own export of that page draws only the white.
+ * They have to be dropped rather than drawn-then-covered, because
+ * `buildStrokePathElements` sorts strokes into tiers instead of keeping
+ * `TOTALPATH` order, so a white marker cover-up can end up painted *under*
+ * the pen stroke it was meant to hide.
+ *
+ * Kept hard against zero: with no eraser involved, "not one sampled point
+ * of this stroke has any matching ink" is the only safe reason to discard
+ * something the file still says is there. */
+const MAX_HIDDEN_INK_PRESENCE = 0.05;
 /** How far from a sampled point `strokeInkPresence` looks for matching ink,
  * beyond the stroke's own rendered half width -- absorbs the point-to-pixel
  * rounding and the slight spread of the device's own rasterizer. */
@@ -918,18 +935,24 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 							note.pageHeight,
 						);
 						// A stroke the device no longer draws must not be drawn here
-						// either, and only the rendered ink knows which those are
-						// (see strokeInkPresence). Applied last, so a Heading label's
-						// displayed (contrast-flipped) color is the one matched
-						// against the render rather than its real ink color.
-						// Limited to `'path'` styles: an eraser is a deliberate white
-						// overlay rather than ink to look for, and a `'rect'` carries
-						// no meaningful color of its own to match (see StrokeStyle) --
-						// both already answer "is this still there?" their own way.
+						// either, and how confidently that can be said depends on
+						// whether an eraser was ever applied to it (`eraserTouched`).
+						// If one was, most of it disappearing means it was erased; if
+						// none was, only its *complete* absence from the render is
+						// evidence enough -- see both thresholds' doc comments.
+						//
+						// Applied last, so a Heading label's displayed
+						// (contrast-flipped) color is the one matched against the
+						// render rather than its real ink color. Limited to `'path'`
+						// styles: an eraser is a deliberate white overlay rather than
+						// ink to look for, and a `'rect'` carries no meaningful color
+						// of its own to match (see StrokeStyle) -- both already answer
+						// "is this still there?" their own way.
 						const finalStyles = displayStyles.map((style, j): StrokeStyle => {
-							if (!mask || style.shape !== 'path' || nativeStrokes[j].isEraser) return style;
-							return strokeInkPresence(nativeStrokes[j], style.color, mask, note.pageWidth, note.pageHeight) <=
-								MAX_ERASED_INK_PRESENCE
+							const stroke = nativeStrokes[j];
+							if (!mask || style.shape !== 'path' || stroke.isEraser) return style;
+							const limit = stroke.eraserTouched ? MAX_ERASED_INK_PRESENCE : MAX_HIDDEN_INK_PRESENCE;
+							return strokeInkPresence(stroke, style.color, mask, note.pageWidth, note.pageHeight) < limit
 								? { shape: 'skip' }
 								: style;
 						});

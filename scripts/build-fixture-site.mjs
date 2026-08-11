@@ -1,0 +1,367 @@
+/**
+ * Builds the fixture comparison site: for every fixture that ships with
+ * Supernote's own PDF export, each page's device-drawn vector ink next to
+ * what `toSvg({ vectorInk: true })` produces.
+ *
+ * Both sides are real SVG and both are ink only -- the device's ink lives in
+ * a Form XObject separate from the page's background image, so ours has its
+ * background raster stripped to match. What's left on each side is exactly
+ * the vector ink, which is the thing being judged.
+ *
+ * Run with `npm run build:site`; output lands in `site/`.
+ */
+
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { SupernoteX, toSvg } from '../lib/index.js';
+import { extractFormStreams, pdfStreamToSvg, devicePageToSvgDocument } from './pdf-vector.mjs';
+
+const INPUT_DIR = 'tests/input';
+const OUT_DIR = 'site';
+
+/** What each fixture is for, and anything notable about how it renders.
+ * Fixtures with nothing recorded here still appear; they just carry no note. */
+/** @type {Record<string, {isolates: string, note?: string}>} */
+const FIXTURE_NOTES = {
+	'straight-line': {
+		isolates: 'The ruler tool — the only fixture producing stroke_kind "straightLine".',
+		note: 'These records store just two endpoints, and any two-point record used to be read as a filled rectangle, so page 1\'s six lines rendered as three degenerate invisible boxes. Rect-ness now comes from the record\'s own stroke_kind.',
+	},
+	horizontal_1270: {
+		isolates: 'Erasing, with the tightest ground truth here — its PDF names stroke by stroke what survived.',
+		note: 'Draws exactly the 61 of 82 decoded strokes the device does. The doubled "0" in "1270" is gone: that digit was written, erased and rewritten in place, so the erased copy still found about 30% of its own points over black ink.',
+	},
+	'a5x-2.14.28': {
+		isolates: 'The older ink pen (pen=1), and a rare 1:1 export — 146 filled outlines for 146 decoded strokes.',
+		note: 'This pen renders about twice its nominal width. Drawing at nominal laid down 40% of the device\'s ink; measuring each stroke\'s own contour brings that to 84%.',
+	},
+	caligraphy: {
+		isolates: 'The calligraphy pen at three width settings; page 4 is a page erased down to one word.',
+		note: 'A chisel nib lays down far less ink than its width implies — the opposite of the ink pen. Nominal covered about 1.9x the device\'s ink.',
+	},
+	'stroke-isolation': {
+		isolates: 'One variable per page: page 2 the pen tools, page 3 colours, page 4 width settings, page 5 marker black and white.',
+		note: 'Page 4 is the width calibration. Its PDF states each width as a number rather than drawing an outline — 12, 7, 4, 2 — and widths measured from the contour land on 12.01, 7.02, 4.05, 1.99 without consulting the pen or the thickness setting.',
+	},
+	'erase-pen': {
+		isolates: 'Erasing with a white pen rather than the eraser tool. Page 4 is the control, dark ink only.',
+		note: 'Not erasing in the format\'s terms: both strokes are ordinary ink, and the page is right as long as the white is painted after the dark — which is what the device\'s own export does.',
+	},
+	'erase-colors': {
+		isolates: 'Grey marker bands through black pen writing, then erased. Page 1 is the control, no erasers.',
+		note: 'The case that would catch the survival check\'s colour matching being too loose. The control matching the erased page is what shows erasing is not skewing the result.',
+	},
+	erase: {
+		isolates: 'Every erase mechanism on one page, plus white-ink cover-ups.',
+		note: 'All ten dark strokes were erased, so only the four white cover-up strokes render — which is also all the device draws.',
+	},
+	'erase-no-white-pen': {
+		isolates: 'Four pens, every stroke erased, no white-ink cover-ups.',
+		note: 'Renders blank on purpose, and the device\'s export draws nothing either — so this page has no vector ink on either side.',
+	},
+	'headings-and-marker': {
+		isolates: 'The Heading feature — four background styles — separated from the marker tool.',
+		note: 'Heading fills and their auto-contrast label colours come from the note\'s own TITLE_ footer metadata, giving the exact design palette rather than the raster\'s quantised greys.',
+	},
+	turkish: {
+		isolates: 'Dense handwriting with partial erasures throughout.',
+		note: 'The clearest illustration of what is still approximate: a partly erased stroke renders whole or not at all. Survival across its erased strokes runs smoothly from 0% to 95%, so no single cutoff is right for all of them.',
+	},
+	'nomad-3.15.27-blank-shapes-and-RTR': { isolates: 'Shapes, patterns, Headings and keyword highlighting.' },
+	'erase-partial2': { isolates: 'A page erased by selecting and deleting, which removes the records outright.' },
+};
+
+/** Fixtures worth seeing first — the rest follow alphabetically. */
+const FEATURED = [
+	'straight-line', 'horizontal_1270', 'a5x-2.14.28', 'caligraphy',
+	'stroke-isolation', 'erase-pen', 'erase-colors', 'erase', 'erase-no-white-pen',
+	'headings-and-marker', 'turkish',
+];
+
+const escapeHtml = (s) =>
+	s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const slug = (s) => s.replace(/[^a-zA-Z0-9-]/g, '_');
+
+/** Ink a rendered SVG lays down, in square page pixels: each stroked path's
+ * length times its width, plus the area of any filled rect. Deliberately
+ * measured off the finished SVG rather than from internals, so it compares
+ * like for like with the same measure taken from the device's PDF.
+ *
+ * Pure white (255) is skipped: those are the overlays drawn along an
+ * eraser's own path to cover what it took out, so counting them would add
+ * ink where the point was to remove it -- on a page erased with a wide
+ * eraser they swamp everything else. White *ink* is a different thing and
+ * still counts, which is why the test is exact rather than "near white":
+ * the white pen records 254, and the device's export draws it too. */
+/** @param {string} svg @returns {number} */
+function svgInkArea(svg) {
+	let total = 0;
+	for (const [, d, colour, width] of svg.matchAll(
+		/<path d="([^"]+)" fill="none" stroke="([^"]+)" stroke-width="([\d.]+)"/g,
+	)) {
+		if (colour === 'rgb(255,255,255)') continue;
+		const points = [...d.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+		let length = 0;
+		for (let i = 1; i < points.length; i++) {
+			length += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+		}
+		total += length * Number(width);
+	}
+	for (const [, w, h] of svg.matchAll(/<rect x="[^"]*" y="[^"]*" width="([\d.]+)" height="([\d.]+)"/g)) {
+		total += Number(w) * Number(h);
+	}
+	return total;
+}
+
+/** Our SVG with the background raster removed, so both sides show ink only. */
+/** @param {string} svg @returns {string} */
+function inkOnly(svg) {
+	return svg.replace(/<image\b[^>]*\/>/g, '');
+}
+
+/**
+ * @typedef {object} PageComparison
+ * @property {number} pageNumber
+ * @property {string} deviceSvg
+ * @property {string} oursSvg
+ * @property {number} deviceInk
+ * @property {number} oursInk
+ */
+
+/**
+ * @typedef {object} FixtureComparison
+ * @property {string} name
+ * @property {PageComparison[]} pages
+ * @property {string} [isolates]
+ * @property {string} [note]
+ */
+
+/** @param {string} noteFile @returns {Promise<FixtureComparison | null>} */
+async function buildFixture(noteFile) {
+	const name = noteFile.replace(/\.note$/, '');
+	const pdfPath = path.join(INPUT_DIR, `${name}.pdf`);
+	try {
+		await fs.access(pdfPath);
+	} catch {
+		return null; // no device export to compare against
+	}
+
+	const streams = extractFormStreams(await fs.readFile(pdfPath));
+	if (streams.length === 0) return null; // a raster-only export has no vector ink
+
+	const note = new SupernoteX(new Uint8Array(await fs.readFile(path.join(INPUT_DIR, noteFile))));
+	const ours = await toSvg(note, { vectorInk: true, includeText: false });
+
+	/** @type {PageComparison[]} */
+	const pages = [];
+	for (let i = 0; i < Math.min(streams.length, ours.length); i++) {
+		const device = pdfStreamToSvg(streams[i], note.pageHeight);
+		const oursSvg = inkOnly(ours[i]);
+		pages.push({
+			pageNumber: i + 1,
+			deviceSvg: devicePageToSvgDocument(device, note.pageWidth, note.pageHeight),
+			oursSvg,
+			deviceInk: device.inkArea,
+			oursInk: svgInkArea(oursSvg),
+		});
+	}
+	const meta = FIXTURE_NOTES[name] ?? {};
+	return { name, pages, isolates: meta.isolates, note: meta.note };
+}
+
+/** @param {number} ours @param {number} device
+ * @returns {{text: string, tone: 'match'|'near'|'off'|'none'}} */
+function ratioLabel(ours, device) {
+	if (device <= 0 && ours <= 0) return { text: 'no ink either side', tone: 'none' };
+	if (device <= 0) return { text: 'device draws nothing', tone: 'off' };
+	const ratio = ours / device;
+	const text = `${ratio.toFixed(2)}× device ink`;
+	if (ratio >= 0.9 && ratio <= 1.1) return { text, tone: 'match' };
+	if (ratio >= 0.75 && ratio <= 1.25) return { text, tone: 'near' };
+	return { text, tone: 'off' };
+}
+
+const STYLE = `:root{
+  --ground:#F4F6F7;--surface:#FFFFFF;--ink:#16181C;--muted:#5C6470;--rule:#DDE2E6;
+  --accent:#2F6F62;--accent-soft:#E4EFEB;--warn:#8A5A12;--warn-soft:#F7EFE0;
+  --shadow:0 1px 2px rgba(22,24,28,.06),0 8px 24px -12px rgba(22,24,28,.18);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#131519;--surface:#1A1D22;--ink:#E8EAED;--muted:#98A0AB;--rule:#2A2F36;
+  --accent:#77B9A8;--accent-soft:#1E2C29;--warn:#D6A254;--warn-soft:#2A2317;
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 28px -14px rgba(0,0,0,.7);
+}}
+:root[data-theme="dark"]{
+  --ground:#131519;--surface:#1A1D22;--ink:#E8EAED;--muted:#98A0AB;--rule:#2A2F36;
+  --accent:#77B9A8;--accent-soft:#1E2C29;--warn:#D6A254;--warn-soft:#2A2317;
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 28px -14px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:52px 24px 96px}
+a{color:var(--accent)}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+h1{font-size:clamp(27px,4vw,38px);line-height:1.14;letter-spacing:-.02em;margin:0 0 12px;text-wrap:balance;font-weight:640}
+.lede{font-size:17px;color:var(--muted);max-width:66ch;margin:0 0 20px}
+.top{border-bottom:1px solid var(--rule);padding-bottom:26px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.chip{border:1px solid var(--rule);border-radius:999px;padding:3px 10px;background:var(--surface)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(288px,1fr));gap:14px;margin-top:30px}
+.card{display:block;text-decoration:none;color:inherit;background:var(--surface);border:1px solid var(--rule);
+  border-radius:12px;padding:16px;box-shadow:var(--shadow)}
+.card:hover,.card:focus-visible{border-color:var(--accent)}
+.card h2{margin:0 0 6px;font-family:var(--mono);font-size:14px;font-weight:600;letter-spacing:-.01em;word-break:break-all}
+.card p{margin:0;font-size:13.5px;color:var(--muted)}
+.card .pages{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;padding:2px 7px;border-radius:999px;border:1px solid var(--rule)}
+.pill.match{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.pill.near{background:var(--surface);color:var(--muted)}
+.pill.off{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+.pill.none{background:var(--surface);color:var(--muted);border-style:dashed}
+.back{font-family:var(--mono);font-size:12px;text-decoration:none;color:var(--muted)}
+.back:hover{color:var(--ink)}
+.isolates{margin:0;font-size:15.5px;max-width:70ch}
+.note{margin:12px 0 0;font-size:14.5px;color:var(--muted);max-width:70ch;border-left:2px solid var(--rule);padding-left:14px}
+.pair{margin:22px 0 0;background:var(--surface);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.pair-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+.pg{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.controls{display:flex;gap:4px;align-items:center}
+button{font:inherit;cursor:pointer}
+.mode{font-family:var(--mono);font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--rule);background:var(--ground);color:var(--muted)}
+.mode[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.mode:focus-visible,.flip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.stage{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--rule)}
+.pane{background:var(--surface);padding:12px;min-width:0;position:relative}
+.tag{position:absolute;top:14px;left:14px;z-index:2;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);background:var(--surface);border:1px solid var(--rule);border-radius:5px;padding:2px 7px}
+.tag-ours{color:var(--accent);border-color:var(--accent)}
+.art{background:#fff;border-radius:6px;overflow:hidden;display:block}
+.art svg{display:block;width:100%;height:auto}
+.pair[data-mode="blink"] .stage{grid-template-columns:1fr}
+.pair[data-mode="blink"] .pane{grid-area:1/1}
+.pair[data-mode="blink"][data-show="device"] .pane[data-which="ours"]{visibility:hidden}
+.pair[data-mode="blink"][data-show="ours"] .pane[data-which="device"]{visibility:hidden}
+.flip{display:block;width:100%;border:0;border-top:1px solid var(--rule);background:var(--ground);color:var(--muted);
+  font-family:var(--mono);font-size:12px;padding:9px}
+.flip:hover{color:var(--ink)}
+footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--rule);color:var(--muted);font-size:13.5px;max-width:74ch}
+@media (max-width:760px){.stage{grid-template-columns:1fr}.wrap{padding:34px 16px 72px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}`;
+
+const BLINK_SCRIPT = `for (const pair of document.querySelectorAll('.pair')) {
+  const flip = pair.querySelector('.flip');
+  for (const b of pair.querySelectorAll('.mode')) {
+    b.addEventListener('click', () => {
+      pair.dataset.mode = b.dataset.act;
+      for (const o of pair.querySelectorAll('.mode')) o.setAttribute('aria-pressed', String(o.dataset.act === b.dataset.act));
+      flip.hidden = b.dataset.act !== 'blink';
+    });
+  }
+  flip.addEventListener('click', () => { pair.dataset.show = pair.dataset.show === 'device' ? 'ours' : 'device'; });
+}`;
+
+/** @param {string} title @param {string} body @returns {string} */
+function page(title, body) {
+	return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(title)}</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="wrap">${body}</div><script>${BLINK_SCRIPT}</script></body></html>`;
+}
+
+/** @param {FixtureComparison} fx @returns {string} */
+function fixturePage(fx) {
+	const pairs = fx.pages
+		.map((p) => {
+			const r = ratioLabel(p.oursInk, p.deviceInk);
+			return `<figure class="pair" data-mode="split" data-show="device">
+<figcaption class="pair-head"><span class="pg">page ${p.pageNumber}</span>
+<span class="controls"><span class="pill ${r.tone}">${escapeHtml(r.text)}</span>
+<button type="button" class="mode" data-act="split" aria-pressed="true">Side by side</button><button type="button" class="mode" data-act="blink" aria-pressed="false">Blink</button></span></figcaption>
+<div class="stage">
+<div class="pane" data-which="device"><span class="tag">Device</span><div class="art">${p.deviceSvg}</div></div>
+<div class="pane" data-which="ours"><span class="tag tag-ours">vectorInk</span><div class="art">${p.oursSvg}</div></div>
+</div>
+<button type="button" class="flip" hidden>Flip between the two</button>
+</figure>`;
+		})
+		.join('\n');
+
+	return page(
+		`${fx.name} — device vs vectorInk`,
+		`<a class="back" href="index.html">&larr; all fixtures</a>
+<header class="top" style="margin-top:18px">
+<p class="eyebrow">fixture</p>
+<h1><code style="font-family:var(--mono);font-size:.8em">${escapeHtml(fx.name)}</code></h1>
+${fx.isolates ? `<p class="isolates">${escapeHtml(fx.isolates)}</p>` : ''}
+${fx.note ? `<p class="note">${escapeHtml(fx.note)}</p>` : ''}
+</header>
+${pairs}
+<footer><p>Both sides are vector ink only. The device's ink comes from the Form XObjects in its own PDF export; ours is <code>toSvg({ vectorInk: true })</code> with the background raster removed, since the device keeps its background in a separate image.</p></footer>`,
+	);
+}
+
+/** @param {FixtureComparison[]} fixtures @returns {string} */
+function indexPage(fixtures) {
+	const totalPages = fixtures.reduce((n, f) => n + f.pages.length, 0);
+	const cards = fixtures
+		.map((f) => {
+			const pills = f.pages
+				.map((p) => {
+					const r = ratioLabel(p.oursInk, p.deviceInk);
+					return `<span class="pill ${r.tone}" title="page ${p.pageNumber}: ${escapeHtml(r.text)}">p${p.pageNumber}</span>`;
+				})
+				.join('');
+			return `<a class="card" href="${escapeHtml(slug(f.name))}.html">
+<h2>${escapeHtml(f.name)}</h2>
+${f.isolates ? `<p>${escapeHtml(f.isolates)}</p>` : '<p>Regression coverage.</p>'}
+<div class="pages">${pills}</div></a>`;
+		})
+		.join('\n');
+
+	return page(
+		'Supernote vectorInk — device vs rendered',
+		`<header class="top">
+<p class="eyebrow">supernote-typescript</p>
+<h1>What the device drew, and what we drew</h1>
+<p class="lede">Every fixture that ships with Supernote's own PDF export, page by page: the device's vector ink beside the vector ink this library produces. Both sides are real SVG, so differences hold up when you zoom in.</p>
+<div class="meta"><span class="chip">${fixtures.length} fixtures</span><span class="chip">${totalPages} pages</span><span class="chip">built from tests/input</span></div>
+</header>
+<div class="grid">${cards}</div>
+<footer><p>Each page is labelled with the ink it draws as a fraction of the device's — total stroke length times width, plus filled area. It is a blunt measure and only meaningful next to the picture, but it catches a whole stroke going missing, and a tool being drawn at the wrong width. Pages where the device draws no vector ink at all (an entirely erased page) are marked as such rather than scored.</p>
+<p>Rebuild with <code>npm run build:site</code>.</p></footer>`,
+	);
+}
+
+async function main() {
+	const noteFiles = (await fs.readdir(INPUT_DIR)).filter((f) => f.endsWith('.note')).sort();
+	/** @type {FixtureComparison[]} */
+	const built = [];
+	for (const file of noteFiles) {
+		const fixture = await buildFixture(file);
+		if (fixture && fixture.pages.length > 0) built.push(fixture);
+	}
+	built.sort((a, b) => {
+		const ia = FEATURED.indexOf(a.name), ib = FEATURED.indexOf(b.name);
+		if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+		return a.name.localeCompare(b.name);
+	});
+
+	await fs.rm(OUT_DIR, { recursive: true, force: true });
+	await fs.mkdir(OUT_DIR, { recursive: true });
+	await fs.writeFile(path.join(OUT_DIR, 'style.css'), STYLE);
+	await fs.writeFile(path.join(OUT_DIR, 'index.html'), indexPage(built));
+	// GitHub Pages otherwise runs the output through Jekyll, which skips files
+	// and directories beginning with an underscore.
+	await fs.writeFile(path.join(OUT_DIR, '.nojekyll'), '');
+	for (const fixture of built) {
+		await fs.writeFile(path.join(OUT_DIR, `${slug(fixture.name)}.html`), fixturePage(fixture));
+	}
+
+	const pages = built.reduce((n, f) => n + f.pages.length, 0);
+	console.log(`built ${OUT_DIR}/: ${built.length} fixtures, ${pages} page comparisons`);
+}
+
+main();

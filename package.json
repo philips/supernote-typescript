@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "clean": "rm -f tests/output/*.png tests/output/*.jpg tests/output/*.pdf tests/output/*.svg tests/output/*.cpuprofile",
+    "clean": "rm -f tests/output/*.png tests/output/*.jpg tests/output/*.pdf tests/output/*.svg tests/output/*.cpuprofile && rm -rf site",
     "lint": "eslint .",
     "pretest": "npm run build",
     "test": "vitest run",
@@ -20,7 +20,9 @@
     "bench": "vitest bench",
     "test-mirror": "vitest --watch -t mirror",
     "coverage": "vitest run --coverage",
-    "prettier-format": "prettier --config .prettierrc 'src/**/*.ts' --write"
+    "prettier-format": "prettier --config .prettierrc 'src/**/*.ts' --write",
+    "build:site": "node scripts/build-fixture-site.mjs",
+    "prebuild:site": "npm run build"
   },
   "repository": {
     "type": "git",

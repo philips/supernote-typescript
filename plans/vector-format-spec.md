@@ -212,6 +212,63 @@ approximates a true per-pixel erase, and can leave thin slivers of the
 original ink visible at its edges), but a large, direct improvement over
 leaving the erased ink fully legible.
 
+### Erase and selection records — the 2026-08 erase-fixture investigation
+
+`erase.note`/`erase.pdf` (one page exercising every erase mechanism, with
+Supernote's own vector export as ground truth) plus
+`horizontal_1270.pdf` and `nomad-3.26.40-link-tag-3p.note` pages 2/3
+mapped out the non-ink record types and, more importantly, established
+what can and cannot be recovered from the stroke log:
+
+| Record signature | Meaning | Rendered? |
+|---|---|---|
+| `color=255, pen=3, thickness≈300–400` | eraser (drag and/or region mode; N5/A5X-era id) | never |
+| `color=255, pen=9, thickness=1400` | eraser, another mode/size — also seen on gestures that erased nothing (below) | never |
+| `color=255, pen=1, thickness 400–2200` | eraser on Nomad-era firmware (id reuses the old ink-pen id; `color=255` is the reliable discriminator, not `pen`) | never |
+| `pen=4, color=0, thickness=200` | lasso/selection *path* — the loop drawn to select content for delete, move, or Keyword/Tag creation; frequently stored as two byte-identical consecutive records | never |
+| `color=254` (any pen) | real white ink (paint-over cover-ups) | yes, as white |
+
+Findings, each confirmed against device ground truth:
+
+1. **The device omits fully-erased strokes from its own exports, but the
+   erased ink stays in `TOTALPATH` unmarked** (previously known) — and,
+   new: **which strokes are erased is not recoverable by replaying the
+   eraser records.** Three independent proofs:
+   - `erase.note`'s row-3 line extends well past every recorded eraser
+     path's geometry (the covering `pen=9` record's own points stop ~350px
+     short of the line's right end), yet the whole line is erased.
+   - `horizontal_1270.note`'s eraser #9 is a *closed loop* whose interior
+     strokes (up to ~120px from the path itself) are all erased — a
+     region-select erase — while geometrically similar records elsewhere
+     are plain drags with only the swept band erased.
+   - `nomad-3.26.40-link-tag-3p.note` page 3 has `pen=9 color=255` records
+     and `pen=4` loops sitting exactly on top of fully-visible keyword
+     text: the identical record types there were *selections* (Keyword
+     creation, lasso-move), not erases. A geometric replay model tuned to
+     perfection on the first two fixtures (union of swept-band + polygon
+     containment; 31/31 erased + 61/61 kept, zero errors) mis-erases
+     visible text on this page. Same bytes, opposite meaning — the
+     difference lives outside the replayed records.
+2. **Where the real visibility state lives**: per-stroke, in the
+   still-undecoded tail sections — most likely `point_contour` (snlib's
+   name), the device's own rendered-outline polygons, which is also
+   exactly what the newer PDF exports draw (filled Bézier outlines). The
+   `flag_draw` per-point byte array was decoded and ruled out (all-1 even
+   on fully-erased strokes). Partial tail structure established for future
+   work: each stroke ends `…, sized_str(0), sized_str("none"),
+   sized_str("none"), u32 unk_25, sized_array(3 × 8 bytes)`; the fixed
+   sections between `epa_grays` and the contour did not match snlib's
+   declared sizes on these fixtures (no single `(S1..S4)` solved more than
+   132 of 829 strokes), so contour decoding needs a dedicated
+   byte-alignment effort.
+3. **What ships meanwhile**: `pen=4` selection paths are excluded from
+   `parseStrokes` unconditionally (they rendered as phantom black loops;
+   never visible on-device in any fixture, whatever the selection did),
+   alongside the existing `color=255` filtering + `includeErasers` white
+   overlay. Full erase-exact output (skipping erased strokes and clipping
+   partially-erased ones the way `erase.pdf`/`horizontal_1270.pdf` do)
+   is blocked on the contour decode.
+
 ### `thickness` field — solved: hundredths of a page pixel
 
 `thickness / 100` is the rendered stroke width in page pixels. Two
@@ -643,6 +700,15 @@ pass; the findings are folded into the sections above. In brief:
    digit reading is confirmed only for these four values on two greyscale
    devices. (`test.note` shows non-greyscale stroke colors 48/81 exist in
    the wild, so a color-device fixture would also extend the Color table.)
+7. **Decode `point_contour` (the per-stroke rendered-outline polygons)** —
+   the single highest-value remaining decode: it is the device's own
+   authoritative record of what each stroke actually looks like after
+   erasing (fully-erased strokes, partial-erase dash fragments, and
+   probably pressure-varying outline width all at once), and the only
+   sound path to erase-exact `vectorInk` output — the erase-records
+   section above proves replaying the eraser log cannot be made correct.
+   The known tail anchors and the failed section-size solve are documented
+   there as the starting point.
 
 ## References
 

@@ -585,6 +585,29 @@ describe("svg", () => {
       }
     })
 
+    test("a lasso selection path never renders as a phantom loop (erase.note, pen=4)", { timeout: 30000 }, async () => {
+      // erase.note's final row was lasso-selected and deleted; the
+      // selection loop survives in TOTALPATH as two identical pen=4
+      // records that used to render as a big phantom black loop (and, on
+      // nomad-3.26.40-link-tag-3p.note page 3, as phantom circles around
+      // keyword text whose selection deleted nothing). Neither the device
+      // raster nor erase.pdf (Supernote's own vector export of this page)
+      // draws it. See LASSO_PEN_ID in src/strokes.ts.
+      const sn = new SupernoteX(await readFileToUint8Array("erase.note"))
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+
+      // the loop's own first point (read straight from the raw pen=4
+      // record) must not start any rendered path
+      expect(svg).not.toContain("M462.25,2051.01")
+
+      // and the page's stroke inventory renders exactly: 10 dark ink +
+      // 4 white-ink cover-ups + 4 white eraser overlays = 18 paths
+      const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="([^"]+)"/g)]
+      expect(paths.length).toBe(18)
+      const whiteCount = paths.filter(([, , , color]) => color === "rgb(255,255,255)" || color === "rgb(254,254,254)").length
+      expect(whiteCount).toBe(8)
+    })
+
     test("rects (highlight backgrounds) always draw before paths, regardless of TOTALPATH order", { timeout: 30000 }, async () => {
       // On the same fixture (each highlighted digit is actually a Heading,
       // per findMatchingTitleStyle above), each digit's Heading background

@@ -270,4 +270,41 @@ describe("parseStrokes", () => {
       expect(matchesLinkRect).toBe(false);
     }
   });
+
+  test("excludes lasso selection paths unconditionally (pen=4)", async () => {
+    // erase.note ends with a lasso-select-then-delete: the selection loop
+    // is recorded as two byte-identical pen=4 records (color 0,
+    // thickness 200) that the device never renders -- absent from both the
+    // device raster and erase.pdf (Supernote's own vector export). The same
+    // record type also appears where a lasso selection did NOT delete
+    // anything (nomad-3.26.40-link-tag-3p.note page 3's keyword-creation
+    // selections around fully-visible words), so the loop itself must be
+    // dropped regardless of what the selection did -- rendering it drew a
+    // phantom black circle either way.
+    //
+    // erase.note page 1 holds exactly 20 TOTALPATH records: 10 dark ink
+    // strokes, 4 white-ink (color 254) cover-up strokes, 4 eraser (color
+    // 255) strokes, and the 2 lasso records.
+    const sn = new SupernoteX(await readFileToUint8Array("erase.note"));
+    const inkOnly = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+    expect(inkOnly.length).toBe(14); // 10 dark + 4 white, no lasso records
+    const withErasers = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+      includeErasers: true,
+    });
+    expect(withErasers.length).toBe(18); // + the 4 erasers, still no lasso
+
+    // and on the page where lasso selections deleted nothing: same
+    // exclusion, none of the 4 selection loops decode as ink.
+    const sn2 = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+    const p3 = parseStrokes(sn2.pages[2].totalPathBuffer, sn2.pageWidth, sn2.pageHeight, { includeErasers: true });
+    // a pen=4 loop's known first point (from the raw record) must not
+    // appear as any decoded stroke's own first point
+    for (const stroke of p3) {
+      const first = `${stroke.points[0].x.toFixed(2)},${stroke.points[0].y.toFixed(2)}`;
+      expect(first).not.toBe("280.14,841.03");
+      expect(first).not.toBe("397.88,981.38");
+      expect(first).not.toBe("351.50,1257.70");
+      expect(first).not.toBe("380.84,1439.83");
+    }
+  });
 });

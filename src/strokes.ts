@@ -102,6 +102,23 @@ const ERASER_COLOR = 255;
  * fill is real, intended content. */
 const LINK_TAG_STROKE_KIND = '0000';
 
+/** `pen` id of a lasso/selection *path* record -- the loop a user draws to
+ * select content (then delete it, move it, or turn it into a
+ * Keyword/Tag) -- not ink, and never rendered by the device. Confirmed
+ * against every fixture that has one (all reading `color: 0`,
+ * `thickness: 200`, and frequently recorded as two byte-identical
+ * consecutive records): `erase.note` (a lasso-select-then-delete; the loop
+ * is absent from both the device raster and `erase.pdf`, Supernote's own
+ * export), `nomad-3.26.40-link-tag-3p.note` page 3 (keyword/tag-creation
+ * selections around fully-visible words -- rendering these drew phantom
+ * black circles around the text), and `unknown-color.note` (a path with ~0%
+ * presence in the page's own rendered ink). Excluded unconditionally, like
+ * `LINK_TAG_STROKE_KIND`: whatever the selection *did* (delete vs. move vs.
+ * keyword -- not recoverable from this record, see
+ * plans/vector-format-spec.md's erase-records section), the loop itself is
+ * never visible content. */
+const LASSO_PEN_ID = 4;
+
 /** Byte layout of the fixed-size header (`StrokeConfig` in
  * https://github.com/Walnut356/snlib) every stroke record starts with.
  * Offsets confirmed against real fixtures: `DOC_KIND_OFFSET` is exactly
@@ -262,6 +279,11 @@ function tryParseStroke(view: DataView, byteLength: number, pos: number): RawStr
  * comment: a link-tag indicator box, not ink, confirmed against
  * `nomad-3.26.40-link-tag-3p.note`'s own footer `LINK_*` metadata.
  *
+ * Strokes whose `pen` is `4` are excluded unconditionally too -- see
+ * `LASSO_PEN_ID`'s doc comment: the loop drawn to lasso-select content
+ * (for deletion, moving, or Keyword/Tag creation), never rendered by the
+ * device.
+ *
  * Returns `[]` if `totalPathBuffer` is `null`, too short to hold a single
  * stroke, or its layout isn't recognized (e.g. a genuinely blank page, or a
  * page whose `TOTALPATH` uses a structure this hasn't been validated
@@ -300,7 +322,8 @@ export function parseStrokes(
 		const raw = tryParseStroke(view, byteLength, strokeStart);
 		const isEraser = raw?.color === ERASER_COLOR;
 		const isLinkTag = raw?.strokeKind === LINK_TAG_STROKE_KIND;
-		if (raw && !isLinkTag && (!isEraser || options.includeErasers)) {
+		const isLassoPath = raw?.pen === LASSO_PEN_ID;
+		if (raw && !isLinkTag && !isLassoPath && (!isEraser || options.includeErasers)) {
 			const scale = raw.screenHeight / pageHeight;
 			strokes.push({
 				points: raw.points.map(([y, x]) => ({ x: -x / scale + pageWidth, y: y / scale })),

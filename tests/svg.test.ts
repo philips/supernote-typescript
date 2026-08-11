@@ -397,16 +397,21 @@ describe("svg", () => {
 
     test("a 2-point stroke over real ink renders as a filled rect, not a phantom diagonal line (issue #56 follow-up)", { timeout: 30000 }, async () => {
       // nomad-3.15.27-blank-shapes-and-RTR.note has four small colored
-      // "badges" near the bottom of the page (highlighted digits 1-4), each
-      // with a colored background (three solid, one cross-hatch). TOTALPATH
+      // boxes near the bottom of the page (highlighted digits 1-4), each
+      // with a colored background (three solid, one cross-hatch). These
+      // read as "badges" at a glance, but are actually Headings: each one
+      // has its own real TITLE_* footer entry (TITLERECT matches this
+      // fixture's own 2-point rect strokes pixel-for-pixel, TITLESTYLE
+      // decodes its real background/text colors -- see the vector-format
+      // spec's "TITLE_ / KEYWORD_ footer metadata" section). TOTALPATH
       // decodes each background as a stroke with exactly *2* points -- not
       // a real 2-sample pen line (real strokes, even short ones, sample far
       // more points than that), but that record shape's actual meaning: the
       // two opposite corners of a filled rectangle. Confirmed by measuring
       // how much of each 2-point stroke's own bounding rectangle is already
-      // real ink in the page's raster: ~97% for the three solid badges,
-      // ~25% for the cross-hatch one, nothing like a thin diagonal line
-      // would leave behind.
+      // real ink in the page's raster: ~97% for the three solid ones, ~25%
+      // for the cross-hatch one, nothing like a thin diagonal line would
+      // leave behind.
       const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
 
@@ -491,7 +496,7 @@ describe("svg", () => {
     })
 
     test("a 2-point stroke over no real ink is skipped, not drawn as a phantom line (issue #56 follow-up)", { timeout: 30000 }, async () => {
-      // test.note has a 2-point-stroke decode that, unlike the rect badges
+      // test.note has a 2-point-stroke decode that, unlike the Heading rects
       // above, sits over completely blank raster (0% fill fraction) -- some
       // other, non-ink data that happens to satisfy the same record
       // checksum, not a real rectangle or a real stroke. It must not render
@@ -510,10 +515,12 @@ describe("svg", () => {
     })
 
     test("rects (highlight backgrounds) always draw before paths, regardless of TOTALPATH order", { timeout: 30000 }, async () => {
-      // On the same badges fixture, each badge's background rect record
-      // sits *after* its digit's ink stroke in TOTALPATH's own buffer
-      // order -- drawing strictly in that order (SVG paints later elements
-      // on top) would paint the background over the digit and hide it.
+      // On the same fixture (each highlighted digit is actually a Heading,
+      // per findMatchingTitleStyle above), each digit's Heading background
+      // rect record sits *after* its digit's ink stroke in TOTALPATH's own
+      // buffer order -- drawing strictly in that order (SVG paints later
+      // elements on top) would paint the background over the digit and hide
+      // it.
       const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
 
@@ -525,12 +532,12 @@ describe("svg", () => {
     })
 
     test("a stroke drawn over a different-colored background measures its own width, not the background's (issue #56 follow-up)", { timeout: 30000 }, async () => {
-      // Each digit badge's foreground digit stroke sits on top of its own
-      // solid-colored background rect (see the two tests above). Walking
-      // outward to measure width used to stop only at *any* non-ink pixel,
-      // so a thin digit surrounded by its own badge's opaque background
-      // color never found an edge until MAX_HALF_WIDTH -- measuring as wide
-      // as the badge itself instead of the actual thin digit stroke.
+      // Each digit's foreground stroke sits on top of its own solid-colored
+      // Heading background rect (see the two tests above). Walking outward
+      // to measure width used to stop only at *any* non-ink pixel, so a
+      // thin digit surrounded by its own Heading's opaque background color
+      // never found an edge until MAX_HALF_WIDTH -- measuring as wide as
+      // the background itself instead of the actual thin digit stroke.
       // Requiring the walk to match the stroke's own sampled color fixes
       // this: none of these digit strokes should measure anywhere near
       // MAX_HALF_WIDTH's ceiling.
@@ -541,9 +548,9 @@ describe("svg", () => {
       const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)]
       expect(rects.length).toBeGreaterThan(0)
 
-      // any path whose first point falls inside a badge rect is a digit
-      // stroke drawn over that badge -- none should be anywhere near as
-      // wide as the badge itself.
+      // any path whose first point falls inside a Heading rect is a digit
+      // stroke drawn over that Heading's background -- none should be
+      // anywhere near as wide as the background itself.
       const digitWidths = paths
         .filter(([, xStr, yStr]) => {
           const x = Number(xStr), y = Number(yStr)
@@ -760,8 +767,10 @@ describe("svg", () => {
       // note's own `.note` footer, keyed by TITLE_PPPPYYYYXXXX -- resolving
       // TITLESTYLE (see findMatchingTitleStyle/buildTitleIndex) recovers the
       // exact design palette (0/157/201), with none of the e-ink raster's
-      // quantization gap that sampleRect (the pre-issue-#60 fallback, still
-      // used for non-Heading rects like badges) has.
+      // quantization gap that sampleRect (the pre-issue-#60 fallback, kept
+      // for a 2-point rect with no TITLE_* match -- a badge/highlight box
+      // that isn't a Heading, though no current fixture in tests/input
+      // actually has one without TITLE_* metadata) has.
       //
       // The PDF's own 4th color (white) has no counterpart to compare here:
       // it's the cross-hatch heading's *background*, and this decode

@@ -167,7 +167,7 @@ function buildPathElement(stroke: IStroke, style: { color: string; width: number
  * then wide ("marker") `'path'`s, then narrow ("pen") `'path'`s -- instead
  * of strictly in `strokes`' order (i.e. TOTALPATH buffer order, which
  * doesn't reliably match how layered content was actually drawn). Confirmed
- * on real fixtures both ways: a badge's `'rect'` background record sits
+ * on real fixtures both ways: a Heading's `'rect'` background record sits
  * *after* the digit stroke it's meant to sit behind, and a highlighter
  * pass's record can sit after the pen ink drawn over it too -- either way,
  * drawing in plain buffer order (SVG paints later elements on top) paints

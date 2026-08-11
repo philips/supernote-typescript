@@ -272,9 +272,31 @@ Findings, each confirmed against device ground truth:
    `parseStrokes` unconditionally (they rendered as phantom black loops;
    never visible on-device in any fixture, whatever the selection did),
    alongside the existing `color=255` filtering + `includeErasers` white
-   overlay. Erase-exact output would now have to come from the raster
-   (e.g. intersecting decoded strokes against the rendered ink mask),
-   not from a smarter read of the stroke log.
+   overlay.
+4. **Erase-exact output, solved from the raster.** Since no per-stroke
+   field records it, `src/svg.ts`'s `vectorInk` now asks the page's own
+   rendered ink instead (`strokeInkPresence`): sample points along each
+   decoded stroke, look for ink of that stroke's *displayed* color nearby,
+   and drop the stroke if essentially none is there. The separation is
+   clean and the gap is empty — across every fixture with ground truth,
+   erased strokes measure exactly `0.00` (all 10 in `erase.note`, 20 of 21
+   in `horizontal_1270.note`, 29 in `turkish.note`) while surviving ones
+   measure `0.91`+. *Partially* erased strokes measure `0.15`+ and must
+   keep rendering, so the threshold sits at `0.05`: it removes only
+   strokes with no surviving ink at all, never a partial, and errs toward
+   leaving a faint ghost rather than deleting real content.
+
+   Two subtleties that both caused real regressions while implementing it:
+   the check runs *after* `applyHeadingContrastOverrides` and matches the
+   displayed color, because a Heading's label is black ink the device
+   paints white (matching its real black finds nothing and deletes every
+   heading label); and it is limited to `'path'` styles, because a
+   `'rect'` record's own color field is meaningless (§ 2-point records),
+   so colour-matching drops Heading backgrounds outright.
+
+   A page whose ink layers are empty is the same statement at page scale —
+   everything on it was erased — so nothing renders at all, including the
+   white eraser overlays, which is exactly `erase-no-white-pen.note`.
 
 ### `point_contour` — decoded: the device's own rendered outline
 
@@ -763,15 +785,12 @@ pass; the findings are folded into the sections above. In brief:
 7. ~~Decode `point_contour`~~ — done, see its section above: it is the
    device's real rendered outline (with true pressure-varying width), but
    it is **not** a record of what survived erasing, which was the reason
-   it was prioritized. Two follow-ons remain:
+   it was prioritized (that is now handled from the raster instead — see
+   the erase-records section). One follow-on remains:
    - **Render from the contour** instead of stroking the centerline at a
      uniform `thickness`, to match Supernote's own modern vector export.
      Measured gap: the ink and calligraphy pens fill only ~0.65× and
      ~0.2–0.3× of the nominal width that `vectorInk` currently draws.
-   - **Erase-exact export now has to come from the raster**, since no
-     per-stroke field carries visibility (see the erase-records section):
-     something like intersecting each decoded stroke, or its contour,
-     against the page's own rendered ink mask.
 8. **The remaining stroke-record tail** — `unk_17`, `unk_22`, and the
    `Section3`/`Section4` spans after `point_contour` are still
    uncharacterized (their combined size also varies by 4 bytes between

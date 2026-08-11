@@ -323,11 +323,11 @@ function withoutInkLayers(page: IPage): IPage {
 
 const INK_LAYER_NAMES: ILayerNames[] = ['MAINLAYER', 'LAYER1', 'LAYER2', 'LAYER3'];
 
-/** A page's rendered ink, decoded once per page -- the fallback source for a
- * `'rect'` stroke's color/fill (see `deriveStrokeStyle`) when it has no
- * matching `TITLE_*` footer entry (a rect's own `TOTALPATH` metadata isn't
- * meaningful the way a `'path'` stroke's is, and only Headings carry
- * `TITLE_*` metadata -- badges/highlight boxes still need this). */
+/** A page's rendered ink, decoded once per page. Two uses: the fallback
+ * source for a `'rect'` stroke's color/fill (see `deriveStrokeStyle`) when
+ * it has no matching `TITLE_*` footer entry, and -- more fundamentally --
+ * the only available record of which strokes were *erased*
+ * (`strokeInkPresence`). */
 interface InkMask {
 	/** 1 where that pixel (row-major, `y * pageWidth + x`) is real rendered
 	 * ink, 0 otherwise. */
@@ -394,6 +394,97 @@ const MIN_RECT_FILL_FRACTION = 0.15;
  * `StrokeStyle`'s doc comment. Sits comfortably between the two clusters
  * measured on a real fixture (~97-99% solid, ~25% cross-hatch). */
 const SOLID_RECT_MIN_FILL_FRACTION = 0.5;
+
+/** How many points along a stroke `strokeInkPresence` samples. Enough to
+ * catch a stroke that survives only in part, cheap enough to run on every
+ * stroke of a dense page. */
+const INK_PRESENCE_SAMPLE_COUNT = 60;
+/** At or below this fraction of a stroke's sampled points finding matching
+ * ink in the page's own render, `toSvg`'s `vectorInk` treats the stroke as
+ * erased and drops it entirely.
+ *
+ * Deliberately near zero, because the two failure modes are not
+ * symmetric: leaving an erased stroke in shows a ghost (today's bug), but
+ * dropping a live one destroys real content. Measured across every fixture
+ * with ground truth, the gap is wide and empty -- strokes the device
+ * really erased score exactly 0.00 (all 10 in `erase.note`, 20 of 21 in
+ * `horizontal_1270.note`, 29 in `turkish.note`), strokes it still draws
+ * score >= 0.91, and *partially* erased strokes -- which must keep
+ * rendering -- score 0.15 and up. Sitting at 0.05 removes only strokes
+ * with no surviving ink at all, and never touches a partial. */
+const MAX_ERASED_INK_PRESENCE = 0.05;
+/** How far from a sampled point `strokeInkPresence` looks for matching ink,
+ * beyond the stroke's own rendered half width -- absorbs the point-to-pixel
+ * rounding and the slight spread of the device's own rasterizer. */
+const INK_PRESENCE_SEARCH_MARGIN_PX = 1;
+/** How far a rendered ink pixel's grey level may sit from the stroke's own
+ * declared color and still count as that stroke's ink. Wide enough for the
+ * e-ink quantization already documented for `color` (157 vs. 158, 201 vs.
+ * 202 -- see plans/vector-format-spec.md), narrow enough that black ink
+ * never matches a white-pen stroke or vice versa. */
+const INK_PRESENCE_GREY_TOLERANCE = 48;
+
+/**
+ * What fraction of `stroke` still has matching ink in `mask`, the page's own
+ * rendered output -- i.e. how much of it the device actually still draws.
+ *
+ * This exists because **erasing is not recorded per-stroke anywhere in
+ * `TOTALPATH`**. An erased stroke stays in the stroke log byte for byte
+ * like a live one: its points, its `flag_draw` array, and even its
+ * `point_contour` rendered outline are all unchanged (see
+ * `parseStrokes`' doc comment and plans/vector-format-spec.md's
+ * erase-records section, which rules each of those out in turn against
+ * fixtures where the device's own PDF export proves what survived). The
+ * eraser's own motion is logged as a separate stroke, but replaying it
+ * geometrically is provably wrong -- the same record shapes mean "erase"
+ * on one page and "lasso-select for a Keyword" on another.
+ *
+ * So the rendered bitmap is the only thing that knows, and this asks it
+ * directly. That inverts the usual relationship for `vectorInk` (real
+ * metadata first, raster only as a fallback), but here the raster *is* the
+ * primary record -- there is nothing more authoritative to prefer.
+ *
+ * `displayColor` is the color the stroke is *rendered* in rather than
+ * `IStroke.color`, because those differ exactly where it matters: a
+ * Heading's label text is black ink the device paints white for contrast
+ * (see `applyHeadingContrastOverrides`), so matching its real black would
+ * find no ink and wrongly delete every heading label.
+ */
+function strokeInkPresence(
+	stroke: IStroke,
+	displayColor: string,
+	mask: InkMask,
+	pageWidth: number,
+	pageHeight: number,
+): number {
+	if (stroke.points.length === 0) return 1;
+	const targetGrey = Number(/rgb\((\d+)/.exec(displayColor)?.[1] ?? '0');
+	const radius = Math.max(1, Math.round(stroke.thickness / (THICKNESS_TO_PIXEL_SCALE * 2))) + INK_PRESENCE_SEARCH_MARGIN_PX;
+	const step = Math.max(1, Math.floor(stroke.points.length / INK_PRESENCE_SAMPLE_COUNT));
+
+	let sampled = 0;
+	let found = 0;
+	for (let i = 0; i < stroke.points.length; i += step) {
+		sampled++;
+		const centerX = Math.round(stroke.points[i].x);
+		const centerY = Math.round(stroke.points[i].y);
+		let hit = false;
+		for (let y = centerY - radius; y <= centerY + radius && !hit; y++) {
+			if (y < 0 || y >= pageHeight) continue;
+			for (let x = centerX - radius; x <= centerX + radius; x++) {
+				if (x < 0 || x >= pageWidth) continue;
+				const p = y * pageWidth + x;
+				if (!mask.isInk[p]) continue;
+				if (Math.abs(mask.colors[p * 3] - targetGrey) <= INK_PRESENCE_GREY_TOLERANCE) {
+					hit = true;
+					break;
+				}
+			}
+		}
+		if (hit) found++;
+	}
+	return sampled > 0 ? found / sampled : 1;
+}
 
 function modeColor(colorCounts: Map<string, number>): string | undefined {
 	let bestKey: string | undefined;
@@ -744,10 +835,14 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 						if (nativeStrokes.length === 0) return -1;
 						const mask = buildInkMask(page, note.pageWidth, note.pageHeight);
 						const titleIndex = buildTitleIndex(note, pageNumber);
-						const styles = nativeStrokes.map((stroke) =>
-							deriveStrokeStyle(stroke, mask, titleIndex, note.pageWidth, note.pageHeight),
-						);
-						strokeStylesPerPage[i] = applyHeadingContrastOverrides(
+						// A page whose ink layers are empty has had everything on it
+						// erased, so nothing is drawn at all: not the erased
+						// strokes, and not the white eraser overlays that would
+						// otherwise paint over ink that is no longer there.
+						const styles = mask
+							? nativeStrokes.map((stroke) => deriveStrokeStyle(stroke, mask, titleIndex, note.pageWidth, note.pageHeight))
+							: nativeStrokes.map((): StrokeStyle => ({ shape: 'skip' }));
+						const displayStyles = applyHeadingContrastOverrides(
 							nativeStrokes,
 							styles,
 							titleIndex,
@@ -755,6 +850,22 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 							note.pageWidth,
 							note.pageHeight,
 						);
+						// A stroke the device no longer draws must not be drawn here
+						// either, and only the rendered ink knows which those are
+						// (see strokeInkPresence). Applied last, so a Heading label's
+						// displayed (contrast-flipped) color is the one matched
+						// against the render rather than its real ink color.
+						// Limited to `'path'` styles: an eraser is a deliberate white
+						// overlay rather than ink to look for, and a `'rect'` carries
+						// no meaningful color of its own to match (see StrokeStyle) --
+						// both already answer "is this still there?" their own way.
+						strokeStylesPerPage[i] = displayStyles.map((style, j) => {
+							if (!mask || style.shape !== 'path' || nativeStrokes[j].isEraser) return style;
+							return strokeInkPresence(nativeStrokes[j], style.color, mask, note.pageWidth, note.pageHeight) <=
+								MAX_ERASED_INK_PRESENCE
+								? { shape: 'skip' }
+								: style;
+						});
 						return pageNumber;
 					})
 					.filter((pageNumber) => pageNumber !== -1),

@@ -600,12 +600,59 @@ describe("svg", () => {
       // record) must not start any rendered path
       expect(svg).not.toContain("M462.25,2051.01")
 
-      // and the page's stroke inventory renders exactly: 10 dark ink +
-      // 4 white-ink cover-ups + 4 white eraser overlays = 18 paths
+      // Of this page's 18 decodable strokes, every one of the 10 dark ink
+      // strokes was erased, and erase.pdf accordingly draws only the 4
+      // white-ink cover-up strokes. So nothing dark may render: what's left
+      // is those 4 white strokes plus the 4 white eraser overlays, all of
+      // which are white-on-white and so visually blank, matching the PDF.
       const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="([^"]+)"/g)]
-      expect(paths.length).toBe(18)
+      expect(paths.length).toBe(8)
       const whiteCount = paths.filter(([, , , color]) => color === "rgb(255,255,255)" || color === "rgb(254,254,254)").length
       expect(whiteCount).toBe(8)
+    })
+
+    test("an all-erased page renders completely blank, like the device's own export (erase-no-white-pen.note)", { timeout: 30000 }, async () => {
+      // erase-no-white-pen.note is one page of 4 lines in 4 different pens,
+      // every one erased -- by the drag eraser, the lasso eraser, and
+      // select-and-delete -- with no white-ink cover-ups involved. The
+      // device renders it blank and erase-no-white-pen.pdf (Supernote's own
+      // vector export) draws nothing at all.
+      //
+      // Nothing in TOTALPATH marks those strokes as erased (see
+      // strokeInkPresence), so vectorInk used to draw all five in full plus
+      // white eraser scribbles over them. The page's ink layers are empty,
+      // which is the raster saying everything on it is gone.
+      const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"))
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
+      expect(strokes.length).toBe(8) // 5 ink + 3 erasers still decode...
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      expect(svg).not.toContain("<path ") // ...but none of them render
+      expect(svg).not.toContain("<rect ")
+    })
+
+    test("erased strokes are dropped, and surviving ones kept, matching the device's own PDF export (horizontal_1270)", { timeout: 30000 }, async () => {
+      // horizontal_1270.pdf draws exactly 61 of this page's 82 decodable
+      // ink strokes -- the other 21 were erased (the "writing"/"note"
+      // correction). Ink presence in the page's own render separates them
+      // cleanly: erased strokes measure 0.00 there and surviving ones 0.91+.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/horizontal_1270.pdf"))
+      const drawnByDevice = (pdfStreams[0].toString("latin1").match(/(?:^|\s)S(?:\s|$)/g) ?? []).length
+      expect(drawnByDevice).toBe(61)
+
+      const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"))
+      const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(decoded.length).toBe(82) // every stroke still decodes...
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const paths = [...svg.matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)]
+      const inkPaths = paths.filter(([, color]) => color !== "rgb(255,255,255)")
+      // ...but only the surviving ones render, within one stroke of the
+      // device's own count. (The threshold is deliberately set to never
+      // delete a partially-erased stroke, which leaves one faint remnant
+      // here rather than risking real ink -- see MAX_ERASED_INK_PRESENCE.)
+      expect(inkPaths.length).toBeGreaterThanOrEqual(drawnByDevice)
+      expect(inkPaths.length).toBeLessThanOrEqual(drawnByDevice + 2)
     })
 
     test("rects (highlight backgrounds) always draw before paths, regardless of TOTALPATH order", { timeout: 30000 }, async () => {

@@ -982,6 +982,41 @@ describe("svg", () => {
       expect(median).toBeLessThan(5.5)
     })
 
+    test("erasing among mixed-colour ink doesn't confuse one colour's survival for another's (erase-colors.pdf)", { timeout: 60000 }, async () => {
+      // erase-colors.note interleaves grey (158) marker bands with black
+      // (0) pen writing and then erases some of each. Deciding what
+      // survived matches each stroke's colour against the rendered ink
+      // (strokeInkPresence), so this is the page that would catch that
+      // matching being too loose -- a grey stroke "surviving" because a
+      // black neighbour's ink is nearby, or vice versa.
+      //
+      // Page 1 has no erasers at all and acts as the control: whatever
+      // fraction of the device's ink we draw there is our width accuracy
+      // alone. Page 2 is the same content erased, so if the erase
+      // decisions were skewing, its ratio would drift away from page 1's.
+      // They come out the same.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/erase-colors.pdf"))
+      const sn = new SupernoteX(await readFileToUint8Array("erase-colors.note"))
+      const svgs = await toSvg(sn, { vectorInk: true })
+
+      const control = svgInkArea(svgs[0]) / pdfFilledArea(pdfStreams[0])
+      const erased = svgInkArea(svgs[1]) / pdfFilledArea(pdfStreams[1])
+      expect(control).toBeGreaterThan(0.85)
+      expect(control).toBeLessThan(1.1)
+      expect(Math.abs(erased - control)).toBeLessThan(0.1)
+
+      // page 1 is untouched, so every one of its strokes must survive
+      const page1 = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(page1.every((s) => !s.eraserTouched)).toBe(true)
+      expect([...svgs[0].matchAll(/<path d="M[^"]*" fill="none"/g)].length).toBe(page1.length)
+
+      // and both colours are still drawn on the erased page -- neither got
+      // wholly mistaken for the other and dropped
+      const drawnColours = new Set([...svgs[1].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1]))
+      expect(drawnColours).toContain("rgb(0,0,0)")
+      expect([...drawnColours].some((c) => /rgb\(15[0-9],/.test(c))).toBe(true)
+    })
+
     test("a calligraphy pen is drawn far narrower than its nominal width, matching the device's own ink (caligraphy.pdf)", { timeout: 60000 }, async () => {
       // caligraphy.note is three pages of nothing but the calligraphy pen
       // (pen=15) at three width settings, with caligraphy.pdf as Supernote's

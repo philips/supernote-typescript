@@ -475,14 +475,46 @@ the correction is large either way:
 | `caligraphy` p1–p3 (`pen=15`) | 1.82–1.97× | 0.67–0.81× |
 | `caligraphy` p4 (mostly erased) | — | 0.84× |
 
-**Residual gap.** Measuring leaves ink consistently ~15–35% *under* the
-device's own filled outlines. That is not a uniform-width artifact —
-`point_contour`'s own enclosed area sits at the same 0.67–0.88× of the
-PDF's, so filling the contour exactly would not close it either. Whatever
-the device's exporter does to widen its outlines (feathering, a stroke
-alongside the fill, a dilation step) is not in the stroke record. No fudge
-factor is applied: the spread across fixtures is too wide (0.67–0.88) for a
-single constant to be honest, and erring narrow is the safer direction.
+**Calibrated exactly against widths the device states as numbers.**
+Supernote's exporter uses *two* styles, sometimes within one file: filled
+outlines (`f`) for some strokes, and stroked polylines carrying an explicit
+`w` for others. The second kind is far better ground truth, because the
+width is a number the device wrote down rather than a shape to measure —
+and `stroke-isolation.pdf`'s page 4 is exactly that, one needle-pen stroke
+per width setting:
+
+| setting | `thickness` | device `w` | `strokeRenderWidth` |
+|---|---|---|---|
+| 1.0 | 1200 | 12 | 12.01 |
+| 0.6 | 700 | 7 | 7.02 |
+| 0.3 | 400 | 4 | 4.05 |
+| 0.1 | 200 | 2 | 1.99 |
+
+All four within 1%, derived from each stroke's contour without consulting
+the pen id or the thickness setting. That is what makes the measurement
+trustworthy in absolute terms rather than merely self-consistent.
+
+The same file separates the tools cleanly, each page isolating one variable
+(note page 3 is `pen=16`, the newer ink pen, *not* the needle pen):
+
+| Pen | contour ÷ nominal |
+|---|---|
+| `pen=10` needle | 1.00 — nominal is exact |
+| `pen=11` marker | ~1.01 |
+| `pen=16` ink pen (newer) | ~0.82 |
+| `pen=1` ink pen (older) | ~1.95 |
+| `pen=15` calligraphy | ~0.17 |
+
+**Residual, and why nothing is done about it.** Against the *filled-outline*
+exports our ink lands ~15–35% under. But those outlines are the exporter's
+own drawing of the shape, and page 4 shows that where the device states a
+width numerically we match it to 1% — so the gap is in that comparison, not
+in the width. `point_contour`'s own enclosed area sits at the same
+0.67–0.88× of those outlines, so filling the contour would not close it
+either; whatever the exporter does to widen them (feathering, a dilation
+step, a stroke alongside the fill) is not in the stroke record. No
+correction factor is applied, and page 4 is why: adding one would break the
+case that is currently exact.
 
 ### 2-point records — a distinct sub-type, not a style choice
 

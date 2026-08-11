@@ -1025,6 +1025,34 @@ describe("svg", () => {
       expect(widths[widths.length - 1]).toBeLessThan(pdfWidths[0] * 1.5)
     })
 
+    test("measured stroke widths match the widths the device states outright, across its whole width range (stroke-isolation.pdf p4)", { timeout: 30000 }, async () => {
+      // The strongest width ground truth available. stroke-isolation.note's
+      // page 4 is one needle-pen stroke per width setting (1.0, 0.6, 0.3,
+      // 0.1), and Supernote's own export writes that page as stroked
+      // polylines carrying explicit `w` operators -- so the device states
+      // each width as a number rather than drawing an outline to measure.
+      //
+      // strokeRenderWidth derives its widths from each stroke's own contour
+      // without consulting the pen or the thickness setting, and lands on
+      // all four to within 1%. That is what says the measurement is right
+      // in absolute terms, not merely self-consistent -- and it is why no
+      // correction factor is applied to it: the ~16% by which our widths
+      // sit under the device's *filled outline* exports (see the residual
+      // note in plans/vector-format-spec.md) is a property of those
+      // outlines, not of the width.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/stroke-isolation.pdf"))
+      const deviceWidths = [...pdfStreams[3].toString("latin1").matchAll(/([\d.]+) w\b/g)].map((m) => Number(m[1]))
+      expect(deviceWidths).toEqual([12, 7, 4, 2])
+
+      const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"))
+      const [, , , page4] = await toSvg(sn, { vectorInk: true })
+      const ourWidths = [...page4.matchAll(/stroke-width="([\d.]+)"/g)].map((m) => Number(m[1]))
+      expect(ourWidths.length).toBe(deviceWidths.length)
+      ourWidths.forEach((width, i) => {
+        expect(Math.abs(width - deviceWidths[i]) / deviceWidths[i]).toBeLessThan(0.03)
+      })
+    })
+
     test("an older ink pen is drawn at its real rendered width, not its much thinner nominal one (a5x-2.14.28.pdf)", { timeout: 30000 }, async () => {
       // a5x-2.14.28.note's page is 146 strokes of the older ink pen
       // (pen=1, thickness=200 -> 2px nominal), and a5x-2.14.28.pdf is

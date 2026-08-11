@@ -1281,7 +1281,7 @@ describe("svg", () => {
         expect(vectorSvgs.length).toBe(sn.pages.length)
 
         await Promise.all(
-          vectorSvgs.map((svg, i) => {
+          vectorSvgs.flatMap((svg, i) => {
             // Keep every page vectorInk actually handled -- which is the
             // ones whose strokes decoded, the same test toSvg itself uses.
             // Deliberately not "has <path>": a page whose strokes were all
@@ -1291,7 +1291,19 @@ describe("svg", () => {
             // and would just duplicate a toSvg() render.
             const vectorized =
               parseStrokes(sn.pages[i].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true }).length > 0
-            return vectorized ? fs.writeFile(`tests/output/${file}.${i}.vector.svg`, svg) : Promise.resolve()
+            if (!vectorized) return []
+            // Save the device's own rendering of the same page beside it, so
+            // every vector output has the thing it's supposed to look like
+            // sitting next to it. main.test.ts also writes page rasters, but
+            // only for a hand-listed set of fixtures that no new one joins;
+            // this covers all of them. It's free: the plain toSvg() render
+            // already embeds that raster as a PNG data URI, so it only has
+            // to be unwrapped rather than rendered again.
+            const embeddedPng = /xlink:href="data:image\/png;base64,([^"]+)"/.exec(rasterSvgs[i])
+            return [
+              fs.writeFile(`tests/output/${file}.${i}.vector.svg`, svg),
+              ...(embeddedPng ? [fs.writeFile(`tests/output/${file}.${i}.device.png`, Buffer.from(embeddedPng[1], "base64"))] : []),
+            ]
           }),
         )
 

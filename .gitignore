@@ -1,4 +1,5 @@
 lib/*
+site/
 node_modules/
 tests/output/*.png
 tests/output/*.jpg

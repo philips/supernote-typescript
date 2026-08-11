@@ -5,11 +5,25 @@ import globals from 'globals';
 
 export default [
 	{
-		ignores: ['lib/**', 'coverage/**'],
+		ignores: ['lib/**', 'coverage/**', 'site/**'],
 	},
 	{
 		files: ['**/*.ts'],
 		...js.configs.recommended,
+	},
+	{
+		// Build tooling (scripts/) is plain ESM JavaScript so it can run on
+		// node against lib/ without pulling in a TypeScript runner.
+		files: ['**/*.mjs'],
+		...js.configs.recommended,
+		languageOptions: {
+			ecmaVersion: 'latest',
+			sourceType: 'module',
+			globals: {
+				...globals.node,
+				...globals.es2021,
+			},
+		},
 	},
 	{
 		files: ['**/*.ts'],

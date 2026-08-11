@@ -142,6 +142,27 @@ Used this way in the [Supernote Obsidian Plugin](https://github.com/philips/supe
 npx jest -t 'manta'
 ```
 
+### Fixture comparison site
+
+`toSvg({ vectorInk: true })` redraws a page's ink as real vector paths, and
+the fixtures under `tests/input/` that ship with Supernote's own PDF export
+give an independent answer for what that ink should look like. The site puts
+the two side by side, page by page:
+
+```
+npm run build:site   # writes site/
+```
+
+Both sides are vector ink only — the device keeps its background in a
+separate image, so ours has its background raster stripped to match. Each
+page is labelled with the ink it lays down as a fraction of the device's,
+which is blunt on its own but catches a whole stroke going missing or a tool
+drawn at the wrong width.
+
+CI builds it on every pull request and attaches it as a downloadable
+artifact; merges to `main` publish it to GitHub Pages
+(`.github/workflows/pages.yml`).
+
 ### Publish
 
 ```

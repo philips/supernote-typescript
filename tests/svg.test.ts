@@ -63,6 +63,70 @@ function extractPdfColors(stream: Buffer): [number, number, number][] {
   return [...colors.values()]
 }
 
+/** Total ink area a PDF content stream fills, in page pixels squared.
+ * Flattens each `c` curve into line segments and sums the subpaths of every
+ * `f` group with *signed* shoelace areas, so a filled letter's inner hole
+ * subtracts instead of adding (see signedRingArea in src/svg.ts). Lets a
+ * page's rendered ink be compared as one number against what vectorInk
+ * draws, for the newer "filled outline" export style that has no `w` widths
+ * to read off directly. */
+function pdfFilledArea(stream: Buffer): number {
+  type P = { x: number; y: number }
+  const signedArea = (ring: P[]) => {
+    let sum = 0
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) sum += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y)
+    return sum / 2
+  }
+  let total = 0
+  let rings: P[][] = []
+  let cur: P[] = []
+  let pen: P = { x: 0, y: 0 }
+  const nums: number[] = []
+  for (const token of stream.toString("latin1").split(/\s+/)) {
+    const value = Number(token)
+    if (token !== "" && Number.isFinite(value)) { nums.push(value); continue }
+    if (token === "m" || token === "l") {
+      if (token === "m" && cur.length > 2) rings.push(cur)
+      pen = { x: nums[nums.length - 2], y: nums[nums.length - 1] }
+      if (token === "m") cur = [pen]
+      else cur.push(pen)
+    } else if (token === "c") {
+      const [x1, y1, x2, y2, x3, y3] = nums.slice(-6)
+      const from = pen
+      for (let step = 1; step <= 12; step++) {
+        const u = step / 12, v = 1 - u
+        cur.push({
+          x: v * v * v * from.x + 3 * v * v * u * x1 + 3 * v * u * u * x2 + u * u * u * x3,
+          y: v * v * v * from.y + 3 * v * v * u * y1 + 3 * v * u * u * y2 + u * u * u * y3,
+        })
+      }
+      pen = { x: x3, y: y3 }
+    } else if (token === "f" || token === "f*") {
+      if (cur.length > 2) rings.push(cur)
+      if (rings.length) total += Math.abs(rings.reduce((sum, ring) => sum + signedArea(ring), 0))
+      rings = []
+      cur = []
+    }
+    nums.length = 0
+  }
+  return total
+}
+
+/** Ink area a vectorInk SVG actually draws: each stroked path's length times
+ * its width. Eraser overlays (pure white) are excluded -- they're a
+ * paint-over, not ink. */
+function svgInkArea(svg: string): number {
+  let total = 0
+  for (const [, d, color, width] of svg.matchAll(/<path d="([^"]+)" fill="none" stroke="([^"]+)" stroke-width="([\d.]+)"/g)) {
+    if (color === "rgb(255,255,255)") continue
+    const points = [...d.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }))
+    let length = 0
+    for (let i = 1; i < points.length; i++) length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
+    total += length * Number(width)
+  }
+  return total
+}
+
 describe("svg", () => {
   test("generates a searchable SVG with an RTR text overlay", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
@@ -911,6 +975,68 @@ describe("svg", () => {
       const median = widths[Math.floor(widths.length / 2)]
       expect(median).toBeGreaterThan(3) // nominal would put every one of these at 2.0
       expect(median).toBeLessThan(5.5)
+    })
+
+    test("a calligraphy pen is drawn far narrower than its nominal width, matching the device's own ink (caligraphy.pdf)", { timeout: 60000 }, async () => {
+      // caligraphy.note is three pages of nothing but the calligraphy pen
+      // (pen=15) at three width settings, with caligraphy.pdf as Supernote's
+      // own vector export. The chisel nib lays down far less ink than its
+      // configured width implies, in the opposite direction to the older ink
+      // pen: drawing these at nominal width covers ~1.9x the ink the device
+      // does, where measuring each stroke's own outline lands at ~0.7-0.85x.
+      // Neither is exact, but only one is the right side of the truth, and
+      // the error is a third the size.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/caligraphy.pdf"))
+      const sn = new SupernoteX(await readFileToUint8Array("caligraphy.note"))
+      const svgs = await toSvg(sn, { vectorInk: true })
+
+      for (const pageIndex of [0, 1, 2]) {
+        const strokes = parseStrokes(sn.pages[pageIndex].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+        const nominalWidth = strokes[0].thickness / 100
+        expect(new Set(strokes.map((s) => s.thickness)).size).toBe(1) // one setting per page
+
+        const widths = [...svgs[pageIndex].matchAll(/stroke-width="([\d.]+)"/g)]
+          .map((m) => Number(m[1]))
+          .sort((a, b) => a - b)
+        const median = widths[Math.floor(widths.length / 2)]
+        expect(median).toBeGreaterThan(nominalWidth * 0.25)
+        expect(median).toBeLessThan(nominalWidth * 0.6)
+
+        // and the total ink drawn tracks the device's own, which drawing at
+        // nominal width could not (it would be ~1.9x)
+        const deviceArea = pdfFilledArea(pdfStreams[pageIndex])
+        const drawnArea = svgInkArea(svgs[pageIndex])
+        expect(drawnArea / deviceArea).toBeGreaterThan(0.55)
+        expect(drawnArea / deviceArea).toBeLessThan(1.1)
+
+        const nominalArea = strokes.reduce((sum, s) => {
+          let length = 0
+          for (let i = 1; i < s.points.length; i++)
+            length += Math.hypot(s.points[i].x - s.points[i - 1].x, s.points[i].y - s.points[i - 1].y)
+          return sum + length * nominalWidth
+        }, 0)
+        expect(nominalArea / deviceArea).toBeGreaterThan(1.5) // the bug this replaced
+      }
+    })
+
+    test("caligraphy.note page 4 keeps only the word that survived erasing", { timeout: 30000 }, async () => {
+      // Page 4 of that fixture is a whole page of calligraphy erased down to
+      // the single word "Erase" -- 19 ink strokes decode, but the device's
+      // render and its PDF export both show only the handful that are left.
+      const sn = new SupernoteX(await readFileToUint8Array("caligraphy.note"))
+      const decoded = parseStrokes(sn.pages[3].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(decoded.length).toBe(19)
+
+      const svgs = await toSvg(sn, { vectorInk: true })
+      const inkPaths = [...svgs[3].matchAll(/<path d="[^"]*" fill="none" stroke="([^"]+)"/g)].filter(
+        ([, color]) => color !== "rgb(255,255,255)",
+      )
+      expect(inkPaths.length).toBe(7)
+
+      const deviceArea = pdfFilledArea(extractPdfFormXObjectStreams(await fs.readFile("tests/input/caligraphy.pdf"))[3])
+      const drawnArea = svgInkArea(svgs[3])
+      expect(drawnArea / deviceArea).toBeGreaterThan(0.55)
+      expect(drawnArea / deviceArea).toBeLessThan(1.1)
     })
 
     const NEAR_DUPLICATE_TOLERANCE = 5

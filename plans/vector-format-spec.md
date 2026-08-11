@@ -387,7 +387,7 @@ its nominal width, across every fixture, splits the pens in two:
 | **`pen=1` ink pen (older)** | **1.5–2.0×** — renders far wider than nominal |
 | `pen=11` marker @1500 | 2.02× |
 | `pen=16` ink pen (newer) | 0.77× |
-| `pen=15` calligraphy | ~0.2–0.3× (chisel tip: much less ink than its width implies) |
+| **`pen=15` calligraphy** | **~0.35–0.45×** — chisel nib lays down far *less* ink than its width implies |
 
 `pen=1` is what every A5X and Nomad fixture writes with, so drawing at
 nominal width made `vectorInk` output visibly thinner than the same page's
@@ -406,6 +406,24 @@ short stroke's area is mostly cap and implies an implausibly wide line.
 The ring areas must be summed **signed**, so that a closed letter's inner
 hole subtracts: counting it as more ink made every `e`/`o`/`a` measure up
 to 3× too wide.
+
+Both directions of the error are now covered by a dedicated fixture, and
+the correction is large either way:
+
+| Fixture (device PDF as truth) | ink drawn at nominal | measured from contour |
+|---|---|---|
+| `a5x-2.14.28` (ink pen, `pen=1`) | 0.40× | 0.84× |
+| `caligraphy` p1–p3 (`pen=15`) | 1.82–1.97× | 0.67–0.81× |
+| `caligraphy` p4 (mostly erased) | — | 0.84× |
+
+**Residual gap.** Measuring leaves ink consistently ~15–35% *under* the
+device's own filled outlines. That is not a uniform-width artifact —
+`point_contour`'s own enclosed area sits at the same 0.67–0.88× of the
+PDF's, so filling the contour exactly would not close it either. Whatever
+the device's exporter does to widen its outlines (feathering, a stroke
+alongside the fill, a dilation step) is not in the stroke record. No fudge
+factor is applied: the spread across fixtures is too wide (0.67–0.88) for a
+single constant to be honest, and erring narrow is the safer direction.
 
 ### 2-point records — a distinct sub-type, not a style choice
 
@@ -821,14 +839,15 @@ pass; the findings are folded into the sections above. In brief:
    (`strokeRenderWidth`, see the thickness section), which is what the
    decode turned out to be worth. One follow-on remains:
    - **Fill the contour** rather than stroking the centerline at the single
-     width derived from it, which is the last of the gap to Supernote's own
-     modern vector export: a uniform width can't express the variation
-     along a stroke, and can't represent a chisel-tipped calligraphy pen at
-     all (its area-correct width, ~0.2–0.3× nominal, is right on average
-     but thin everywhere the nib is broad). Would close the remaining
-     ~16% area gap measured against `a5x-2.14.28.pdf`. The main work is
-     that contour coordinates are absolute page pixels, so they need
-     explicit scaling under `toSvg`'s `upscale` option, unlike points.
+     width derived from it. This buys *shape* fidelity, not area: a uniform
+     width can't express the variation along a stroke, and can't represent
+     a chisel-tipped calligraphy pen at all (its area-correct width is
+     right on average but thin wherever the nib is broad, and thick
+     wherever it's edge-on). It would **not** close the residual area gap
+     documented in the thickness section — the contour's own area is the
+     same ~0.67–0.88× of the device's. The main work is that contour
+     coordinates are absolute page pixels, so they need explicit scaling
+     under `toSvg`'s `upscale` option, unlike points.
 8. **The remaining stroke-record tail** — `unk_17`, `unk_22`, and the
    `Section3`/`Section4` spans after `point_contour` are still
    uncharacterized (their combined size also varies by 4 bytes between

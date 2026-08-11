@@ -124,10 +124,31 @@ firmware-dependent, don't key on it.
 | `"others"` | every freehand ink stroke, all pens, all fixtures (600+ strokes) — matches snlib |
 | `"0001"` | every 2-point rect record |
 | `"0000"` | a 5-point closed-rectangle record for the "link tag" feature's own indicator box (`pen=0`, like `"0001"`) — never real ink, confirmed against `nomad-3.26.40-link-tag-3p.note`: every one of its `"0000"` records' bounding box matches one of the note's own footer `LINK_*` entries' `LINKRECT` pixel-exact, and none of them appear in the page's own rendered ink. `src/strokes.ts`'s `parseStrokes` excludes these unconditionally now (they used to render as a phantom stroked-outline box in `vectorInk` output, since nothing distinguished them from ordinary ink before this field was decoded). |
+| `"straightLine"` | the ruler/straight-line tool — also **exactly two points**, being the line's endpoints (`straight-line.note`; those records read `pen=10, thickness=400`, i.e. an ordinary needle pen, and `doc_kind: "name is not set"` like a rect) |
 | `"fiveStarsSignal"` | the Stars feature's star mark (`nomad-3.15.27-blank-shapes-and-RTR.note`, drawn with the circled-star gesture; that stroke also reads `pen=5, thickness=100`) |
 
-`"straightLine"` (snlib's other documented value) has still never been
-observed — none of the fixtures used the ruler/straight-line tool.
+**`stroke_kind` is the only sound way to tell a filled rectangle from a
+two-point *line*.** Three unrelated things store exactly two points, and
+counting points cannot separate them:
+
+| `stroke_kind` | two points mean | count in fixtures |
+|---|---|---|
+| `"0001"` | opposite corners of a filled box | 10 |
+| `"straightLine"` | the two ends of a line | 8 |
+| `"others"` | an ordinary ink stroke that happens to be a dot/tap | 2 |
+
+They never overlap. Before `straight-line.note` existed, `src/svg.ts`
+treated any two-point record as a rectangle and used a raster fill-fraction
+test to reject the ones that "weren't real" — which turned each of that
+fixture's ruler lines into either a degenerate invisible box or nothing at
+all (page 1's six lines rendered as three invisible rects and zero lines).
+`IStroke.isFilledRect` now carries the record's own answer.
+
+The same correction retires an old misreading: `test.note`'s two-point
+`"others"` record was assumed to be non-ink noise sitting "over blank
+raster". The page's own render has ink at exactly that pixel and no other
+stroke passes within 12px of it, so it is a real pen tap — it was only ever
+invisible because the rect path drew it as a 0.13px box.
 
 ### Coordinate transform
 
@@ -859,8 +880,10 @@ pass; the findings are folded into the sections above. In brief:
    `TITLE_*` metadata before this was fixed.
 3. **`pen=5`'s meaning** — used by the star mark and by some ordinary
    strokes in `test.note`; not yet isolated to a tool.
-4. **`"straightLine"`** — still never observed; needs a fixture drawn with
-   the ruler/straight-line tool. This Supernote feature is described [on the blog](https://supernote.com/blogs/supernote-blog/introducing-the-smart-straight-line-feature-and-smoother-handwriting-strokes).
+4. ~~`"straightLine"`~~ — observed, via `straight-line.note`. It turned out
+   to matter rather than being a loose end: those records store two points,
+   which `vectorInk` was reading as a filled rectangle, so every ruler line
+   rendered as an invisible box or not at all. See the `stroke_kind` table.
 5. **`ink.bink` element-table `B` field** and the `03`-tagged u32s in
    `page.bdom` — the last uncharacterized values in otherwise-decoded
    structures. Nothing depends on them.

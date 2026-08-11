@@ -559,23 +559,57 @@ describe("svg", () => {
       })
     })
 
-    test("a 2-point stroke over no real ink is skipped, not drawn as a phantom line (issue #56 follow-up)", { timeout: 30000 }, async () => {
-      // test.note has a 2-point-stroke decode that, unlike the Heading rects
-      // above, sits over completely blank raster (0% fill fraction) -- some
-      // other, non-ink data that happens to satisfy the same record
-      // checksum, not a real rectangle or a real stroke. It must not render
-      // as either a filled rect or a stroked line.
+    test("having two points doesn't make a record a rectangle -- only its stroke_kind does", { timeout: 30000 }, async () => {
+      // Three different things store exactly two points, and TOTALPATH says
+      // which is which in each record's own stroke_kind (IStroke.isFilledRect):
+      //   "0001"         a Heading/badge background -- opposite corners
+      //   "straightLine" the ruler tool -- the ends of a line
+      //   "others"       an ordinary ink stroke that happens to be a dot
+      // Counting points instead drew straight-line.note's lines as filled
+      // boxes or dropped them outright.
+      //
+      // test.note's page 1 holds the third kind: a single pen tap, 0.13px
+      // end to end. It was long assumed to be non-ink noise "over blank
+      // raster", but the page's own render has ink at exactly that pixel
+      // and no other stroke comes within 12px of it, so it is a real (if
+      // tiny) mark and belongs in the output -- as a path, not a rect.
       const sn = new SupernoteX(await readFileToUint8Array("test.note"))
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
-      const noiseStroke = strokes.find((s) => s.points.length === 2)
-      expect(noiseStroke).toBeDefined()
+      const twoPointStrokes = strokes.filter((s) => s.points.length === 2)
+      expect(twoPointStrokes.length).toBeGreaterThanOrEqual(2)
+      // one is a real rect, the other is the pen tap -- same point count,
+      // opposite meanings
+      expect(twoPointStrokes.filter((s) => s.isFilledRect).length).toBe(1)
+      expect(twoPointStrokes.filter((s) => !s.isFilledRect).length).toBe(1)
+
+      const tap = twoPointStrokes.find((s) => !s.isFilledRect)!
+      expect(Math.hypot(tap.points[1].x - tap.points[0].x, tap.points[1].y - tap.points[0].y)).toBeLessThan(1)
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
-      const [p0, p1] = noiseStroke!.points
-      const needle = `${p0.x.toFixed(2)},${p0.y.toFixed(2)}`
-      const needle2 = `${p1.x.toFixed(2)},${p1.y.toFixed(2)}`
-      expect(svg).not.toContain(needle)
-      expect(svg).not.toContain(needle2)
+      expect(svg).toContain(`M${tap.points[0].x.toFixed(2)},${tap.points[0].y.toFixed(2)}`)
+    })
+
+    test("the ruler tool's straight lines render as lines, not as filled boxes (straight-line.note)", { timeout: 30000 }, async () => {
+      // straight-line.note is the only fixture using the ruler/straight-line
+      // tool, and the only one producing stroke_kind "straightLine". Each of
+      // those records stores just the two endpoints, which the old
+      // "two points means a rectangle" rule turned into either a degenerate
+      // filled box or nothing at all -- page 1's six lines rendered as three
+      // invisible rects and no lines whatsoever.
+      const sn = new SupernoteX(await readFileToUint8Array("straight-line.note"))
+      const page1 = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      expect(page1.length).toBe(6)
+      expect(page1.every((s) => s.points.length === 2)).toBe(true)
+      expect(page1.some((s) => s.isFilledRect)).toBe(false)
+
+      const svgs = await toSvg(sn, { vectorInk: true })
+      expect([...svgs[0].matchAll(/<path /g)].length).toBe(6)
+      expect(svgs[0]).not.toContain("<rect ")
+      // each line is drawn between its own two endpoints
+      for (const stroke of page1) {
+        const [a, b] = stroke.points
+        expect(svgs[0]).toContain(`M${a.x.toFixed(2)},${a.y.toFixed(2)} L${b.x.toFixed(2)},${b.y.toFixed(2)}`)
+      }
     })
 
     test("a partial (drag) erase paints over the erased ink with white, instead of leaving it fully visible (issue #56 follow-up)", { timeout: 30000 }, async () => {

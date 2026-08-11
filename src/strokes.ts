@@ -56,6 +56,20 @@ export interface IStroke {
 	 * intact, `-99` is mixed) but the encoding isn't confirmed, so nothing
 	 * keys on the specific value. */
 	eraserTouched?: boolean;
+	/** True when this record is a filled rectangle -- a Heading or badge
+	 * background -- rather than a pen path, so its two points are opposite
+	 * corners of a box instead of the ends of a line. Read from the record's
+	 * own `stroke_kind` (`"0001"`).
+	 *
+	 * Having exactly two points is *not* the test, which is what this field
+	 * exists to correct: the ruler/straight-line tool also stores two points
+	 * (`stroke_kind: "straightLine"`), and so does the occasional ordinary
+	 * two-sample ink stroke (`"others"`). Across every fixture `stroke_kind`
+	 * separates all three cleanly -- 10 rectangles, 8 straight lines and 2
+	 * short ink strokes, with no overlap -- where counting points alone
+	 * turned each of `straight-line.note`'s lines into either a filled box
+	 * or nothing at all. */
+	isFilledRect?: boolean;
 	/** The device's own rendered outline of this stroke (`point_contour` in
 	 * https://github.com/Walnut356/snlib) -- closed polygons in the same
 	 * page-pixel space as `points`, only present when `parseStrokes` was
@@ -144,6 +158,11 @@ const ERASER_COLOR = 255;
  * that one *is* handled specially precisely because its `TITLE_*`-derived
  * fill is real, intended content. */
 const LINK_TAG_STROKE_KIND = '0000';
+
+/** `stroke_kind` of a filled-rectangle record -- a Heading or badge
+ * background, whose two points are opposite corners rather than a pen path
+ * (see `IStroke.isFilledRect`). */
+const FILLED_RECT_STROKE_KIND = '0001';
 
 /** `pen` id of a lasso/selection *path* record -- the loop a user draws to
  * select content (then delete it, move it, or turn it into a
@@ -462,6 +481,7 @@ export function parseStrokes(
 				thickness: raw.thickness,
 				...(isEraser ? { isEraser: true } : {}),
 				...(raw.eraseMark !== 0 ? { eraserTouched: true } : {}),
+				...(raw.strokeKind === FILLED_RECT_STROKE_KIND ? { isFilledRect: true } : {}),
 				...(raw.contour ? { contour: raw.contour } : {}),
 			});
 		}

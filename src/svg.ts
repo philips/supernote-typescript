@@ -86,25 +86,30 @@ function buildRecognitionTextElements(page: IPdfPage, pageWidth: number): string
  * and https://github.com/Walnut356/snlib for how that metadata was found.
  *
  * `'rect'` is a distinct record shape TOTALPATH itself encodes, not a style
- * choice: a stroke decoded down to exactly two points is a filled
- * rectangle's opposite corners. Unlike `'path'`, a rect's own `color`/`pen`
+ * choice: such a record's two points are a filled rectangle's opposite
+ * corners rather than a pen path, and it says so in its own `stroke_kind`
+ * (`IStroke.isFilledRect`). Having two points is *not* the test -- the
+ * ruler tool and the odd two-sample ink stroke store two points too, and
+ * treating those as rectangles drew a straight line as a filled box or
+ * nothing at all.
+ *
+ * Unlike `'path'`, a rect's own `color`/`pen`
  * fields are *not* meaningful (confirmed against a real fixture with four
  * differently-colored heading backgrounds on one page: every one of their
  * 2-point records reads the same, uninformative `color` regardless of the
  * background's real, visibly different color). For a Heading's rect (the
  * common case), the real color lives losslessly in the `.note` footer's own
  * `TITLE_*` metadata instead -- see `findMatchingTitleStyle` -- so
- * `deriveStrokeStyle` looks that up first. Only a 2-point rect with no
+ * `deriveStrokeStyle` looks that up first. Only a rect with no
  * matching `TITLE_*` entry (badges/highlight boxes, which aren't Headings)
  * falls back to sampling the page's own rendered ink for color/fill, the way
  * every stroke's style used to be sampled before real per-stroke metadata
- * was found: checking what fraction of the rectangle's own bounding box is
- * already real ink separates a genuine rect (a solid background measures
- * ~97-99% filled, a diagonal cross-hatch background ~25% -- both confirmed
- * against Supernote's own "Heading" feature, see
- * https://support.supernote.com/1759244-using-titles-keywords-and-stars)
- * from a real but unrelated short 2-point ink stroke (measures ~0%, `'skip'`
- * so as to not draw a phantom diagonal line for it). `fill` records solid
+ * was found: what fraction of the rectangle's own bounding box is already
+ * real ink also separates a solid background (~97-99% filled) from a
+ * diagonal cross-hatch one (~25%) -- both confirmed against Supernote's own
+ * "Heading" feature, see
+ * https://support.supernote.com/1759244-using-titles-keywords-and-stars.
+ * `fill` records solid
  * vs. hatch so `buildRectElement` can draw the latter as an actual hatch
  * pattern instead of collapsing it to a solid block that would hide
  * anything drawn on top (confirmed on a real fixture: a hatched heading's
@@ -747,7 +752,7 @@ function deriveStrokeStyle(
 	pageWidth: number,
 	pageHeight: number,
 ): StrokeStyle {
-	if (stroke.points.length === 2 && !stroke.isEraser) {
+	if (stroke.isFilledRect && stroke.points.length >= 2 && !stroke.isEraser) {
 		const [p0, p1] = stroke.points;
 		const titleStyle = findMatchingTitleStyle(titleIndex, p0, p1);
 		if (titleStyle) return { shape: 'rect', color: titleStyle.backgroundColor, fill: titleStyle.fill };

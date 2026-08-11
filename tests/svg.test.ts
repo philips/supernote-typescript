@@ -514,6 +514,77 @@ describe("svg", () => {
       expect(svg).not.toContain(needle2)
     })
 
+    test("a partial (drag) erase paints over the erased ink with white, instead of leaving it fully visible (issue #56 follow-up)", { timeout: 30000 }, async () => {
+      // horizontal_1270.note's page 1 is the original issue #56 fixture:
+      // real content ("writing" corrected to "note") was partially erased,
+      // which -- unlike a whole-stroke select-and-delete -- leaves the
+      // erased ink's own strokes in TOTALPATH completely unmarked, plus a
+      // separate real eraser-tool stroke (TOTALPATH color 255) tracing
+      // where it was dragged. Drawing that eraser stroke as ordinary white
+      // ink, at its own real position in TOTALPATH's order (parseStrokes'
+      // includeErasers option), paints back over the covered ink -- so the
+      // erased word must no longer decode as a normal-width black stroke at
+      // its original, now-covered position.
+      const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"))
+      const inkOnly = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      const withErasers = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
+      const erasers = withErasers.filter((s) => s.isEraser)
+      expect(erasers.length).toBeGreaterThan(0)
+      // sanity: parseStrokes' own default (ink-only) output for this page
+      // is unaffected by vectorInk's internal includeErasers use.
+      expect(inkOnly.some((s) => s.isEraser)).toBe(false)
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      // every decoded eraser stroke must be drawn, as plain white ink, at
+      // its own real (unmodified) coordinates -- not skipped the way a
+      // whole-stroke-delete or a 2-point noise record would be.
+      for (const eraser of erasers) {
+        const needle = `M${eraser.points[0].x.toFixed(2)},${eraser.points[0].y.toFixed(2)}`
+        expect(svg).toContain(needle)
+      }
+      expect(svg).toContain('stroke="rgb(255,255,255)"')
+    })
+
+    test("a link-tag indicator box never renders as ink, matching the raster (nomad-3.26.40-link-tag-3p.note)", { timeout: 30000 }, async () => {
+      // Page 2 (1-indexed) has three "link tag" boxes -- confirmed via the
+      // note's own LINK_* footer metadata (see strokes.test.ts) to be a
+      // non-ink UI affordance TOTALPATH still records geometry for. Unlike
+      // the Heading/badge 2-point rects, these must not render at all: no
+      // filled rect (they're not TITLE_*-backed) and no stroked outline
+      // (unlike an ordinary hand-drawn box, which would fall through to a
+      // plain 'path'). Matched by bounding box, not a specific point, since
+      // a 5-point box's own first vertex isn't necessarily its top-left
+      // corner.
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+      const linkRects = Object.values(sn.links)
+        .flat()
+        .map((link) => link.LINKRECT.split(",").map(Number))
+      expect(linkRects.length).toBeGreaterThan(0)
+
+      const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
+      const elementBounds: { minX: number; minY: number; maxX: number; maxY: number }[] = []
+      for (const [, xStr, yStr, wStr, hStr] of svg.matchAll(/<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"/g)) {
+        const x = Number(xStr), y = Number(yStr)
+        elementBounds.push({ minX: x, minY: y, maxX: x + Number(wStr), maxY: y + Number(hStr) })
+      }
+      for (const [, d] of svg.matchAll(/<path d="([^"]+)"/g)) {
+        const coords = [...d.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map(([, x, y]) => [Number(x), Number(y)])
+        const xs = coords.map(([x]) => x), ys = coords.map(([, y]) => y)
+        elementBounds.push({ minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) })
+      }
+
+      for (const [x, y, width, height] of linkRects) {
+        const matchesLinkRect = elementBounds.some(
+          (b) =>
+            Math.abs(b.minX - x) <= 2 &&
+            Math.abs(b.minY - y) <= 2 &&
+            Math.abs(b.maxX - x - width) <= 2 &&
+            Math.abs(b.maxY - y - height) <= 2,
+        )
+        expect(matchesLinkRect).toBe(false)
+      }
+    })
+
     test("rects (highlight backgrounds) always draw before paths, regardless of TOTALPATH order", { timeout: 30000 }, async () => {
       // On the same fixture (each highlighted digit is actually a Heading,
       // per findMatchingTitleStyle above), each digit's Heading background
@@ -707,6 +778,30 @@ describe("svg", () => {
       const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
       expect(strokes.length).toBe(subpathCount)
+    })
+
+    test("stroke width matches Supernote's own PDF export exactly, not under-drawn (thickness/100, not /150)", { timeout: 30000 }, async () => {
+      // Same page 1 as the previous test: every one of its 32 subpaths is a
+      // needle-point-pen stroke at the same width setting, and the PDF's own
+      // content stream draws every one of them with a literal `4 w` (4
+      // page-pixel line width -- `headings-and-marker.pdf`'s MediaBox is the
+      // page's own pixel space, see plans/vector-format-spec.md's "thickness
+      // field" section). thickness/150 (this constant's old, raster-
+      // calibrated value) would under-draw this to ~2.67px instead.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/headings-and-marker.pdf"))
+      const page1Stream = pdfStreams[0].toString("latin1")
+      const pdfWidths = [...new Set([...page1Stream.matchAll(/([\d.]+) w\b/g)].map((m) => Number(m[1])))]
+      expect(pdfWidths).toEqual([4])
+
+      const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const widths = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)].map((m) =>
+        Number(m[1]),
+      )
+      expect(widths.length).toBe(32)
+      for (const width of widths) {
+        expect(width).toBe(4)
+      }
     })
 
     const NEAR_DUPLICATE_TOLERANCE = 5

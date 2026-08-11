@@ -123,6 +123,7 @@ firmware-dependent, don't key on it.
 |---|---|
 | `"others"` | every freehand ink stroke, all pens, all fixtures (600+ strokes) — matches snlib |
 | `"0001"` | every 2-point rect record |
+| `"0000"` | a 5-point closed-rectangle record for the "link tag" feature's own indicator box (`pen=0`, like `"0001"`) — never real ink, confirmed against `nomad-3.26.40-link-tag-3p.note`: every one of its `"0000"` records' bounding box matches one of the note's own footer `LINK_*` entries' `LINKRECT` pixel-exact, and none of them appear in the page's own rendered ink. `src/strokes.ts`'s `parseStrokes` excludes these unconditionally now (they used to render as a phantom stroked-outline box in `vectorInk` output, since nothing distinguished them from ordinary ink before this field was decoded). |
 | `"fiveStarsSignal"` | the Stars feature's star mark (`nomad-3.15.27-blank-shapes-and-RTR.note`, drawn with the circled-star gesture; that stroke also reads `pen=5, thickness=100`) |
 
 `"straightLine"` (snlib's other documented value) has still never been
@@ -183,12 +184,33 @@ not a decode error.
 157/201 as literal decimal digits. snlib's 158/202 values are the raster-
 quantized variants seen in some marker strokes, not the design colors.
 
-`color === 255` (`Eraser`) is filtered out of `parseStrokes`' return value
-entirely, not surfaced as an `IStroke`. This is the real explanation for
-issue #56's original "phantom stroke" report: TOTALPATH records the eraser
-tool's own physical motion just like any other pen tool, distinguishable
-only by this one reserved value — not a decode bug, and not something that
-ever needed raster cross-checking to detect.
+`color === 255` (`Eraser`) is filtered out of `parseStrokes`' return value by
+default, not surfaced as an `IStroke`. This is the real explanation for issue
+#56's original "phantom stroke" report: TOTALPATH records the eraser tool's
+own physical motion just like any other pen tool, distinguishable only by
+this one reserved value — not a decode bug, and not something that ever
+needed raster cross-checking to detect.
+
+**A *partial* (drag) erase's own visual effect is now reproduced, not just
+its phantom-stroke symptom silently fixed.** Excluding eraser strokes
+correctly stops them rendering as their own phantom ink, but on its own
+left a different, subtler bug: the real ink an eraser stroke was dragged
+over stays in TOTALPATH completely unmarked (the erase is its own later,
+separate record, not an edit to the covered ink), so simply dropping the
+eraser stroke left that now-erased ink fully, incorrectly visible —
+confirmed directly on `horizontal_1270.note` (corrected text left as a
+faint ghost underneath the correction) and `nomad-3.26.40-link-tag-3p.note`
+(a "eraser on marker"/"eraser on pen lines" test page, whose erased gaps
+didn't render at all). `parseStrokes`' `includeErasers` option keeps these
+strokes instead, as ordinary opaque white ink (`ERASER_COLOR`'s value of
+255 already *is* a valid white grey level, so no extra color logic is
+needed) — `src/svg.ts`'s `vectorInk` path draws every stroke it decodes in
+`TOTALPATH`'s own order, so a white eraser stroke drawn at its own real
+position paints back over the ink it was meant to erase, the same way the
+device itself does. Not pixel-perfect (a stroke-shaped white overlay only
+approximates a true per-pixel erase, and can leave thin slivers of the
+original ink visible at its edges), but a large, direct improvement over
+leaving the erased ink fully legible.
 
 ### `thickness` field — solved: hundredths of a page pixel
 
@@ -592,9 +614,10 @@ pass; the findings are folded into the sections above. In brief:
 
 ## Remaining open questions
 
-1. **Act on the thickness fix**: `THICKNESS_TO_PIXEL_SCALE` should be 100,
-   not 150 (see the thickness section) — this is a code change plus
-   re-checking the SVG output against `headings-and-marker.pdf`.
+1. ~~Act on the thickness fix~~ — done: `THICKNESS_TO_PIXEL_SCALE` is now
+   100, not 150. Confirmed exact (not just closer) against
+   `headings-and-marker.pdf`: every one of page 1's 32 needle-pen subpaths
+   draws with a literal `4 w`, and `400 / 100 = 4` matches precisely.
 2. ~~Replace the two remaining raster dependencies in `src/svg.ts`~~ —
    done: `deriveStrokeStyle`/`applyHeadingContrastOverrides` now look up a
    `'rect'` stroke's `TITLE_*` footer entry first (`findMatchingTitleStyle`,

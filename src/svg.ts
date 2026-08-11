@@ -538,18 +538,22 @@ function sampleRect(
 }
 
 /** Converts `IStroke.thickness` (an opaque on-device unit -- see its own doc
- * comment) to an SVG stroke-width in page pixels. Calibrated empirically
- * against `stroke-isolation.note`'s tool-isolated fixture: dividing by 150
- * lands ordinary pen tools (needle/ink/calligraphy: raw 400-900) at 3-6px
- * and a marker (raw 3800) at ~25px, matching this codebase's own prior
- * raster-measured widths for the same strokes (needle/ink/calligraphy
- * consistently well under a marker's, which measured close to the old
- * raster-search's own 12px-half-width cap) -- not derived from a documented
- * physical unit, since `thickness` isn't confirmed to share the coordinate
- * fields' "10 micrometers per unit" scale (dividing by the same per-page
- * coordinate `scale` `parseStrokes` uses produces implausibly wide lines,
- * confirmed against this same fixture). */
-const THICKNESS_TO_PIXEL_SCALE = 150;
+ * comment) to an SVG stroke-width in page pixels. `thickness / 100` is the
+ * real unit: hundredths of a page pixel, confirmed two independent ways
+ * against `headings-and-marker.pdf` (Supernote's own PDF export, which draws
+ * ink in the page's own pixel space) -- every width-slider position maps to
+ * a clean integer pixel width this way (0.1->200->2px, ... 1.0->1200->12px,
+ * marker->3800->38px), and each stroke's own `bounding_tl`/`br` extents (not
+ * currently decoded by this module, but present in `TOTALPATH`'s own
+ * `StrokeConfig`) are exactly the point extents inflated by
+ * `thickness / 100 / 2` per side. An earlier version of this constant used
+ * 150, calibrated against this codebase's own prior *raster-measured*
+ * widths for the same strokes -- but that raster measurement itself
+ * undercounted a marker's true ~38px width (a soft-edged raster stroke
+ * measures narrower than its real drawn width), so 150 under-drew every
+ * stroke by 1.5x relative to Supernote's own vector export. See
+ * plans/vector-format-spec.md's "thickness field" section. */
+const THICKNESS_TO_PIXEL_SCALE = 100;
 
 /**
  * Derives a `StrokeStyle` for one decoded stroke. For a `'path'`, this is a
@@ -561,6 +565,12 @@ const THICKNESS_TO_PIXEL_SCALE = 150;
  * Heading's real `TITLE_*` footer metadata -- see `findMatchingTitleStyle`)
  * when it matches; only a rect with no `TITLE_*` match (a badge/highlight
  * box, not a Heading) falls back to `mask`, the page's own rendered ink.
+ *
+ * An eraser stroke (`stroke.isEraser`, only present when the caller decoded
+ * with `includeErasers: true` -- see `parseStrokes`) always renders as a
+ * `'path'`, even with exactly 2 points: it's a real pen motion, not a filled
+ * rectangle, and a short eraser drag hitting exactly 2 sampled points would
+ * otherwise be misread as a 2-point rect record.
  */
 function deriveStrokeStyle(
 	stroke: IStroke,
@@ -569,7 +579,7 @@ function deriveStrokeStyle(
 	pageWidth: number,
 	pageHeight: number,
 ): StrokeStyle {
-	if (stroke.points.length === 2) {
+	if (stroke.points.length === 2 && !stroke.isEraser) {
 		const [p0, p1] = stroke.points;
 		const titleStyle = findMatchingTitleStyle(titleIndex, p0, p1);
 		if (titleStyle) return { shape: 'rect', color: titleStyle.backgroundColor, fill: titleStyle.fill };
@@ -622,7 +632,10 @@ function isInsideRectBounds(point: IStrokePoint, bounds: { minX: number; maxX: n
  * raster involved. Only a rect with no `TITLE_*` match falls back to
  * resampling `mask`, the page's own rendered ink, the way this used to work
  * for every rect. Every other stroke keeps its real, raster-free color
- * untouched.
+ * untouched -- including an eraser stroke's own already-correct white
+ * "paint over" color (see `parseStrokes`' `includeErasers` option), which
+ * this must never resample away just because it happens to sit inside a
+ * rect's bounds (e.g. erasing part of a Heading's own label text).
  */
 function applyHeadingContrastOverrides(
 	strokes: IStroke[],
@@ -647,6 +660,7 @@ function applyHeadingContrastOverrides(
 	return styles.map((style, i) => {
 		if (style.shape !== 'path') return style;
 		const stroke = strokes[i];
+		if (stroke.isEraser) return style;
 		const matchedRect = rectInfoList.find((info) => {
 			const insideCount = stroke.points.filter((point) => isInsideRectBounds(point, info.bounds)).length;
 			return insideCount / stroke.points.length >= MIN_INSIDE_RECT_FRACTION;
@@ -694,9 +708,16 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 	// parseStrokes' transform is linear in pageWidth/pageHeight, so decoding
 	// directly against the upscaled dimensions lands points in the same
 	// coordinate space toImage's upscaled raster (and so images[i].width/
-	// height below) uses, without a separate scaling pass.
+	// height below) uses, without a separate scaling pass. includeErasers
+	// keeps eraser-tool motions as ordinary white strokes, in their real
+	// TOTALPATH position relative to the ink they were dragged over --
+	// needed so a *partial* erase (see parseStrokes' doc comment) still
+	// looks erased once drawn, instead of leaving the covered ink fully
+	// visible.
 	const strokesPerPage = vectorInk
-		? pages.map((page) => parseStrokes(page.totalPathBuffer, note.pageWidth * upscale, note.pageHeight * upscale))
+		? pages.map((page) =>
+				parseStrokes(page.totalPathBuffer, note.pageWidth * upscale, note.pageHeight * upscale, { includeErasers: true }),
+			)
 		: pages.map((): IStroke[] => []);
 
 	// Each real IStroke already carries its own real color/tool/thickness
@@ -718,7 +739,7 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 		? new Set(
 				pages
 					.map((page, i) => {
-						const nativeStrokes = parseStrokes(page.totalPathBuffer, note.pageWidth, note.pageHeight);
+						const nativeStrokes = parseStrokes(page.totalPathBuffer, note.pageWidth, note.pageHeight, { includeErasers: true });
 						const pageNumber = pageNumbers ? pageNumbers[i] : i + 1;
 						if (nativeStrokes.length === 0) return -1;
 						const mask = buildInkMask(page, note.pageWidth, note.pageHeight);

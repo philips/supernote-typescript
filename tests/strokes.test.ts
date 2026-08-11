@@ -209,4 +209,65 @@ describe("parseStrokes", () => {
     );
     expect(phantomCornerStrokes.length).toBe(0);
   });
+
+  test("excludes eraser strokes by default, includes them as white isEraser strokes with includeErasers (issue #56 follow-up)", async () => {
+    // horizontal_1270.note's page 1 is exactly the fixture that used to
+    // decode eraser motions as smooth-but-nonexistent phantom ink (issue
+    // #56) -- it has four real eraser-tool strokes (color 255) covering
+    // earlier, now-visually-erased real ink ("writing" corrected to
+    // "note"). The default (ink-only) behavior must stay unchanged (every
+    // other test in this file, and the exact stroke-count regression test
+    // in svg.test.ts, assumes it); includeErasers must add exactly those
+    // strokes back, each real-ink-white and flagged.
+    const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"));
+    const page = sn.pages[0];
+
+    const inkOnly = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
+    expect(inkOnly.some((s) => s.isEraser)).toBe(false);
+
+    const withErasers = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true });
+    const erasers = withErasers.filter((s) => s.isEraser);
+    expect(erasers.length).toBe(4);
+    for (const eraser of erasers) {
+      expect(eraser.color).toBe("rgb(255,255,255)");
+    }
+    // includeErasers only adds eraser strokes -- every ink-only stroke must
+    // still be present, in the same relative order (erasers interleaved at
+    // their own real TOTALPATH position, not appended after).
+    expect(withErasers.length).toBe(inkOnly.length + erasers.length);
+    expect(withErasers.filter((s) => !s.isEraser)).toEqual(inkOnly);
+  });
+
+  test("excludes link-tag indicator boxes unconditionally, ink or not (stroke_kind '0000')", async () => {
+    // nomad-3.26.40-link-tag-3p.note's page 2 has three 5-point "link tag"
+    // boxes (drawn around linked-note source regions) -- confirmed real via
+    // the note's own footer LINK_* metadata: each box's TOTALPATH bounding
+    // box matches one LINKRECT pixel-exact. Supernote's own rendered page
+    // never shows these (they're a UI affordance, not ink the user drew),
+    // so parseStrokes must drop them the same way -- with no opt-in, unlike
+    // eraser strokes, since there's no legitimate reason to want them back.
+    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+    const page = sn.pages[1];
+    const linkRects = Object.values(sn.links)
+      .flat()
+      .map((link) => link.LINKRECT.split(",").map(Number));
+    expect(linkRects.length).toBeGreaterThan(0);
+
+    const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true });
+    for (const [x, y, width, height] of linkRects) {
+      const matchesLinkRect = strokes.some((stroke) => {
+        if (stroke.points.length !== 5) return false;
+        const xs = stroke.points.map((p) => p.x), ys = stroke.points.map((p) => p.y);
+        const strokeX = Math.min(...xs), strokeY = Math.min(...ys);
+        const strokeWidth = Math.max(...xs) - strokeX, strokeHeight = Math.max(...ys) - strokeY;
+        return (
+          Math.abs(strokeX - x) <= 2 &&
+          Math.abs(strokeY - y) <= 2 &&
+          Math.abs(strokeWidth - width) <= 2 &&
+          Math.abs(strokeHeight - height) <= 2
+        );
+      });
+      expect(matchesLinkRect).toBe(false);
+    }
+  });
 });

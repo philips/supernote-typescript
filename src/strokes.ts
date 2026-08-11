@@ -17,7 +17,10 @@ export type StrokePen = 'needlePoint' | 'inkPen' | 'marker' | 'unknown';
 export interface IStroke {
 	points: IStrokePoint[];
 	/** CSS `rgb(...)` color this stroke was actually drawn in on-device --
-	 * exact, not sampled from a raster. */
+	 * exact, not sampled from a raster. For an eraser stroke (`isEraser`),
+	 * this is always `rgb(255,255,255)` (white): `ERASER_COLOR`'s numeric
+	 * value happens to already be a valid (if reserved) grey level, so no
+	 * special-casing is needed to turn it into "paint over with white". */
 	color: string;
 	pen: StrokePen;
 	/** Raw on-device thickness setting, in the same arbitrary device units
@@ -26,6 +29,14 @@ export interface IStroke {
 	 * units) -- scale like any other opaque magnitude, don't assume a
 	 * physical unit conversion. */
 	thickness: number;
+	/** True for a real eraser-tool motion (`TOTALPATH`'s reserved
+	 * `color === 255`), only ever present when `parseStrokes` was called
+	 * with `includeErasers: true` -- see that option's doc comment. Lets a
+	 * caller that draws strokes in order (`vectorInk` does) tell an
+	 * intentional "paint over with background" stroke apart from real ink
+	 * sharing the same white color (e.g. a white pen on a dark page), even
+	 * though both render identically. */
+	isEraser?: boolean;
 }
 
 /** Raw pen tool ids observed in `TOTALPATH`'s `pen` field -- reverse
@@ -47,12 +58,49 @@ const PEN_IDS: Record<number, StrokePen> = {
  * stroke" -- confirmed against https://github.com/Walnut356/snlib's `Color`
  * enum (`Eraser = 255`) and directly against real fixtures: the exact
  * strokes that used to decode as smooth-but-nonexistent phantom ink in
- * `horizontal_1270.note` (see issue #56) carry this color. `parseStrokes`
- * filters these out entirely -- they're real, correctly-decoded pen
- * motions, just not strokes that were ever meant to render as visible ink
- * (Supernote's eraser tool is itself a physical pen motion the digitizer
- * records like any other). */
+ * `horizontal_1270.note` (see issue #56) carry this color. By default,
+ * `parseStrokes` filters these out entirely -- they're real,
+ * correctly-decoded pen motions, just not strokes that were ever meant to
+ * render as visible ink themselves (Supernote's eraser tool is itself a
+ * physical pen motion the digitizer records like any other).
+ *
+ * That default is right for "give me this page's real ink", but wrong for
+ * reproducing what the page actually *looks like*: dropping these strokes
+ * silently un-does every *partial* erase (dragging the eraser tool over
+ * part of some real ink, as opposed to a whole-stroke select-and-delete,
+ * which leaves no TOTALPATH trace at all and needs no special handling
+ * here) -- the ink an eraser stroke was meant to cover stays in TOTALPATH
+ * exactly as originally drawn, at its real pre-erase color, since the erase
+ * is recorded as its own later, separate stroke rather than as an edit to
+ * the ink it covers. `parseStrokes`' `includeErasers` option keeps these
+ * strokes instead (as ordinary white `isEraser: true` ink, since
+ * `ERASER_COLOR` already *is* a valid white grey level), so a caller that
+ * draws every stroke in `TOTALPATH`'s own order paints over the erased ink
+ * with white the same way the real device does, rather than leaving it
+ * fully visible. Confirmed directly against `horizontal_1270.note` and
+ * `nomad-3.26.40-link-tag-3p.note` (whose "ERASER on MARKER"/"ERASER on PEN
+ * LINES" fixture rows exist specifically to exercise this): each eraser
+ * stroke's own record sits immediately after, and closely traces the
+ * shape/bounds of, the ink it was dragged over. */
 const ERASER_COLOR = 255;
+
+/** Reserved `stroke_kind` value (see `STROKE_CONFIG.STROKE_KIND_OFFSET`)
+ * meaning "this is a link-tag indicator box, not ink" -- confirmed directly
+ * against `nomad-3.26.40-link-tag-3p.note` (named for exactly this
+ * feature): every 5-point `stroke_kind: "0000"` record's bounding box
+ * matches one of the note's own footer `LINK_*` entries' `LINKRECT`
+ * pixel-exact, the same way a `TITLE_*` entry's `TITLERECT` matches a
+ * Heading's 2-point rect record (see `plans/vector-format-spec.md`'s
+ * `TITLE_`/`KEYWORD_` section). Never shown in the page's own rendered ink
+ * -- it's a UI affordance marking a link's source region, not something the
+ * user drew -- so `parseStrokes` excludes it unconditionally, the same as
+ * an eraser stroke's own motion path, just without an `includeErasers`-style
+ * opt-in: unlike an eraser, there's no legitimate reason to want this
+ * rendered as ink. Distinct from `"0001"`, the 2-point rect `stroke_kind`
+ * (a Heading/badge background fill, see `TitleStyle` in `src/svg.ts`) --
+ * that one *is* handled specially precisely because its `TITLE_*`-derived
+ * fill is real, intended content. */
+const LINK_TAG_STROKE_KIND = '0000';
 
 /** Byte layout of the fixed-size header (`StrokeConfig` in
  * https://github.com/Walnut356/snlib) every stroke record starts with.
@@ -66,6 +114,13 @@ const STROKE_CONFIG = {
 	PEN_OFFSET: 0,
 	COLOR_OFFSET: 4,
 	THICKNESS_OFFSET: 8,
+	/** 52-byte C string -- see `LINK_TAG_STROKE_KIND`'s doc comment for the
+	 * one value this module actually checks for (`"0000"`); real ink always
+	 * reads `"others"` (or, once, `"fiveStarsSignal"` for the Stars
+	 * feature's star mark -- still real, user-drawn ink), and a 2-point rect
+	 * record always reads `"0001"`. */
+	STROKE_KIND_OFFSET: 48,
+	STROKE_KIND_SIZE: 52,
 	/** In the same device units `parseStrokes`' `scale` divides through --
 	 * this is the field the previous version of this module already relied
 	 * on for the same purpose, under the name `nativeHeightBound`, before
@@ -80,8 +135,18 @@ interface RawStroke {
 	pen: number;
 	color: number;
 	thickness: number;
+	strokeKind: string;
 	screenHeight: number;
 	points: [number, number][]; // raw (y, x) pairs, undivided device units
+}
+
+/** Decodes a fixed-size, NUL-padded C string field (`stroke_kind`/`doc_kind`
+ * -- see `STROKE_CONFIG`) -- trims at the first NUL rather than including
+ * the trailing padding bytes as part of the string. */
+function readFixedCString(view: DataView, pos: number, size: number): string {
+	const bytes = new Uint8Array(view.buffer, view.byteOffset + pos, size);
+	const nul = bytes.indexOf(0);
+	return new TextDecoder('utf8').decode(nul === -1 ? bytes : bytes.subarray(0, nul));
 }
 
 /** Reads one stroke record starting at `pos` (immediately after its own
@@ -96,6 +161,7 @@ function tryParseStroke(view: DataView, byteLength: number, pos: number): RawStr
 	const pen = view.getUint32(pos + STROKE_CONFIG.PEN_OFFSET, true);
 	const color = view.getUint32(pos + STROKE_CONFIG.COLOR_OFFSET, true);
 	const thickness = view.getUint32(pos + STROKE_CONFIG.THICKNESS_OFFSET, true);
+	const strokeKind = readFixedCString(view, pos + STROKE_CONFIG.STROKE_KIND_OFFSET, STROKE_CONFIG.STROKE_KIND_SIZE);
 	const screenHeight = view.getUint32(pos + STROKE_CONFIG.SCREEN_HEIGHT_OFFSET, true);
 	if (screenHeight === 0) return null;
 
@@ -121,7 +187,7 @@ function tryParseStroke(view: DataView, byteLength: number, pos: number): RawStr
 		points[i] = [view.getUint32(offset, true), view.getUint32(offset + 4, true)];
 	}
 
-	return { pen, color, thickness, screenHeight, points };
+	return { pen, color, thickness, strokeKind, screenHeight, points };
 }
 
 /**
@@ -180,20 +246,40 @@ function tryParseStroke(view: DataView, byteLength: number, pos: number): RawStr
  * pixelY =  rawY / scale
  * ```
  *
- * Strokes whose `color` is `255` are excluded entirely, not returned as
+ * Strokes whose `color` is `255` are excluded by default, not returned as
  * `IStroke`s -- see `ERASER_COLOR`'s doc comment: they're real pen motions
  * (Supernote's eraser is a physical gesture like any other tool), just never
- * meant to render as ink. This is what `horizontal_1270.note`'s phantom
- * scribbles actually were: real eraser strokes, exactly identifiable by this
- * one field, not a decode bug and not something raster cross-checking ever
- * needed to guess at.
+ * meant to render as ink *themselves*. This is what `horizontal_1270.note`'s
+ * phantom scribbles actually were: real eraser strokes, exactly identifiable
+ * by this one field, not a decode bug and not something raster
+ * cross-checking ever needed to guess at. Pass `includeErasers: true` (see
+ * `ERASER_COLOR`'s doc comment) to keep them instead, as ordinary white
+ * `isEraser: true` strokes, needed to reproduce a *partial* erase's visual
+ * effect when drawing strokes in `TOTALPATH`'s own order.
+ *
+ * Strokes whose `stroke_kind` is `"0000"` are excluded unconditionally (no
+ * `includeErasers`-style opt-in) -- see `LINK_TAG_STROKE_KIND`'s doc
+ * comment: a link-tag indicator box, not ink, confirmed against
+ * `nomad-3.26.40-link-tag-3p.note`'s own footer `LINK_*` metadata.
  *
  * Returns `[]` if `totalPathBuffer` is `null`, too short to hold a single
  * stroke, or its layout isn't recognized (e.g. a genuinely blank page, or a
  * page whose `TOTALPATH` uses a structure this hasn't been validated
  * against yet).
  */
-export function parseStrokes(totalPathBuffer: Uint8Array | null, pageWidth: number, pageHeight: number): IStroke[] {
+export interface ParseStrokesOptions {
+	/** See `parseStrokes`' own doc comment and `ERASER_COLOR`'s. Default
+	 * false, matching every existing caller's assumption that `parseStrokes`
+	 * returns only real, visible ink. */
+	includeErasers?: boolean;
+}
+
+export function parseStrokes(
+	totalPathBuffer: Uint8Array | null,
+	pageWidth: number,
+	pageHeight: number,
+	options: ParseStrokesOptions = {},
+): IStroke[] {
 	if (!totalPathBuffer || totalPathBuffer.length < STROKE_CONFIG.SIZE || pageHeight <= 0 || pageWidth <= 0) return [];
 
 	const view = new DataView(totalPathBuffer.buffer, totalPathBuffer.byteOffset, totalPathBuffer.byteLength);
@@ -212,13 +298,16 @@ export function parseStrokes(totalPathBuffer: Uint8Array | null, pageWidth: numb
 		if (strokeLen === 0 || strokeEnd > byteLength) break;
 
 		const raw = tryParseStroke(view, byteLength, strokeStart);
-		if (raw && raw.color !== ERASER_COLOR) {
+		const isEraser = raw?.color === ERASER_COLOR;
+		const isLinkTag = raw?.strokeKind === LINK_TAG_STROKE_KIND;
+		if (raw && !isLinkTag && (!isEraser || options.includeErasers)) {
 			const scale = raw.screenHeight / pageHeight;
 			strokes.push({
 				points: raw.points.map(([y, x]) => ({ x: -x / scale + pageWidth, y: y / scale })),
 				color: `rgb(${raw.color},${raw.color},${raw.color})`,
 				pen: PEN_IDS[raw.pen] ?? 'unknown',
 				thickness: raw.thickness,
+				...(isEraser ? { isEraser: true } : {}),
 			});
 		}
 

@@ -136,12 +136,18 @@ describe("parseStrokes", () => {
     expect(Date.now() - start).toBeLessThan(500);
   });
 
-  test("skips a known float32-coordinate stroke rather than placing it wrong", async () => {
-    // The stroke starting at byte offset 1484 of this page's TOTALPATH is a
-    // real, confirmed float32-coordinate stroke (found during the format
-    // investigation in issue #55) that this decoder can't yet map to the
-    // right position -- landmark search should skip straight past it to the
-    // next real (uint32) stroke rather than emitting a wrong guess.
+  test("every decoded point stays inside this page's own rendered ink", async () => {
+    // Historical note: earlier versions of this decoder found stroke
+    // boundaries via a byte-by-byte scan for a self-checksumming record
+    // shape, rather than TOTALPATH's real, deterministic outer structure
+    // (a stroke count plus a length prefix per stroke -- see parseStrokes'
+    // doc comment for how https://github.com/Walnut356/snlib's independent
+    // implementation revealed this). That old scan could land inside a
+    // stroke's own extended sub-fields and misread real-but-unrelated bytes
+    // as an independent (and wrong) stroke, which this fixture specifically
+    // exercised. The deterministic walk can't do that -- every stroke's own
+    // byte range is exact -- so this now guards general decode correctness
+    // rather than one specific old failure mode.
     const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"));
     const page = sn.pages[0];
     const bbox = inkBoundingBox(page.MAINLAYER.bitmapBuffer as Uint8Array, sn.pageWidth, sn.pageHeight);
@@ -155,17 +161,14 @@ describe("parseStrokes", () => {
     }
   });
 
-  test("recovers a real record that a landmark-offset mismatch used to cause the scan to skip over (issue #56)", async () => {
-    // Not every `superNoteNote` landmark occurrence is followed by a real
-    // record at the usual 76-byte offset -- some are followed by a
-    // differently-shaped metadata block instead. Before this decoder
-    // switched to a byte-by-byte scan, hitting one of those caused it to
-    // jump straight to the *next* landmark occurrence, silently skipping
-    // everything in between -- including, on this fixture's page 0, a real
-    // 243-point record sitting just 72 bytes past the landmark at byte
-    // 37968 (the next landmark doesn't appear until byte 48128, a ~10KB
-    // gap). This fixture used to decode 3860 points across 54 strokes;
-    // fixed, it should decode meaningfully more.
+  test("decodes this fixture's real stroke/point count in full (issue #56)", async () => {
+    // A fixed regression baseline from when this fixture used to decode
+    // only 3860 points across 54 strokes (an older scanning decoder
+    // sometimes skipped real records entirely -- see the previous test's
+    // historical note). The deterministic TOTALPATH walk this decoder now
+    // uses (parseStrokes' doc comment) has no such gap: it reads the
+    // page's own declared stroke count and each stroke's own byte length
+    // directly, so it can't skip a real record the way a scan could.
     const sn = new SupernoteX(await readFileToUint8Array("test.note"));
     const page = sn.pages[0];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
@@ -175,18 +178,14 @@ describe("parseStrokes", () => {
   });
 
   test("decodes records with an odd point count (issue #56)", async () => {
-    // tryParseAuxiliaryStreams originally assumed the pressure/width stream
-    // following a record's coordinates was Math.round(n / 2) uint32 values;
-    // it's actually n uint16 values. Both formulas give the same total byte
-    // length -- and so the same checksum position -- when n is even, which
-    // is how the wrong formula passed validation on every even-length
-    // record it was tried against; only an odd n exposes the 2-byte
-    // discrepancy. Roughly half of this fixture's strokes have an odd point
-    // count, so this also guards against a regression that silently drops
-    // them again (this decoder requires the auxiliary streams to validate
-    // before accepting a record at all, to keep the byte-by-byte scan safe
-    // from false positives -- see parseStrokes' and tryParseRecord's doc
-    // comments).
+    // An earlier version of this decoder used a point-count-dependent
+    // formula to locate a record's auxiliary data streams that happened to
+    // agree with the real layout only for an even point count, silently
+    // misreading odd-count records. The current decoder doesn't need to
+    // locate those streams at all (each stroke's own outer byte length is
+    // authoritative -- see parseStrokes' doc comment), so this now just
+    // confirms real odd-point-count strokes (roughly half of this
+    // fixture's) decode with the same reliability as even ones.
     const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"));
     const page = sn.pages[0];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
@@ -194,17 +193,14 @@ describe("parseStrokes", () => {
     expect(oddCountStrokes.length).toBeGreaterThan(30);
   });
 
-  test("rejects a single-point false match rather than placing a phantom point at the page corner", async () => {
-    // A handful of positions across several fixtures satisfy tryParseRecord's
-    // count+coordinates+checksum check for n=1 by coincidence, without being
-    // real records -- recognizable because every one of them decodes to the
-    // exact same point, (pageWidth, 0), the page's top-right corner (the
-    // same garbage-decode symptom documented on tryParseRecord for
-    // misidentified float32 records). A 0-byte special case for the
-    // auxiliary pressure/width stream on n=1 records was tried during the
-    // issue #56 investigation specifically to accept these, and reverted
-    // once they turned out to be false positives rather than genuine
-    // single-point taps -- this guards against reintroducing that.
+  test("never places a phantom single point at the page corner", async () => {
+    // A regression guard from when an earlier, byte-scanning version of
+    // this decoder could find a false-positive single-point "record" by
+    // coincidence, always decoding to the exact same wrong point,
+    // (pageWidth, 0) -- the page's top-right corner. The current decoder
+    // can't produce a false stroke this way at all (every stroke comes from
+    // TOTALPATH's own declared, exact byte ranges -- see parseStrokes' doc
+    // comment), so this now just confirms that symptom stays gone.
     const sn = new SupernoteX(await readFileToUint8Array("test.note"));
     const page = sn.pages[1];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);

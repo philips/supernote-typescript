@@ -2,7 +2,7 @@ import { Image, encodePng } from 'image-js';
 import { toImage, RattaRLEDecoder, IPdfPage } from './conversion.js';
 import { recognitionCoordinateScale } from './pdf.js';
 import { ISupernote, IPage, ILayerNames } from './format.js';
-import { parseStrokes, IStroke } from './strokes.js';
+import { parseStrokes, IStroke, IStrokePoint } from './strokes.js';
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
@@ -79,22 +79,129 @@ function buildRecognitionTextElements(page: IPdfPage, pageWidth: number): string
 	return elements.join('');
 }
 
-/** Default width, in the same pixel units as the SVG's `viewBox`, for
- * `<path>` elements built from `AddSvgPageOptions.strokes`. Pen pressure/
- * width isn't decoded yet (see `parseStrokes`), so every stroke currently
- * renders at this one fixed width regardless of how it was actually drawn. */
-const DEFAULT_STROKE_WIDTH = 3;
+/** How to render one decoded stroke -- see `deriveStrokeStyle`. For a
+ * `'path'`, `color`/`width`/`tier` come directly from the stroke's own real
+ * `TOTALPATH` metadata (`IStroke.color`/`thickness`/`pen`), not sampled from
+ * a raster -- see https://github.com/philips/supernote-typescript/issues/56
+ * and https://github.com/Walnut356/snlib for how that metadata was found.
+ *
+ * `'rect'` is a distinct record shape TOTALPATH itself encodes, not a style
+ * choice: a stroke decoded down to exactly two points is a filled
+ * rectangle's opposite corners. Unlike `'path'`, a rect's own `color`/`pen`
+ * fields are *not* meaningful (confirmed against a real fixture with four
+ * differently-colored heading backgrounds on one page: every one of their
+ * 2-point records reads the same, uninformative `color` regardless of the
+ * background's real, visibly different color) -- the real color must live
+ * elsewhere, most likely `RECOGNFILE`'s `page.bdom`
+ * (https://github.com/philips/supernote-typescript/issues/60), not yet
+ * decoded. So `deriveStrokeStyle` still samples a rect's color/fill from the
+ * page's own rendered ink, the same way every stroke's style used to be
+ * sampled before real per-stroke metadata was found: checking what fraction
+ * of the rectangle's own bounding box is already real ink separates a
+ * genuine rect (a solid background measures ~97-99% filled, a diagonal
+ * cross-hatch background ~25% -- both confirmed against Supernote's own
+ * "Heading" feature, see
+ * https://support.supernote.com/1759244-using-titles-keywords-and-stars)
+ * from a real but unrelated short 2-point ink stroke (measures ~0%, `'skip'`
+ * so as to not draw a phantom diagonal line for it). `fill` records solid
+ * vs. hatch so `buildRectElement` can draw the latter as an actual hatch
+ * pattern instead of collapsing it to a solid block that would hide
+ * anything drawn on top (confirmed on a real fixture: a hatched heading's
+ * own black label text is the same color as the hatch, so a solid fill
+ * hides it entirely).
+ *
+ * `'path'`'s `tier` is `'marker'` exactly when the stroke's own real `pen`
+ * field says `'marker'` -- see `buildStrokePathElements` for what `tier`
+ * actually changes. */
+export type StrokeStyle =
+	| { shape: 'path'; color: string; width: number; tier: 'marker' | 'pen' }
+	| { shape: 'rect'; color: string; fill: 'solid' | 'hatch' }
+	| { shape: 'skip' };
 
-function buildStrokePathElements(strokes: IStroke[], strokeWidth: number): string {
-	return strokes
-		.filter((stroke) => stroke.points.length > 0)
-		.map((stroke) => {
-			const d = stroke.points
-				.map((point, i) => `${i === 0 ? 'M' : 'L'}${point.x.toFixed(2)},${point.y.toFixed(2)}`)
-				.join(' ');
-			return `<path d="${d}" fill="none" stroke="black" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
-		})
-		.join('');
+/** Deterministic, XML-id-safe name for the hatch `<pattern>` used by a given
+ * color, e.g. `rgb(0,0,0)` -> `hatch-rgb-0-0-0-` -- shared by every hatched
+ * rect of that color on the page, so only one `<pattern>` def is needed per
+ * color rather than one per rect. */
+function hatchPatternId(color: string): string {
+	return `hatch-${color.replace(/[^a-zA-Z0-9]/g, '-')}`;
+}
+
+/** A `<pattern>` def drawing diagonal stripes in `color` over a white
+ * background, standing in for `StrokeStyle`'s `'hatch'` rect fill -- not a
+ * pixel-accurate reproduction of Supernote's own cross-hatch (its exact
+ * line spacing/angle isn't recoverable from the raster the way color is),
+ * just something visibly non-solid that still reads as "hatched" and, unlike
+ * a solid fill, leaves most of its area open for content drawn on top to
+ * stay visible. */
+function buildHatchPatternDef(color: string): string {
+	const id = hatchPatternId(color);
+	return (
+		`<pattern id="${id}" patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)">` +
+		`<rect width="10" height="10" fill="white"/>` +
+		`<line x1="0" y1="0" x2="0" y2="10" stroke="${color}" stroke-width="5"/>` +
+		`</pattern>`
+	);
+}
+
+/** Builds a `<rect>` for a 'rect'-shaped stroke (see `StrokeStyle`'s doc
+ * comment). */
+function buildRectElement(stroke: IStroke, style: { color: string; fill: 'solid' | 'hatch' }): string {
+	const [p0, p1] = stroke.points;
+	const x = Math.min(p0.x, p1.x);
+	const y = Math.min(p0.y, p1.y);
+	const width = Math.abs(p1.x - p0.x);
+	const height = Math.abs(p1.y - p0.y);
+	const fill = style.fill === 'hatch' ? `url(#${hatchPatternId(style.color)})` : style.color;
+	return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" fill="${fill}"/>`;
+}
+
+function buildPathElement(stroke: IStroke, style: { color: string; width: number }): string {
+	const d = stroke.points
+		.map((point, i) => `${i === 0 ? 'M' : 'L'}${point.x.toFixed(2)},${point.y.toFixed(2)}`)
+		.join(' ');
+	return `<path d="${d}" fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
+/** Builds every stroke's SVG element in three fixed tiers -- `'rect'`s,
+ * then wide ("marker") `'path'`s, then narrow ("pen") `'path'`s -- instead
+ * of strictly in `strokes`' order (i.e. TOTALPATH buffer order, which
+ * doesn't reliably match how layered content was actually drawn). Confirmed
+ * on real fixtures both ways: a badge's `'rect'` background record sits
+ * *after* the digit stroke it's meant to sit behind, and a highlighter
+ * pass's record can sit after the pen ink drawn over it too -- either way,
+ * drawing in plain buffer order (SVG paints later elements on top) paints
+ * the background/highlight over the ink and hides it. Sorting into these
+ * tiers sidesteps needing to know the real chronological order at all: a
+ * background fill or a wide highlighter mark is safe to draw before
+ * narrower ink regardless of when it was actually drawn, since nothing
+ * legitimately needs a highlighter mark drawn *over* the pen ink it's
+ * highlighting. Relative order *within* each tier still follows
+ * `strokes`. A stroke with no entry in `styles` (out-of-range index) is
+ * skipped entirely, rather than falling back to a guessed color/width --
+ * every stroke `parseStrokes` returns carries its own real style, so a
+ * missing entry only happens from a caller-side index mismatch, not
+ * anything `deriveStrokeStyle` itself produces. */
+function buildStrokePathElements(strokes: IStroke[], styles: StrokeStyle[] | undefined): { defs: string; elements: string } {
+	const rectElements: string[] = [];
+	const markerElements: string[] = [];
+	const penElements: string[] = [];
+	const hatchColors = new Set<string>();
+
+	strokes.forEach((stroke, i) => {
+		if (stroke.points.length === 0) return;
+		const style = styles?.[i];
+		if (!style || style.shape === 'skip') return;
+		if (style.shape === 'rect') {
+			rectElements.push(buildRectElement(stroke, style));
+			if (style.fill === 'hatch') hatchColors.add(style.color);
+			return;
+		}
+		const bucket = style.tier === 'marker' ? markerElements : penElements;
+		bucket.push(buildPathElement(stroke, style));
+	});
+
+	const defs = [...hatchColors].map(buildHatchPatternDef).join('');
+	return { defs, elements: rectElements.join('') + markerElements.join('') + penElements.join('') };
 }
 
 export interface AddSvgPageOptions {
@@ -112,10 +219,13 @@ export interface AddSvgPageOptions {
 	 * pixel space as `pageWidth`/`pageHeight` (`parseStrokes`'s output is).
 	 * Omit (or pass `[]`) to render `image` as the only source of ink. */
 	strokes?: IStroke[];
-	/** Width of each `<path>` built from `strokes`, in `viewBox` pixels.
-	 * Default `DEFAULT_STROKE_WIDTH`; scale it along with `upscale` if
-	 * rendering strokes onto an upscaled raster. */
-	strokeWidth?: number;
+	/** How to render each of `strokes`, aligned by index -- see `StrokeStyle`.
+	 * A stroke with no entry (or an out-of-range index) is skipped entirely;
+	 * scale a `'path'` entry's width along with `upscale` if rendering
+	 * strokes onto an upscaled raster (a `'rect'` entry's size instead comes
+	 * straight from its stroke's own already-upscaled points, so it needs no
+	 * separate scaling). */
+	strokeStyles?: StrokeStyle[];
 }
 
 /**
@@ -139,7 +249,7 @@ export function addSvgPage(
 	pageHeight: number,
 	options: AddSvgPageOptions = {},
 ): string {
-	const { dpi, includeText = true, strokes, strokeWidth = DEFAULT_STROKE_WIDTH } = options;
+	const { dpi, includeText = true, strokes, strokeStyles } = options;
 
 	const pngBytes = image instanceof Uint8Array ? image : encodePng(image);
 	const base64 = encodeBase64(pngBytes);
@@ -148,11 +258,13 @@ export function addSvgPage(
 	const heightAttr = dpi ? `${pageHeight / dpi}in` : `${pageHeight}`;
 
 	const textElements = includeText ? buildRecognitionTextElements(page, pageWidth) : '';
-	const strokeElements = strokes && strokes.length ? buildStrokePathElements(strokes, strokeWidth) : '';
+	const { defs, elements: strokeElements } =
+		strokes && strokes.length ? buildStrokePathElements(strokes, strokeStyles) : { defs: '', elements: '' };
 
 	return (
 		`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
 		`width="${widthAttr}" height="${heightAttr}" viewBox="0 0 ${pageWidth} ${pageHeight}">` +
+		(defs ? `<defs>${defs}</defs>` : '') +
 		`<image x="0" y="0" width="${pageWidth}" height="${pageHeight}" xlink:href="data:image/png;base64,${base64}"/>` +
 		strokeElements +
 		textElements +
@@ -178,18 +290,17 @@ export interface ToSvgOptions {
 	 * "retina" image), it doesn't enlarge the page. */
 	upscale?: number;
 	/** Render each page's pen strokes as real vector `<path>` elements
-	 * decoded from its `TOTALPATH` data, instead of leaving ink to the
-	 * rasterized image -- crisp at any zoom, instead of the fixed-resolution
-	 * bitmap `toSvg` otherwise embeds. See `parseStrokes` for what this can
-	 * and can't decode yet (pressure/width isn't decoded, so every stroke
-	 * currently renders at one fixed width).
+	 * decoded from its `TOTALPATH` data (including each stroke's real color,
+	 * tool, and thickness -- see `parseStrokes`), instead of leaving ink to
+	 * the rasterized image -- crisp at any zoom, instead of the
+	 * fixed-resolution bitmap `toSvg` otherwise embeds.
 	 *
 	 * Applied per page, not globally: a page whose strokes decode
 	 * successfully gets its bitmap ink layers (MAINLAYER/LAYER1-3) left out
-	 * of the raster and replaced with vector paths; a page that doesn't
-	 * decode (e.g. genuinely blank, or a stroke encoding this decoder
-	 * doesn't recognize) keeps its normal rasterized ink instead, rather
-	 * than silently rendering blank. Background layers (templates, PDF
+	 * of the raster and replaced with vector paths; a page with no decodable
+	 * strokes at all (e.g. genuinely blank, or a `TOTALPATH` structure this
+	 * hasn't been validated against) keeps its normal rasterized ink instead,
+	 * rather than silently rendering blank. Background layers (templates, PDF
 	 * style) are always rasterized either way, since they aren't stored as
 	 * vector data. Default false. */
 	vectorInk?: boolean;
@@ -210,142 +321,236 @@ function withoutInkLayers(page: IPage): IPage {
 }
 
 const INK_LAYER_NAMES: ILayerNames[] = ['MAINLAYER', 'LAYER1', 'LAYER2', 'LAYER3'];
-/** Below this fraction of a page's actual rendered ink pixels landing near a
- * decoded stroke point, `toSvg`'s `vectorInk` option keeps that page's
- * rasterized ink rather than replacing it -- see `estimateInkCoverage`. */
-const MIN_INK_COVERAGE_TO_REPLACE_RASTER = 0.85;
-/** Starting point (and floor) for `estimateInkCoverage`'s per-point coverage
- * radius search: never check a band narrower than this even on a page whose
- * ink turns out to need no growing at all, since a too-tight radius
- * false-flags even a perfect decode as low-coverage over ordinary
- * rendering/rounding noise. */
-const MIN_INK_COVERAGE_RADIUS = 3;
-/** Upper bound on how far `estimateInkCoverage`'s radius search grows --
- * about 3% of a typical page's shorter dimension, comfortably bigger than
- * any real pen width observed so far but nowhere near big enough for a
- * *genuinely* incomplete decode (ink with no nearby stroke at all, however
- * far the search grows) to be mistaken for a complete one. */
-const MAX_INK_COVERAGE_RADIUS = 40;
-/** Step size, in pixels, `estimateInkCoverage`'s radius search grows by. */
-const INK_COVERAGE_RADIUS_STEP = 2;
-/** `estimateInkCoverage`'s radius search stops growing once a step gains
- * less than this much additional coverage, on the theory that once growth
- * stops paying off it's re-covering the same already-explained ink rather
- * than finding new real ink near a stroke that was just being measured too
- * tightly. */
-const MIN_INK_COVERAGE_GAIN_PER_STEP = 0.01;
 
-/** Marks every pixel within `radius` of each of `strokes`' decoded points
- * (and along the line between consecutive points, so fast pen movement
- * that samples sparsely doesn't leave gaps) as "explained", then returns
- * what fraction of `isInk`'s `inkPixelCount` pixels that covers. */
-function coverageAtRadius(
-	strokes: IStroke[],
-	pageWidth: number,
-	pageHeight: number,
-	radius: number,
-	isInk: Uint8Array,
-	inkPixelCount: number,
-): number {
-	const explained = new Uint8Array(pageWidth * pageHeight);
-	const markDisk = (cx: number, cy: number) => {
-		for (let y = Math.max(0, cy - radius); y <= Math.min(pageHeight - 1, cy + radius); y++) {
-			const rowStart = y * pageWidth;
-			const xStart = Math.max(0, cx - radius);
-			const xEnd = Math.min(pageWidth - 1, cx + radius);
-			explained.fill(1, rowStart + xStart, rowStart + xEnd + 1);
-		}
-	};
-	for (const stroke of strokes) {
-		for (let i = 0; i < stroke.points.length; i++) {
-			const point = stroke.points[i];
-			markDisk(Math.round(point.x), Math.round(point.y));
-			if (i === 0) continue;
-			const prev = stroke.points[i - 1];
-			const dx = point.x - prev.x;
-			const dy = point.y - prev.y;
-			const steps = Math.ceil(Math.hypot(dx, dy) / radius);
-			for (let s = 1; s < steps; s++) {
-				const t = s / steps;
-				markDisk(Math.round(prev.x + dx * t), Math.round(prev.y + dy * t));
-			}
-		}
-	}
-
-	let explainedInkPixelCount = 0;
-	for (let p = 0; p < isInk.length; p++) {
-		if (isInk[p] && explained[p]) explainedInkPixelCount++;
-	}
-	return explainedInkPixelCount / inkPixelCount;
+/** A page's rendered ink, decoded once per page -- used only for `'rect'`
+ * strokes' color/fill (see `deriveStrokeStyle`), since a rect's own
+ * `TOTALPATH` metadata isn't meaningful the way a `'path'` stroke's is. */
+interface InkMask {
+	/** 1 where that pixel (row-major, `y * pageWidth + x`) is real rendered
+	 * ink, 0 otherwise. */
+	isInk: Uint8Array;
+	inkPixelCount: number;
+	/** RGB of each `isInk` pixel, 3 bytes per pixel at the same index * 3;
+	 * meaningless where `isInk` is 0. */
+	colors: Uint8Array;
 }
 
-/**
- * Estimates what fraction of `page`'s actually-rendered ink (from its RLE
- * bitmap layers) sits near one of `strokes`' decoded points, as a proxy for
- * "how much of this page's real handwriting would go missing if its
- * rasterized ink were discarded in favor of `strokes`". `parseStrokes` only
- * decodes a subset of the coordinate encodings real strokes can use (see
- * its doc comment), so a page can have some strokes decode correctly while
- * others silently don't -- comparing against the page's own rendered ink,
- * rather than trusting `strokes` to be complete just because it's
- * non-empty, is what catches that case.
- *
- * The per-point coverage radius is found by growing it from
- * `MIN_INK_COVERAGE_RADIUS` while doing so keeps meaningfully increasing
- * coverage, rather than estimating it once from the page's overall ink
- * density (total ink area / total decoded path length ~ average stroke
- * width). That density estimate reads low on pages with a lot of
- * self-overlapping ink -- dense cursive, retraced letters -- because
- * overlapping ink doesn't add new pixels to the area term, so the same
- * total path length appears to explain more area than any single pass of
- * the pen actually covers, even though the true per-point radius needed is
- * no different than a sparser page's (confirmed across multiple real
- * fixtures: growing the radius recovers the "missing" coverage almost
- * entirely). Searching directly against the actual rendered ink instead
- * sidesteps that bias, and can't produce a false sense of completeness: it
- * only ever recovers ink that's genuinely near a correctly-placed stroke,
- * never ink that has no nearby stroke at all, so a genuinely incomplete
- * decode still reads as incomplete regardless of how far the radius grows
- * (verified by re-running this search with half a known-complete page's
- * strokes withheld). See
- * https://github.com/philips/supernote-typescript/issues/56.
- *
- * Returns a number in `[0, 1]`; `1` both when coverage is perfect and when
- * the page has no rendered ink at all (nothing to lose either way).
- */
-function estimateInkCoverage(page: IPage, strokes: IStroke[], pageWidth: number, pageHeight: number): number {
-	if (strokes.length === 0) return 0;
-
+/** Decodes `page`'s ink layers (MAINLAYER/LAYER1-3) into one composited
+ * `InkMask`, or `null` if the page has no ink layer data at all. An earlier
+ * version of this filtered out ink pixels whose red channel read >= 250, to
+ * exclude near-white anti-aliasing bleeding into the background -- but
+ * RATTA_RLE's colors are flat (no anti-aliasing) and background/unwritten
+ * pixels decode to alpha 0 regardless of color (see RattaRLEDecoder's own
+ * doc comment), so alpha alone already distinguishes real ink from
+ * background. The brightness check just silently excluded genuine *white*
+ * ink as if it were background instead -- confirmed against a real white-pen
+ * stroke (see stroke-isolation.note, issue #56's follow-up investigation),
+ * which undercounted coverage and made color sampling unable to ever detect
+ * a white pen. */
+function buildInkMask(page: IPage, pageWidth: number, pageHeight: number): InkMask | null {
 	const inkLayers = INK_LAYER_NAMES.map((name) => page[name]).filter(
 		(layer) => layer.bitmapBuffer && layer.bitmapBuffer.length,
 	);
-	if (inkLayers.length === 0) return 1;
+	if (inkLayers.length === 0) return null;
 
 	const decoder = new RattaRLEDecoder();
 	const isInk = new Uint8Array(pageWidth * pageHeight);
+	const colors = new Uint8Array(pageWidth * pageHeight * 3);
 	let inkPixelCount = 0;
 	for (const layer of inkLayers) {
 		const pixels = decoder.decode(layer.bitmapBuffer as Uint8Array, pageWidth, pageHeight);
 		for (let i = 0, p = 0; p < isInk.length; i += 4, p++) {
 			if (isInk[p]) continue;
-			if (pixels[i + 3] > 0 && pixels[i] < 250) {
+			if (pixels[i + 3] > 0) {
 				isInk[p] = 1;
+				colors[p * 3] = pixels[i];
+				colors[p * 3 + 1] = pixels[i + 1];
+				colors[p * 3 + 2] = pixels[i + 2];
 				inkPixelCount++;
 			}
 		}
 	}
-	if (inkPixelCount === 0) return 1;
+	return inkPixelCount > 0 ? { isInk, inkPixelCount, colors } : null;
+}
 
-	let radius = MIN_INK_COVERAGE_RADIUS;
-	let coverage = coverageAtRadius(strokes, pageWidth, pageHeight, radius, isInk, inkPixelCount);
-	while (radius < MAX_INK_COVERAGE_RADIUS && coverage < 1) {
-		const nextRadius = radius + INK_COVERAGE_RADIUS_STEP;
-		const nextCoverage = coverageAtRadius(strokes, pageWidth, pageHeight, nextRadius, isInk, inkPixelCount);
-		if (nextCoverage - coverage < MIN_INK_COVERAGE_GAIN_PER_STEP) break;
-		radius = nextRadius;
-		coverage = nextCoverage;
+/** Below this fraction of a page's actual rendered ink pixels sitting in a
+ * connected-ink blob that some decoded stroke actually passes through,
+ * `toSvg`'s `vectorInk` option keeps that page's rasterized ink rather than
+ * replacing it -- see `estimateInkCoverage`. */
+/** Below this fraction of a 2-point stroke's own bounding rectangle already
+ * being real ink, `deriveStrokeStyle` treats it as `'skip'` rather than
+ * `'rect'` -- see `StrokeStyle`'s doc comment. Comfortably below every
+ * genuine rectangle measured so far (~97% for a solid fill, ~25% for a
+ * deliberately patterned one like a cross-hatch) and comfortably above the
+ * 0% measured for the handful of unrelated short 2-point ink strokes found
+ * across other fixtures, so this only needs to separate those two clusters,
+ * not pinpoint an exact threshold. */
+const MIN_RECT_FILL_FRACTION = 0.15;
+/** At or above this fill fraction, a 'rect' is treated as a `'solid'` fill;
+ * below it (but still >= `MIN_RECT_FILL_FRACTION`), a `'hatch'` fill -- see
+ * `StrokeStyle`'s doc comment. Sits comfortably between the two clusters
+ * measured on a real fixture (~97-99% solid, ~25% cross-hatch). */
+const SOLID_RECT_MIN_FILL_FRACTION = 0.5;
+
+function modeColor(colorCounts: Map<string, number>): string | undefined {
+	let bestKey: string | undefined;
+	let bestCount = 0;
+	for (const [key, count] of colorCounts) {
+		if (count > bestCount) {
+			bestCount = count;
+			bestKey = key;
+		}
 	}
-	return coverage;
+	return bestKey;
+}
+
+function rectBounds(p0: IStrokePoint, p1: IStrokePoint, pageWidth: number, pageHeight: number) {
+	return {
+		minX: Math.max(0, Math.floor(Math.min(p0.x, p1.x))),
+		maxX: Math.min(pageWidth - 1, Math.ceil(Math.max(p0.x, p1.x))),
+		minY: Math.max(0, Math.floor(Math.min(p0.y, p1.y))),
+		maxY: Math.min(pageHeight - 1, Math.ceil(Math.max(p0.y, p1.y))),
+	};
+}
+
+/** What fraction of the rectangle spanned by `p0`/`p1` (a 2-point stroke's
+ * decoded points, i.e. its opposite corners) is already real ink in `mask`,
+ * and that ink's most common color within the rectangle (`undefined` if
+ * none). */
+function sampleRect(
+	mask: InkMask,
+	pageWidth: number,
+	pageHeight: number,
+	p0: IStrokePoint,
+	p1: IStrokePoint,
+): { fillFraction: number; color: string | undefined } {
+	const { minX, maxX, minY, maxY } = rectBounds(p0, p1, pageWidth, pageHeight);
+	const colorCounts = new Map<string, number>();
+	let total = 0;
+	let filled = 0;
+	for (let y = minY; y <= maxY; y++) {
+		const rowStart = y * pageWidth;
+		for (let x = minX; x <= maxX; x++) {
+			total++;
+			const p = rowStart + x;
+			if (!mask.isInk[p]) continue;
+			filled++;
+			const key = `${mask.colors[p * 3]},${mask.colors[p * 3 + 1]},${mask.colors[p * 3 + 2]}`;
+			colorCounts.set(key, (colorCounts.get(key) ?? 0) + 1);
+		}
+	}
+	return { fillFraction: total > 0 ? filled / total : 0, color: modeColor(colorCounts) };
+}
+
+/** Converts `IStroke.thickness` (an opaque on-device unit -- see its own doc
+ * comment) to an SVG stroke-width in page pixels. Calibrated empirically
+ * against `stroke-isolation.note`'s tool-isolated fixture: dividing by 150
+ * lands ordinary pen tools (needle/ink/calligraphy: raw 400-900) at 3-6px
+ * and a marker (raw 3800) at ~25px, matching this codebase's own prior
+ * raster-measured widths for the same strokes (needle/ink/calligraphy
+ * consistently well under a marker's, which measured close to the old
+ * raster-search's own 12px-half-width cap) -- not derived from a documented
+ * physical unit, since `thickness` isn't confirmed to share the coordinate
+ * fields' "10 micrometers per unit" scale (dividing by the same per-page
+ * coordinate `scale` `parseStrokes` uses produces implausibly wide lines,
+ * confirmed against this same fixture). */
+const THICKNESS_TO_PIXEL_SCALE = 150;
+
+/**
+ * Derives a `StrokeStyle` for one decoded stroke. For a `'path'`, this is a
+ * pure, direct read of the stroke's own real `TOTALPATH` metadata -- no
+ * raster involved at all (see `StrokeStyle`'s doc comment for why that
+ * metadata, not raster sampling, is now the source of truth). A 2-point
+ * `'rect'` is the one exception: its own `color` field isn't meaningful
+ * (see `StrokeStyle`), so its color/fill still comes from `mask`, the
+ * page's own rendered ink -- `sampleRect`.
+ */
+function deriveStrokeStyle(stroke: IStroke, mask: InkMask | null, pageWidth: number, pageHeight: number): StrokeStyle {
+	if (stroke.points.length === 2) {
+		if (!mask) return { shape: 'skip' };
+		const [p0, p1] = stroke.points;
+		const { fillFraction, color } = sampleRect(mask, pageWidth, pageHeight, p0, p1);
+		if (fillFraction < MIN_RECT_FILL_FRACTION) return { shape: 'skip' };
+		return {
+			shape: 'rect',
+			color: color ? `rgb(${color})` : 'black',
+			fill: fillFraction >= SOLID_RECT_MIN_FILL_FRACTION ? 'solid' : 'hatch',
+		};
+	}
+
+	return {
+		shape: 'path',
+		color: stroke.color,
+		width: stroke.thickness / THICKNESS_TO_PIXEL_SCALE,
+		tier: stroke.pen === 'marker' ? 'marker' : 'pen',
+	};
+}
+
+/** At or above this fraction of a `'path'` stroke's own points landing
+ * inside a single `'rect'` stroke's bounding box, `applyHeadingContrastOverrides`
+ * treats it as label text belonging to that rect rather than unrelated ink
+ * that merely passes nearby. */
+const MIN_INSIDE_RECT_FRACTION = 0.8;
+
+function isInsideRectBounds(point: IStrokePoint, bounds: { minX: number; maxX: number; minY: number; maxY: number }): boolean {
+	return point.x >= bounds.minX && point.x <= bounds.maxX && point.y >= bounds.minY && point.y <= bounds.maxY;
+}
+
+/**
+ * Supernote's Heading feature auto-recolors its label text for contrast
+ * against the heading's own background -- confirmed against a real
+ * fixture: black-pen text drawn over a black or dark-grey heading
+ * background renders as white in the raster, not black. That's a
+ * display-time effect, not something recorded per-stroke: `IStroke.color`
+ * always reflects the actual pen color the text was physically written in
+ * (black, here), which is exactly right for `deriveStrokeStyle`'s normal,
+ * raster-free `'path'` color -- just not for this one feature's on-screen
+ * result.
+ *
+ * Handled here as a narrow, targeted exception rather than by discarding
+ * real per-stroke color generally: a `'path'` whose own points mostly land
+ * inside a `'rect'`'s bounds (a heading background, or any other 2-point
+ * rect -- see `StrokeStyle`) gets its *displayed* color resampled from
+ * `mask`, the same page-own-rendered-ink source `'rect'` styles already
+ * rely on, instead of trusting `IStroke.color`. Every other stroke keeps
+ * its real, raster-free color untouched.
+ */
+function applyHeadingContrastOverrides(
+	strokes: IStroke[],
+	styles: StrokeStyle[],
+	mask: InkMask | null,
+	pageWidth: number,
+	pageHeight: number,
+): StrokeStyle[] {
+	if (!mask) return styles;
+
+	const rectBoundsList = strokes
+		.map((stroke, i) => (styles[i].shape === 'rect' ? rectBounds(stroke.points[0], stroke.points[1], pageWidth, pageHeight) : null))
+		.filter((bounds) => bounds !== null);
+	if (rectBoundsList.length === 0) return styles;
+
+	return styles.map((style, i) => {
+		if (style.shape !== 'path') return style;
+		const stroke = strokes[i];
+		const isLabelText = rectBoundsList.some((bounds) => {
+			const insideCount = stroke.points.filter((point) => isInsideRectBounds(point, bounds)).length;
+			return insideCount / stroke.points.length >= MIN_INSIDE_RECT_FRACTION;
+		});
+		if (!isLabelText) return style;
+
+		const colorCounts = new Map<string, number>();
+		for (const point of stroke.points) {
+			const xi = Math.round(point.x);
+			const yi = Math.round(point.y);
+			if (xi < 0 || xi >= pageWidth || yi < 0 || yi >= pageHeight) continue;
+			const p = yi * pageWidth + xi;
+			if (!mask.isInk[p]) continue;
+			const key = `${mask.colors[p * 3]},${mask.colors[p * 3 + 1]},${mask.colors[p * 3 + 2]}`;
+			colorCounts.set(key, (colorCounts.get(key) ?? 0) + 1);
+		}
+		const sampled = modeColor(colorCounts);
+		return sampled ? { ...style, color: `rgb(${sampled})` } : style;
+	});
 }
 
 /**
@@ -377,20 +582,28 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 		? pages.map((page) => parseStrokes(page.totalPathBuffer, note.pageWidth * upscale, note.pageHeight * upscale))
 		: pages.map((): IStroke[] => []);
 
-	// A page decoding *some* strokes doesn't mean it decoded all of them
-	// (see parseStrokes' doc comment on the coordinate encodings it can't
-	// read yet) -- estimateInkCoverage compares against this page's own
-	// rendered ink (at native resolution; coverage is scale-independent) to
-	// tell "fully decoded, safe to replace the raster" apart from
-	// "partially decoded, replacing the raster would drop real ink".
+	// Each real IStroke already carries its own real color/tool/thickness
+	// (see parseStrokes), so "did this page decode at all" is now a simple,
+	// exact question -- no coverage estimate needed. A page whose strokes
+	// don't decode (no TOTALPATH data, or a structure this hasn't been
+	// validated against) keeps its raster ink instead of replacing it with
+	// nothing. A 'rect' stroke is the one case that still needs the page's
+	// own rendered ink (see deriveStrokeStyle) -- built once per decoded page,
+	// at native resolution (matching the mask's own pixel space; rect styles
+	// don't need to be recomputed per upscale factor, only their already-
+	// upscaled points do).
+	const strokeStylesPerPage: StrokeStyle[][] = pages.map(() => []);
 	const decodedPageNumbers = vectorInk
 		? new Set(
 				pages
 					.map((page, i) => {
 						const nativeStrokes = parseStrokes(page.totalPathBuffer, note.pageWidth, note.pageHeight);
-						const coverage = estimateInkCoverage(page, nativeStrokes, note.pageWidth, note.pageHeight);
 						const pageNumber = pageNumbers ? pageNumbers[i] : i + 1;
-						return coverage >= MIN_INK_COVERAGE_TO_REPLACE_RASTER ? pageNumber : -1;
+						if (nativeStrokes.length === 0) return -1;
+						const mask = buildInkMask(page, note.pageWidth, note.pageHeight);
+						const styles = nativeStrokes.map((stroke) => deriveStrokeStyle(stroke, mask, note.pageWidth, note.pageHeight));
+						strokeStylesPerPage[i] = applyHeadingContrastOverrides(nativeStrokes, styles, mask, note.pageWidth, note.pageHeight);
+						return pageNumber;
 					})
 					.filter((pageNumber) => pageNumber !== -1),
 			)
@@ -415,11 +628,21 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 		// already carries its ink, and adding (partial, by definition here)
 		// paths on top would just bloat the SVG for no visible difference.
 		const strokes = decodedPageNumbers.has(pageNumber) ? strokesPerPage[i] : undefined;
+		// Styles were derived at native resolution (alongside the decode
+		// check above); a 'path' style's width needs to scale up alongside
+		// strokesPerPage's own upscaled coordinates so the rendered line
+		// matches the stroke's real thickness at any upscale factor -- a
+		// 'rect' style's size instead comes straight from its stroke's own
+		// (already-upscaled) points, and 'skip' has no size at all, so
+		// neither needs adjusting here. Color doesn't need scaling either.
+		const strokeStyles = strokes
+			? strokeStylesPerPage[i].map((style): StrokeStyle => (style.shape === 'path' ? { ...style, width: style.width * upscale } : style))
+			: undefined;
 		return addSvgPage(page, images[i], images[i].width, images[i].height, {
 			dpi: effectiveDpi,
 			includeText,
 			strokes,
-			strokeWidth: DEFAULT_STROKE_WIDTH * upscale,
+			strokeStyles,
 		});
 	});
 }

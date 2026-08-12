@@ -5,7 +5,7 @@ import globals from 'globals';
 
 export default [
 	{
-		ignores: ['lib/**', 'coverage/**'],
+		ignores: ['lib/**', 'coverage/**', 'site/**', '.scripts-dist/**'],
 	},
 	{
 		files: ['**/*.ts'],

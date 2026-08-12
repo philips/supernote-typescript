@@ -1,4 +1,6 @@
 lib/*
+site/
+.scripts-dist/
 node_modules/
 tests/output/*.png
 tests/output/*.jpg

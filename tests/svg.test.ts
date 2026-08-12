@@ -837,6 +837,44 @@ describe("svg", () => {
       expect(svg).toContain('stroke="rgb(255,255,255)"')
     })
 
+    test("a partially erased stroke draws as its surviving fragments, not whole (nomad-3.26.40-link-tag-3p.note)", { timeout: 30000 }, async () => {
+      // Page 2 has seven pen lines crossed by four eraser sweeps. The
+      // device recorded that by marking each line `trailStatus: -4` and
+      // writing the pieces it left behind as separate point-less records
+      // carrying only a contour (see strokes.test.ts). So what should be
+      // drawn over each line is several short fragments and *not* the
+      // line itself -- drawing the line too would paint the erased gaps
+      // back in, which is what happened while the mark was only known to
+      // mean "an eraser touched this".
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+      const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true })
+      const line = strokes.find((stroke) => stroke.trailStatus === -4 && stroke.points.length > 100 && stroke.thickness === 200)
+      expect(line).toBeDefined()
+
+      const box = {
+        minX: Math.min(...line!.points.map((p) => p.x)),
+        maxX: Math.max(...line!.points.map((p) => p.x)),
+        minY: Math.min(...line!.points.map((p) => p.y)),
+        maxY: Math.max(...line!.points.map((p) => p.y)),
+      }
+      const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
+      const over = svgInkPaths(svg).filter((path) => {
+        const points = path.rings.flat()
+        const center = {
+          x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+          y: points.reduce((sum, p) => sum + p.y, 0) / points.length,
+        }
+        return center.x >= box.minX && center.x <= box.maxX && center.y >= box.minY && center.y <= box.maxY
+      })
+      // its five surviving fragments, and no sixth path spanning the line
+      expect(over.length).toBe(5)
+      const spanY = (path: (typeof over)[number]) => {
+        const ys = path.rings.flat().map((p) => p.y)
+        return Math.max(...ys) - Math.min(...ys)
+      }
+      for (const path of over) expect(spanY(path)).toBeLessThan((box.maxY - box.minY) / 2)
+    })
+
     test("a link-tag indicator box never renders as ink, matching the raster (nomad-3.26.40-link-tag-3p.note)", { timeout: 30000 }, async () => {
       // Page 2 (1-indexed) has three "link tag" boxes -- confirmed via the
       // note's own LINK_* footer metadata (see strokes.test.ts) to be a

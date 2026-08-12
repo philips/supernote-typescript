@@ -1,4 +1,5 @@
 import * as fs from "fs-extra"
+import * as zlib from "zlib"
 import { describe, test, expect } from 'vitest'
 import { parseStrokes } from "../src/strokes"
 import { SupernoteX } from "../src/parsing"
@@ -442,6 +443,101 @@ describe("parseStrokes", () => {
       }
       expect(total).toBeGreaterThan(2000);
       expect(withContour / total).toBeGreaterThan(0.95);
+    });
+  });
+
+  describe("trailStatus (m_trailStatus)", () => {
+    /** Shoelace area of one closed contour ring, used to compare what a
+     * partially erased stroke covered against what its fragments do. */
+    function ringArea(ring: { x: number; y: number }[]) {
+      let total = 0;
+      for (let i = 0; i < ring.length; i++) {
+        const a = ring[i], b = ring[(i + 1) % ring.length];
+        total += a.x * b.y - b.x * a.y;
+      }
+      return Math.abs(total) / 2;
+    }
+
+    test("marks exactly the strokes Supernote's own export leaves out (turkish.note)", async () => {
+      // The claim this pins down is the strong one: a non-zero status means
+      // the device does not draw the record. turkish.pdf is Supernote's own
+      // vector export of this page in the filled-outline style, so each
+      // drawn stroke is one `f` fill operator -- 152 of them, against 152
+      // records reading 0 out of 189. Nothing here consults the raster.
+      const sn = new SupernoteX(await readFileToUint8Array("turkish.note"));
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+      expect(strokes.length).toBe(189);
+      expect(strokes.filter((stroke) => stroke.trailStatus === undefined).length).toBe(152);
+
+      const pdf = (await fs.readFile("tests/input/turkish.pdf")).toString("latin1");
+      const form = /\d+ 0 obj\r?\n?([\s\S]*?)endobj/g;
+      let streamText = "";
+      for (let match = form.exec(pdf); match; match = form.exec(pdf)) {
+        if (!match[1].includes("/Subtype/Form")) continue;
+        const stream = /stream\r?\n([\s\S]*?)endstream/.exec(match[1]);
+        if (stream) streamText = zlib.inflateSync(Buffer.from(stream[1], "latin1")).toString("latin1");
+      }
+      expect((streamText.match(/(?:^|\s)f(?:\s|$)/g) ?? []).length).toBe(152);
+    });
+
+    test("the code says which mechanism removed the stroke (erase-no-white-pen.note)", async () => {
+      // This fixture's README records exactly what was done to each of its
+      // five lines: three erase mechanisms, one of them lasso-select-and-
+      // delete. Exactly one stroke reads -16 (the lasso delete, its own
+      // pen=4 selection pair still in the file) and the rest read -99.
+      const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"));
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+      expect(strokes.map((stroke) => stroke.trailStatus).sort((a, b) => a! - b!)).toEqual([-99, -99, -99, -99, -16]);
+
+      // Same shape on the two other fixtures documented as exercising all
+      // three mechanisms: one lasso delete each, everything else the eraser.
+      for (const [fixture, page] of [["erase.note", 0], ["caligraphy.note", 3]] as const) {
+        const other = new SupernoteX(await readFileToUint8Array(fixture));
+        const codes = parseStrokes(other.pages[page].totalPathBuffer, other.pageWidth, other.pageHeight)
+          .map((stroke) => stroke.trailStatus)
+          .filter((status) => status !== undefined);
+        expect(codes.filter((status) => status === -16).length).toBe(1);
+        expect(codes.filter((status) => status === -99).length).toBe(codes.length - 1);
+      }
+    });
+
+    test("a partially erased stroke (-4) is followed by contour-only records holding what survived", async () => {
+      // The one code whose ink is still partly on the page. The device
+      // rewrites each surviving fragment as its own record with no points
+      // and a contour, stored right after the stroke it came from, so the
+      // erased stroke must be skipped and the fragments drawn instead --
+      // drawing both would paint the erased part back in.
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+        includeContours: true,
+      });
+      const partial = strokes.filter((stroke) => stroke.trailStatus === -4);
+      expect(partial.length).toBe(10);
+
+      for (const stroke of partial) {
+        const fragments = [];
+        for (let i = strokes.indexOf(stroke) + 1; i < strokes.length && strokes[i].points.length === 0; i++) {
+          fragments.push(strokes[i]);
+        }
+        expect(fragments.length).toBeGreaterThan(0);
+        // Each fragment is a real outline with no centreline of its own,
+        // and together they cover less than the stroke did before the
+        // erase -- what the eraser took out is the difference.
+        const area = (s: (typeof strokes)[number]) => (s.contour ?? []).reduce((sum, ring) => sum + ringArea(ring), 0);
+        for (const fragment of fragments) {
+          expect(fragment.contour!.length).toBeGreaterThan(0);
+          expect(fragment.trailStatus).toBeUndefined();
+        }
+        expect(fragments.reduce((sum, fragment) => sum + area(fragment), 0)).toBeLessThan(area(stroke));
+      }
+    });
+
+    test("eraserTouched stays the boolean form of trailStatus", async () => {
+      // Kept for callers written before the field was decoded.
+      const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"));
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+      expect(strokes.filter((stroke) => stroke.eraserTouched).length).toBe(21);
+      for (const stroke of strokes) expect(stroke.eraserTouched).toBe(stroke.trailStatus !== undefined || undefined);
     });
   });
 });

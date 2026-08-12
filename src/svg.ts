@@ -444,36 +444,24 @@ const SOLID_RECT_MIN_FILL_FRACTION = 0.5;
  * catch a stroke that survives only in part, cheap enough to run on every
  * stroke of a dense page. */
 const INK_PRESENCE_SAMPLE_COUNT = 60;
-/** Below this fraction of a stroke's sampled points finding matching ink in
- * the page's own render, `toSvg`'s `vectorInk` treats the stroke as erased
- * and drops it entirely.
- *
- * **Only ever consulted for strokes an eraser actually touched**
- * (`IStroke.eraserTouched`), which is what lets it sit at a confident 0.5
- * rather than hugging zero. Within that population the two outcomes are far
- * apart and nothing lands in between: on `horizontal_1270.note`, whose
- * device PDF names exactly which strokes survived, the erased ones score
- * 0.00-0.30 and the survivors 0.86-1.00, and this rule reproduces all 82
- * of that page's decisions exactly.
- *
- * Before there was a flag to lean on, this check ran against *every*
- * stroke, which forced it down to `MAX_HIDDEN_INK_PRESENCE` -- low enough
- * to never delete a partially-erased stroke, but too low to catch an erased
- * one sitting under whatever was written in its place. That is what left a
- * second `0` visible in `horizontal_1270.note`'s "1270". */
-const MAX_ERASED_INK_PRESENCE = 0.5;
 
-/** The same idea for strokes no eraser ever touched, which can still be
- * invisible: `erase.note`'s rows were covered over with *white ink* rather
- * than erased, and Supernote's own export of that page draws only the white.
- * They have to be dropped rather than drawn-then-covered, because
- * `buildStrokePathElements` sorts strokes into tiers instead of keeping
- * `TOTALPATH` order, so a white marker cover-up can end up painted *under*
- * the pen stroke it was meant to hide.
+/** Below this fraction of a stroke's sampled points finding matching ink in
+ * the page's own render, `toSvg`'s `vectorInk` drops the stroke entirely.
  *
- * Kept hard against zero: with no eraser involved, "not one sampled point
- * of this stroke has any matching ink" is the only safe reason to discard
- * something the file still says is there. */
+ * **Only ever consulted for strokes the file itself doesn't already answer
+ * for** -- i.e. those with no `IStroke.trailStatus`. Erasing *is* recorded
+ * per stroke (see that field), so this no longer decides anything about
+ * erased ink; what it still catches is a stroke that is invisible without
+ * having been erased at all. `erase.note`'s rows were covered over with
+ * *white ink* rather than erased, and Supernote's own export of that page
+ * draws only the white. Those have to be dropped rather than
+ * drawn-then-covered, because `buildStrokePathElements` sorts strokes into
+ * tiers instead of keeping `TOTALPATH` order, so a white marker cover-up
+ * can end up painted *under* the pen stroke it was meant to hide.
+ *
+ * Kept hard against zero: for a stroke the file says is live, "not one
+ * sampled point of it has any matching ink" is the only safe reason to
+ * discard it. */
 const MAX_HIDDEN_INK_PRESENCE = 0.05;
 /** How far from a sampled point `strokeInkPresence` looks for matching ink,
  * beyond the stroke's own rendered half width -- absorbs the point-to-pixel
@@ -490,21 +478,17 @@ const INK_PRESENCE_GREY_TOLERANCE = 48;
  * What fraction of `stroke` still has matching ink in `mask`, the page's own
  * rendered output -- i.e. how much of it the device actually still draws.
  *
- * This exists because **erasing is not recorded per-stroke anywhere in
- * `TOTALPATH`**. An erased stroke stays in the stroke log byte for byte
- * like a live one: its points, its `flag_draw` array, and even its
- * `point_contour` rendered outline are all unchanged (see
- * `parseStrokes`' doc comment and plans/vector-format-spec.md's
- * erase-records section, which rules each of those out in turn against
- * fixtures where the device's own PDF export proves what survived). The
- * eraser's own motion is logged as a separate stroke, but replaying it
- * geometrically is provably wrong -- the same record shapes mean "erase"
- * on one page and "lasso-select for a Keyword" on another.
+ * **This is no longer how erasing is decided.** `m_trailStatus`
+ * (`IStroke.trailStatus`) turned out to record removal per stroke, and it
+ * is what `vectorInk` keys on now: it is the device's own answer rather
+ * than a measurement of one, and it settles the cases a raster measurement
+ * cannot (an erased stroke sitting under its own replacement still finds
+ * ink under most of its points).
  *
- * So the rendered bitmap is the only thing that knows, and this asks it
- * directly. That inverts the usual relationship for `vectorInk` (real
- * metadata first, raster only as a fallback), but here the raster *is* the
- * primary record -- there is nothing more authoritative to prefer.
+ * What is left for this to do is the opposite case -- a stroke the file
+ * says is live that nonetheless isn't visible, because later *white ink*
+ * was drawn over it (`erase.note`; see `MAX_HIDDEN_INK_PRESENCE`). Those
+ * carry no status, so only the render knows.
  *
  * `displayColor` is the color the stroke is *rendered* in rather than
  * `IStroke.color`, because those differ exactly where it matters: a
@@ -1000,11 +984,13 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 							note.pageHeight,
 						);
 						// A stroke the device no longer draws must not be drawn here
-						// either, and how confidently that can be said depends on
-						// whether an eraser was ever applied to it (`eraserTouched`).
-						// If one was, most of it disappearing means it was erased; if
-						// none was, only its *complete* absence from the render is
-						// evidence enough -- see both thresholds' doc comments.
+						// either. The record says so itself: a non-zero
+						// `trailStatus` means the device dropped it, whether by
+						// eraser, lasso delete, or a lasso move that carried the ink
+						// off to a new record (see that field's doc comment). The
+						// raster is only consulted for *unmarked* strokes, which can
+						// still be invisible without having been erased -- see
+						// `MAX_HIDDEN_INK_PRESENCE`.
 						//
 						// Applied last, so a Heading label's displayed
 						// (contrast-flipped) color is the one matched against the
@@ -1015,9 +1001,11 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 						// "is this still there?" their own way.
 						const finalStyles = displayStyles.map((style, j): StrokeStyle => {
 							const stroke = nativeStrokes[j];
-							if (!mask || style.shape !== 'path' || stroke.isEraser) return style;
-							const limit = stroke.eraserTouched ? MAX_ERASED_INK_PRESENCE : MAX_HIDDEN_INK_PRESENCE;
-							return strokeInkPresence(stroke, style.color, mask, note.pageWidth, note.pageHeight) < limit
+							if (style.shape !== 'path' || stroke.isEraser) return style;
+							if (stroke.trailStatus !== undefined) return { shape: 'skip' };
+							if (!mask) return style;
+							return strokeInkPresence(stroke, style.color, mask, note.pageWidth, note.pageHeight) <
+								MAX_HIDDEN_INK_PRESENCE
 								? { shape: 'skip' }
 								: style;
 						});

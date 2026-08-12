@@ -37,25 +37,42 @@ export interface IStroke {
 	 * sharing the same white color (e.g. a white pen on a dark page), even
 	 * though both render identically. */
 	isEraser?: boolean;
-	/** True when an eraser has been applied to this stroke at some point --
-	 * decoded from the first field of the record's `Section1`
-	 * (https://github.com/Walnut356/snlib calls it `unk_8`), which reads `0`
-	 * on a stroke no eraser ever touched and a small negative value
-	 * otherwise.
+	/** The record's own `m_trailStatus` (`section_1`'s first `i32`, Ratta's
+	 * own name for what https://github.com/Walnut356/snlib calls `unk_8`),
+	 * present only when it is non-zero.
 	 *
-	 * It marks *contact*, not disappearance: a stroke can be touched and
-	 * still be largely visible, because the eraser only clipped part of it.
-	 * Across every fixture, all 2,181 strokes reading `0` are fully present
-	 * in the page's own render, so this is a sound one-way answer -- a
-	 * stroke without it is definitely still there, and only strokes carrying
-	 * it need the render consulted to see how much survived (see
-	 * `strokeInkPresence` in `src/svg.ts`).
+	 * **A non-zero value means the device no longer draws this record** --
+	 * this is the per-stroke visibility answer, read straight out of the
+	 * file rather than inferred from the page's raster. Confirmed against
+	 * Supernote's own vector PDF exports, which draw exactly the records
+	 * reading `0` and omit every marked one: `turkish.note` (152 of 189 ink
+	 * records live, 152 paths exported), `horizontal_1270.note` (61 of 82
+	 * live, 61 exported) and `nomad-3.26.40-link-tag-3p.note` page 3 (113
+	 * of 143, 113 exported).
 	 *
-	 * The observed values are `-4`, `-16` and `-99`; they correlate with how
-	 * much survived (every `-16` is completely gone, every `-4` is fully
-	 * intact, `-99` is mixed) but the encoding isn't confirmed, so nothing
-	 * keys on the specific value. */
-	eraserTouched?: boolean;
+	 * The value says *how* the record stopped being drawn. Codes seen
+	 * across the fixture corpus, each tied to a mechanism the fixture
+	 * itself documents (see plans/vector-format-spec.md for the evidence
+	 * per code):
+	 *
+	 * | Code | Meaning |
+	 * |---|---|
+	 * | `-2` | page cleared with no eraser or lasso record present (one instance; consistent with the binary's "CLEAN SCREEN" trail, unconfirmed) |
+	 * | `-3` | moved away by a lasso drag -- the ink now lives in a separate record at the new position |
+	 * | `-4` | **partially erased**: the surviving pieces follow as their own point-less, contour-only records (see `contour`) |
+	 * | `-16` | deleted via lasso-select-and-delete |
+	 * | `-99` | erased with the eraser tool, or otherwise removed whole |
+	 *
+	 * `-4` is the one code whose ink is still partly on the page, and the
+	 * surviving part is not this record: the device rewrites each surviving
+	 * fragment as a separate record with no `points` and its own `contour`,
+	 * stored immediately after this one. Drawing this record *and* those
+	 * would paint the erased part back in, so a renderer should skip every
+	 * record carrying a status and draw the fragments instead. That is what
+	 * the device itself does: its export of `nomad-3.26.40-link-tag-3p`
+	 * page 2 draws each erased line as exactly its own fragments, matching
+	 * their extents to the pixel, and never the line. */
+	trailStatus?: number;
 	/** True when this record is a filled rectangle -- a Heading or badge
 	 * background -- rather than a pen path, so its two points are opposite
 	 * corners of a box instead of the ends of a line. Read from the record's
@@ -95,9 +112,13 @@ export interface IStroke {
 	 * inflated by half the rendered width, and the enclosed area comes out
 	 * within a few percent of `pathLength * thickness / 100`.
 	 *
-	 * **This is not a record of what survived erasing.** A fully erased
-	 * stroke keeps its full-area outline here, byte for byte like a visible
-	 * one -- see `ERASER_COLOR`'s doc comment and
+	 * **A stroke's own outline is not a record of what survived erasing.**
+	 * An erased stroke keeps its full-area outline here, byte for byte like
+	 * a visible one -- what says it is gone is `trailStatus`, not this. The
+	 * one place a contour *does* carry surviving geometry is the point-less
+	 * records the device writes after a partially erased (`trailStatus`
+	 * `-4`) stroke: each holds one surviving fragment as a contour and
+	 * nothing else. See `ERASER_COLOR`'s doc comment and
 	 * plans/vector-format-spec.md's erase-records section. */
 	contour?: IStrokePoint[][];
 }
@@ -236,8 +257,8 @@ interface RawStroke {
 	strokeKind: string;
 	screenHeight: number;
 	points: [number, number][]; // raw (y, x) pairs, undivided device units
-	/** See `IStroke.eraserTouched`. */
-	eraseMark: number;
+	/** See `IStroke.trailStatus`. */
+	trailStatus: number;
 	/** Already in page-pixel space -- unlike `points`, these need no
 	 * transform (see `readContour`). Only populated when asked for. */
 	contour?: IStrokePoint[][];
@@ -347,14 +368,14 @@ function tryParseStroke(
 	// epa_points (8), epa_grays (4) -- all length-prefixed, all skipped
 	// wholesale; Section1 (and so the erase mark) begins immediately after.
 	for (const elementSize of [2, 4, 1, 8, 4]) {
-		if (p + 4 > strokeEnd) return { pen, color, thickness, strokeKind, screenHeight, points, eraseMark: 0 };
+		if (p + 4 > strokeEnd) return { pen, color, thickness, strokeKind, screenHeight, points, trailStatus: 0 };
 		p += 4 + view.getUint32(p, true) * elementSize;
 	}
 
-	const eraseMark = p + 4 <= strokeEnd ? view.getInt32(p, true) : 0;
+	const trailStatus = p + 4 <= strokeEnd ? view.getInt32(p, true) : 0;
 	const contour = includeContours ? readContour(view, byteLength, p, strokeEnd) : undefined;
 
-	return { pen, color, thickness, strokeKind, screenHeight, points, eraseMark, contour };
+	return { pen, color, thickness, strokeKind, screenHeight, points, trailStatus, contour };
 }
 
 /**
@@ -486,7 +507,7 @@ export function parseStrokes(
 				pen: PEN_IDS[raw.pen] ?? 'unknown',
 				thickness: raw.thickness,
 				...(isEraser ? { isEraser: true } : {}),
-				...(raw.eraseMark !== 0 ? { eraserTouched: true } : {}),
+				...(raw.trailStatus !== 0 ? { trailStatus: raw.trailStatus } : {}),
 				...(raw.strokeKind === FILLED_RECT_STROKE_KIND ? { isFilledRect: true } : {}),
 				...(raw.contour ? { contour: raw.contour } : {}),
 			});

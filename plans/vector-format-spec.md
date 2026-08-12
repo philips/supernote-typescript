@@ -689,6 +689,7 @@ from different firmware eras and in the two different export styles:
 |---|---|---|---|
 | `turkish.note` p1 | 189 | **152** | **152** |
 | `horizontal_1270.note` p1 | 82 | **61** | **61** |
+| `nomad-3.26.40-link-tag-3p.note` p3 | 143 | **113** | **113** |
 
 This overturns the conclusion recorded further up this document — that no
 per-stroke visibility field exists and the raster is the only thing that
@@ -705,7 +706,7 @@ device:
 |---|---|---|
 | `-99` | erased with the eraser tool, or otherwise removed whole | the bulk of every erase fixture; 21/21 on `horizontal_1270.note` and 37/37 on `turkish.note` match what the device PDFs omit |
 | `-16` | deleted via lasso-select-and-delete | exactly one stroke each on `erase.note` (row 6, the README's lasso-delete row), `erase-no-white-pen.note` and `caligraphy.note` p4 — the three fixtures documented as using all three erase mechanisms — plus all 33 strokes of `unknown-color.note` p1, which carries one lasso pair and no eraser records |
-| `-4` | **partially erased** — the surviving pieces follow as separate contour-only records | `nomad-3.15.27-blank-2p.note` / `nomad-3.26.40-link-tag-3p.note` p2, see below |
+| `-4` | **partially erased** — the surviving pieces follow as separate contour-only records | `nomad-3.15.27-blank-2p.note` / `nomad-3.26.40-link-tag-3p.note` p2, whose export draws the pieces and never the stroke — see below |
 | `-3` | moved away by a lasso drag; the ink now lives in a later record at the new position | `erase-colors.note` p2 uids 1–9, each with an identical-point-count twin at a shifted bbox (uids 15–23) carrying `m_copy = 97` |
 | `-2` | unconfirmed — consistent with the binary's `CLEAN SCREEN` trail category | seen once: `straight-line.note` p3's only stroke, on a page that renders blank with no eraser and no lasso record present |
 
@@ -718,16 +719,21 @@ same false positive that once left a doubled `0` in `horizontal_1270.note`'s
 "1270", and it is why the raster can't be the primary record even though it
 usually agrees.
 
-**Attributing the ink is what settles those cases**, and it matters most on
-`nomad-3.26.40-link-tag-3p.note` page 3, which has no PDF export to appeal
-to and where a naive measurement makes the marked strokes look alive — 15
-of its 30 find ink under half their points, several under every point.
+**Attributing the ink is what settles those cases**, and
+`nomad-3.26.40-link-tag-3p.note` page 3 is where it matters most: a naive
+measurement makes its marked strokes look alive — 15 of the 30 find ink
+under half their points, several under every point — because that page
+erases and rewrites in the same place. Its export (added later, and now the
+third exact count in the table above) says outright that all 30 are gone.
+The measurement agrees once the ink is attributed rather than merely
+found.
 Paint each *live* record's own `point_contour` into a mask, subtract it
 from the page's ink, and re-measure: **every marked stroke drops to 0.00,
-while all 113 live strokes stay present.** No ink on that page needs a
-marked stroke to explain it. A centreline sample cannot tell a stroke's own
-ink from its replacement's; the outlines can, because each stroke declares
-the exact region it covers.
+while all 113 live strokes stay present** — the same 113 the export draws.
+No ink on that page needs a marked stroke to explain it. A centreline
+sample cannot tell a stroke's own ink from its replacement's; the outlines
+can, because each stroke declares the exact region it covers. Worth keeping
+in mind wherever a page has no export to check against.
 
 **`-4`: partial erase is recorded, as replacement geometry.** On the two
 Nomad pages, each `-4` stroke is followed *in file order* by point-less
@@ -740,6 +746,14 @@ pen lines are drawn (uids 111–117, all marked `-4`), then an eraser sweep
 skips are the superseded generations, deleted as each later sweep re-cut
 the piece. The five surviving fragments of line 1 tile the original with
 four gaps in exactly the four places the eraser crossed it.
+
+**Supernote's own export draws exactly those fragments.** On
+`nomad-3.26.40-link-tag-3p.pdf` page 2, each of the seven erased pen lines
+comes out as its own fragment records and nothing else — 5, 4, 4, 5, 5, 5
+and 5 subpaths, matching each fragment record's own extent to within a
+pixel — and no subpath anywhere spans the line they came from. That is
+per-*piece* ground truth, a level finer than the per-stroke counts above,
+and it is what makes `-4` a decode rather than an inference.
 
 Rasterised against the page's own render, the fragments hold 87–100% ink,
 and the parent's area *minus* the fragments holds 0–4% (`link-tag`) or

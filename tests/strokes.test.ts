@@ -17,6 +17,36 @@ function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
   });
 }
 
+/** Every subpath the device's own PDF export paints on one page, as bounding
+ * boxes in page-pixel space -- one per `m` in the page's Form XObject.
+ *
+ * The exports put ink in Form XObjects rather than the page stream, and each
+ * one opens with `1 0 0 -1 0 <height> cm` -- so the path data itself is
+ * already in the note's own y-down pixel space and needs no transform here;
+ * the matrix is what turns it into PDF's y-up space, not away from it. Only
+ * `m`/`l`/`c` endpoints are read: the extents are all that's needed to ask
+ * which pieces of a stroke the device drew, and reading them from the raw
+ * numbers keeps this independent of the site build's own PDF converter. */
+function devicePageSubpaths(pdfBytes: Buffer, pageIndex: number) {
+  const text = pdfBytes.toString("latin1")
+  const forms = [...text.matchAll(/\d+ 0 obj\r?\n?([\s\S]*?)endobj/g)]
+    .filter(([, body]) => body.includes("/Subtype/Form"))
+    .map(([, body]) => {
+      const stream = /stream\r?\n([\s\S]*?)endstream/.exec(body)!
+      const raw = Buffer.from(stream[1], "latin1")
+      return (body.includes("FlateDecode") ? zlib.inflateSync(raw) : raw).toString("latin1")
+    })
+
+  const boxes: { minX: number; maxX: number; minY: number; maxY: number }[] = []
+  for (const subpath of forms[pageIndex].split(/(?:^|\s)m(?:\s|$)/).slice(1)) {
+    const nums = [...subpath.matchAll(/(-?[\d.]+)\s+(-?[\d.]+)\s+(?:l|c|m)(?:\s|$)/g)].map((m) => [Number(m[1]), Number(m[2])])
+    if (nums.length < 2) continue
+    const xs = nums.map((n) => n[0]), ys = nums.map((n) => n[1])
+    boxes.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) })
+  }
+  return boxes
+}
+
 /** Bounding box of a page's rendered ink (MAINLAYER), used as ground truth
  * to check decoded stroke points land inside real ink rather than drifting
  * off to an unrelated part of the page. */
@@ -532,18 +562,86 @@ describe("parseStrokes", () => {
       }
     });
 
+    test("the device draws only the surviving fragments of a partially erased stroke (nomad-3.26.40-link-tag-3p.pdf)", async () => {
+      // The direct ground truth for -4, and the tightest in the corpus:
+      // this page's export names, per stroke, which *pieces* of it survived.
+      // Each of the seven erased pen lines must come out as its own
+      // fragment records and nothing else -- a path spanning the whole line
+      // would be the erased part painted back in.
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
+
+      const devicePaths = devicePageSubpaths(await fs.readFile("tests/input/nomad-3.26.40-link-tag-3p.pdf"), 1);
+      const lines = strokes.filter((stroke) => stroke.trailStatus === -4 && stroke.points.length > 60 && stroke.thickness <= 1300);
+      expect(lines.length).toBe(7);
+
+      // Measured from each record's own outline rather than its centreline,
+      // since that is what the device draws: a 13px-wide line's outline sits
+      // half a width outside the points it was sampled from.
+      const extent = (rings: { x: number; y: number }[][]) => {
+        const points = rings.flat();
+        return {
+          minX: Math.min(...points.map((p) => p.x)),
+          maxX: Math.max(...points.map((p) => p.x)),
+          minY: Math.min(...points.map((p) => p.y)),
+          maxY: Math.max(...points.map((p) => p.y)),
+        };
+      };
+      for (const line of lines) {
+        const box = extent(line.contour ?? []);
+        const fragments = [];
+        for (let i = strokes.indexOf(line) + 1; i < strokes.length && strokes[i].points.length === 0; i++) {
+          fragments.push(strokes[i]);
+        }
+        // the export's own subpaths sitting in this line's column
+        const drawn = devicePaths
+          .filter((p) => p.minX >= box.minX - 6 && p.maxX <= box.maxX + 6 && p.maxY >= box.minY - 8 && p.minY <= box.maxY + 8)
+          .sort((a, b) => a.minY - b.minY);
+        expect(drawn.length).toBe(fragments.length);
+        // never the whole line
+        expect(drawn.some((p) => p.minY <= box.minY + 8 && p.maxY >= box.maxY - 8)).toBe(false);
+        // and each drawn piece lines up with a fragment record's own extent
+        const expected = fragments.map((fragment) => extent(fragment.contour ?? [])).sort((a, b) => a.minY - b.minY);
+        for (const [i, piece] of drawn.entries()) {
+          expect(Math.abs(piece.minY - expected[i].minY)).toBeLessThan(3);
+          expect(Math.abs(piece.maxY - expected[i].maxY)).toBeLessThan(3);
+        }
+      }
+    });
+
+    test("the device omits every marked stroke on a page that erases and rewrites in place (nomad-3.26.40-link-tag-3p.pdf)", async () => {
+      // Page 3's export is the stroked-polyline style, one `S` per stroke,
+      // so it states its count exactly: 113 for the 113 records reading 0,
+      // none of the 30 marked. This is the page where a raster measurement
+      // gets it wrong -- the erased words were rewritten in the same place,
+      // so 15 of the 30 marked strokes find ink under half their points.
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const strokes = parseStrokes(sn.pages[2].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+      const live = strokes.filter((stroke) => stroke.trailStatus === undefined);
+      expect(strokes.length - live.length).toBe(30);
+
+      const pdf = (await fs.readFile("tests/input/nomad-3.26.40-link-tag-3p.pdf")).toString("latin1");
+      const streams = [...pdf.matchAll(/\d+ 0 obj\r?\n?([\s\S]*?)endobj/g)]
+        .filter(([, body]) => body.includes("/Subtype/Form"))
+        .map(([, body]) => {
+          const stream = /stream\r?\n([\s\S]*?)endstream/.exec(body)!;
+          return zlib.inflateSync(Buffer.from(stream[1], "latin1")).toString("latin1");
+        });
+      expect((streams[2].match(/(?:^|\s)S(?:\s|$)/g) ?? []).length).toBe(live.length);
+    });
+
     test("a marked stroke's remaining ink always belongs to a live record (nomad-3.26.40-link-tag-3p.note p3)", async () => {
-      // This page has no PDF export to check against, and measured naively
-      // it looks like a counterexample: sample along each marked stroke's
-      // centreline and most of them find ink, several under every point.
-      // They were erased and then *rewritten in the same place*, so what
-      // the samples find is the replacement's ink, not their own.
+      // Why that page's export is worth trusting over a measurement of the
+      // render: measured naively the marked strokes look alive, because
+      // they were erased and then *rewritten in the same place*, so what
+      // the samples find is the replacement's ink rather than their own.
       //
-      // Attributing the ink settles it: paint every live record's own
-      // rendered outline into a mask, subtract it from the page's ink, and
-      // re-measure. Nothing of a marked stroke survives that subtraction,
-      // while every live stroke is present -- so no ink on this page needs
-      // a marked stroke to explain it.
+      // Attributing the ink shows the same thing the export does, without
+      // it: paint every live record's own rendered outline into a mask,
+      // subtract it from the page's ink, and re-measure. Nothing of a
+      // marked stroke survives that subtraction, while every live stroke is
+      // present -- so no ink on this page needs a marked stroke to explain
+      // it.
       const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
       const page = sn.pages[2];
       const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });

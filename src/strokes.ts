@@ -46,8 +46,9 @@ export interface IStroke {
 	 * file rather than inferred from the page's raster. Confirmed against
 	 * Supernote's own vector PDF exports, which draw exactly the records
 	 * reading `0` and omit every marked one: `turkish.note` (152 of 189 ink
-	 * records live, 152 paths exported) and `horizontal_1270.note` (61 of
-	 * 82 live, 61 exported).
+	 * records live, 152 paths exported), `horizontal_1270.note` (61 of 82
+	 * live, 61 exported) and `nomad-3.26.40-link-tag-3p.note` page 3 (113
+	 * of 143, 113 exported).
 	 *
 	 * The value says *how* the record stopped being drawn. Codes seen
 	 * across the fixture corpus, each tied to a mechanism the fixture
@@ -67,7 +68,10 @@ export interface IStroke {
 	 * fragment as a separate record with no `points` and its own `contour`,
 	 * stored immediately after this one. Drawing this record *and* those
 	 * would paint the erased part back in, so a renderer should skip every
-	 * record carrying a status and draw the fragments instead. */
+	 * record carrying a status and draw the fragments instead. That is what
+	 * the device itself does: its export of `nomad-3.26.40-link-tag-3p`
+	 * page 2 draws each erased line as exactly its own fragments, matching
+	 * their extents to the pixel, and never the line. */
 	trailStatus?: number;
 	/** True when this record is a filled rectangle -- a Heading or badge
 	 * background -- rather than a pen path, so its two points are opposite

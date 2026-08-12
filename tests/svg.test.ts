@@ -1071,33 +1071,15 @@ describe("svg", () => {
       }
     })
 
-    test("marker strokes always draw before pen strokes, regardless of TOTALPATH order (issue #56 follow-up)", { timeout: 30000 }, async () => {
-      // This fixture's "TEXT HIGHLIGHT" gray highlight band is a real
-      // marker-tool stroke, with the narrower black "TEXT"/"HIGHLIGHT" pen
-      // strokes layered on top of it in the real note -- but not
-      // necessarily earlier in TOTALPATH's own buffer order. Drawing
-      // strictly in buffer order can paint the marker highlight over the
-      // narrower ink and hide it. Tier is decided by the stroke's own real
-      // `pen` field (see deriveStrokeStyle), not by comparing rendered
-      // widths -- a marker stroke isn't guaranteed to render wider than
-      // every non-marker one on a given fixture, so draw order is verified
-      // here by matching each real stroke's own coordinates against the
-      // rendered SVG, not by re-inferring tier from stroke-width.
-      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
-      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
-      const markerStrokes = strokes.filter((s) => s.pen === "marker")
-      const penStrokes = strokes.filter((s) => s.pen !== "marker")
-      expect(markerStrokes.length).toBeGreaterThan(0)
-      expect(penStrokes.length).toBeGreaterThan(0)
-
-      // Each stroke is drawn as its own rendered outline (see svgInkPaths),
-      // whose points are the outline's rather than the centreline's, so a
-      // stroke is located in the output by extent instead of by coordinate
-      // equality: an outline hugs its own stroke, standing off it by half
-      // the line's width, so the drawn path whose bounding box is closest
-      // to the stroke's own is that stroke's. Draw order is then that
-      // path's position in document order.
-      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+    // Each stroke is drawn as its own rendered outline (see svgInkPaths),
+    // whose points are the outline's rather than the centreline's, so a
+    // stroke is located in the output by extent instead of by coordinate
+    // equality: an outline hugs its own stroke, standing off it by half the
+    // line's width, so the drawn path whose bounding box is closest to the
+    // stroke's own is that stroke's. Draw order is then that path's position
+    // in document order -- which is what decides what covers what, since SVG
+    // paints later elements on top.
+    const drawOrderLookup = (svg: string) => {
       const boundsOf = (points: { x: number; y: number }[]) => ({
         minX: Math.min(...points.map((p) => p.x)),
         maxX: Math.max(...points.map((p) => p.x)),
@@ -1105,8 +1087,10 @@ describe("svg", () => {
         maxY: Math.max(...points.map((p) => p.y)),
       })
       const drawn = svgInkPaths(svg).map((path, index) => ({ index, ...boundsOf(path.rings.flat()) }))
-      const drawIndexOf = (stroke: (typeof strokes)[number]) => {
-        const want = boundsOf(stroke.points)
+      return (stroke: { points: { x: number; y: number }[]; contour?: { x: number; y: number }[][] }) => {
+        const points = stroke.points.length ? stroke.points : (stroke.contour ?? []).flat()
+        if (points.length === 0) return -1
+        const want = boundsOf(points)
         let best = -1
         let bestDistance = Infinity
         for (const path of drawn) {
@@ -1119,11 +1103,85 @@ describe("svg", () => {
         }
         return best
       }
-      const lastMarkerIndex = Math.max(...markerStrokes.map(drawIndexOf).filter((i) => i !== -1))
+    }
+
+    test("a marker lighter than the ink it crosses draws beneath it (issue #56 follow-up)", { timeout: 30000 }, async () => {
+      // This fixture's "TEXT HIGHLIGHT" gray highlight band is a real
+      // marker-tool stroke, with the narrower black "TEXT"/"HIGHLIGHT" pen
+      // strokes layered on top of it in the real note -- but *later* in
+      // TOTALPATH's own buffer order than that ink, so drawing strictly in
+      // buffer order paints the highlight over the writing and hides it.
+      // The device doesn't: its own render of this page has every black
+      // letter fully legible over the grey. Which marker strokes that
+      // applies to is decided per stroke, from whether the marker is
+      // lighter than ink it crosses (see isHighlighterPass) -- so this
+      // fixture's *black* markers, which fill patterns rather than
+      // highlight, are deliberately not part of the claim.
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      const greyLevel = (color: string) => Number(/rgb\((\d+)/.exec(color)![1])
+      const highlighters = strokes.filter((s) => s.pen === "marker" && greyLevel(s.color) > 100 && greyLevel(s.color) < 250)
+      const penStrokes = strokes.filter((s) => s.pen !== "marker")
+      expect(highlighters.length).toBeGreaterThan(0)
+      expect(penStrokes.length).toBeGreaterThan(0)
+      // the highlight bands really do come after the writing they cover
+      expect(strokes.indexOf(highlighters[0])).toBeGreaterThan(strokes.indexOf(penStrokes[0]))
+
+      const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const drawIndexOf = drawOrderLookup(svg)
+      const lastHighlighterIndex = Math.max(...highlighters.map(drawIndexOf).filter((i) => i !== -1))
       const firstPenIndex = Math.min(...penStrokes.map(drawIndexOf).filter((i) => i !== -1))
-      expect(lastMarkerIndex).toBeGreaterThan(-1)
+      expect(lastHighlighterIndex).toBeGreaterThan(-1)
       expect(firstPenIndex).toBeGreaterThan(-1)
-      expect(lastMarkerIndex).toBeLessThan(firstPenIndex)
+      expect(lastHighlighterIndex).toBeLessThan(firstPenIndex)
+    })
+
+    test("a marker darker than the ink it crosses draws over it (sticker.note, issue #82)", { timeout: 30000 }, async () => {
+      // The other direction of the same rule, and the case that shows a
+      // marker can't just be sorted under every pen stroke: page 2's black
+      // marker line is drawn across the sticker plugin's artwork, and
+      // Supernote's own render of the page -- both its PDF export and the
+      // page's own raster -- puts the line over the top, hiding the
+      // sticker's white detail strokes where it crosses them.
+      const sn = new SupernoteX(await readFileToUint8Array("sticker.note"))
+      const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true })
+      const marker = strokes.filter((s) => s.pen === "marker")
+      expect(marker.length).toBe(1)
+      // the sticker's own strokes come first, the line across it last
+      expect(strokes.indexOf(marker[0])).toBe(strokes.length - 1)
+      const stickerStrokes = strokes.filter((s) => s !== marker[0])
+
+      const [, svg] = await toSvg(sn, { vectorInk: true })
+      const drawIndexOf = drawOrderLookup(svg)
+      const markerIndex = drawIndexOf(marker[0])
+      const lastStickerIndex = Math.max(...stickerStrokes.map(drawIndexOf).filter((i) => i !== -1))
+      expect(markerIndex).toBeGreaterThan(-1)
+      expect(markerIndex).toBeGreaterThan(lastStickerIndex)
+    })
+
+    test("a white marker covers the ink it was dragged over, rather than sliding under it (headings-and-marker.note page 3)", { timeout: 30000 }, async () => {
+      // White is the one color the "darker ink wins" rule can't place: a
+      // white marker isn't a highlight, it's a cover-up. This page's
+      // bottom row is the word "White" written in black pen and then
+      // painted over with the white marker, and the device's own export
+      // draws only the few flecks of black the white missed. Drawing every
+      // marker under the pen ink instead left the whole word legible.
+      const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
+      const strokes = parseStrokes(sn.pages[2].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      const whiteMarkers = strokes.filter((s) => s.pen === "marker" && s.color === "rgb(254,254,254)")
+      expect(whiteMarkers.length).toBeGreaterThan(0)
+      // the ink they cover is written first, the white pass over it last
+      const covered = strokes.filter(
+        (s) => s.pen !== "marker" && s.color === "rgb(0,0,0)" && s.points.some((p) => p.y > 1000 && p.y < 1180),
+      )
+      expect(covered.length).toBeGreaterThan(0)
+
+      const [, , svg] = await toSvg(sn, { vectorInk: true })
+      const drawIndexOf = drawOrderLookup(svg)
+      const firstWhiteIndex = Math.min(...whiteMarkers.map(drawIndexOf).filter((i) => i !== -1))
+      const lastCoveredIndex = Math.max(...covered.map(drawIndexOf).filter((i) => i !== -1))
+      expect(firstWhiteIndex).toBeGreaterThan(-1)
+      expect(firstWhiteIndex).toBeGreaterThan(lastCoveredIndex)
     })
 
     test("scales stroke coordinates together with upscale", { timeout: 60000 }, async () => {

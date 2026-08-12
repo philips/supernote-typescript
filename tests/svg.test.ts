@@ -973,8 +973,8 @@ describe("svg", () => {
       const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"))
       const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
       expect(decoded.filter((s) => !s.isEraser).length).toBe(82) // every stroke still decodes...
-      // ...and exactly the 21 the device erased carry the erase mark
-      expect(decoded.filter((s) => s.eraserTouched && !s.isEraser).length).toBe(82 - drawnByDevice)
+      // ...and exactly the 21 the device erased carry a trail status
+      expect(decoded.filter((s) => s.trailStatus !== undefined && !s.isEraser).length).toBe(82 - drawnByDevice)
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
       const inkPaths = svgInkPaths(svg).filter(({ color }) => color !== "rgb(255,255,255)")
@@ -984,7 +984,7 @@ describe("svg", () => {
       // erased, and rewritten in place. Because the replacement sits on top
       // of it, the erased one still finds ~30% of its own points over black
       // ink, so a presence check alone kept it and the page rendered "12700"
-      // with a doubled zero. It is the erase mark that settles it.
+      // with a doubled zero. It is `trailStatus` that settles it.
       //
       // Asserted by counting what lands on top of it rather than by
       // matching literal `d` text, since a path is drawn as its rendered
@@ -993,11 +993,11 @@ describe("svg", () => {
       // surviving stroke, not the erased one as well. The pair is found by
       // the thing that defines it -- an erased stroke and a surviving one
       // starting within a couple of pixels of each other.
-      const survivors = decoded.filter((stroke) => !stroke.isEraser && !stroke.eraserTouched)
+      const survivors = decoded.filter((stroke) => !stroke.isEraser && stroke.trailStatus === undefined)
       const erasedZero = decoded.find(
         (stroke) =>
           !stroke.isEraser &&
-          stroke.eraserTouched &&
+          stroke.trailStatus !== undefined &&
           stroke.points[0] !== undefined &&
           survivors.some((other) => other.points[0] && Math.hypot(other.points[0].x - stroke.points[0].x, other.points[0].y - stroke.points[0].y) < 3),
       )
@@ -1351,7 +1351,7 @@ describe("svg", () => {
 
       // page 1 is untouched, so every one of its strokes must survive
       const page1 = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
-      expect(page1.every((s) => !s.eraserTouched)).toBe(true)
+      expect(page1.every((s) => s.trailStatus === undefined)).toBe(true)
       expect(svgInkPaths(svgs[0]).length).toBe(page1.length)
 
       // and both colours are still drawn on the erased page -- neither got

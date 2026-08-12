@@ -532,12 +532,17 @@ describe("parseStrokes", () => {
       }
     });
 
-    test("eraserTouched stays the boolean form of trailStatus", async () => {
-      // Kept for callers written before the field was decoded.
+    test("is left off entirely on a stroke the device still draws", async () => {
+      // The field is absent rather than 0 on a live stroke, so `in` and a
+      // plain truthiness check agree with each other, and the 21 marked
+      // strokes of this page are exactly the ones its PDF export omits.
       const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"));
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
-      expect(strokes.filter((stroke) => stroke.eraserTouched).length).toBe(21);
-      for (const stroke of strokes) expect(stroke.eraserTouched).toBe(stroke.trailStatus !== undefined || undefined);
+      expect(strokes.filter((stroke) => stroke.trailStatus !== undefined).length).toBe(21);
+      for (const stroke of strokes) {
+        expect("trailStatus" in stroke).toBe(stroke.trailStatus !== undefined);
+        if (stroke.trailStatus !== undefined) expect(stroke.trailStatus).toBeLessThan(0);
+      }
     });
   });
 });

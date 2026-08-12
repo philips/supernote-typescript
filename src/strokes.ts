@@ -69,13 +69,6 @@ export interface IStroke {
 	 * would paint the erased part back in, so a renderer should skip every
 	 * record carrying a status and draw the fragments instead. */
 	trailStatus?: number;
-	/** @deprecated Use `trailStatus`, which carries the same information
-	 * plus the code itself. Kept as the exact boolean it always was (`true`
-	 * whenever `trailStatus` is set) for callers written before the field
-	 * was decoded; the name predates knowing that an eraser is only one of
-	 * the ways a record gets marked (a lasso move sets it too), and that it
-	 * marks removal rather than contact. */
-	eraserTouched?: boolean;
 	/** True when this record is a filled rectangle -- a Heading or badge
 	 * background -- rather than a pen path, so its two points are opposite
 	 * corners of a box instead of the ends of a line. Read from the record's
@@ -510,7 +503,7 @@ export function parseStrokes(
 				pen: PEN_IDS[raw.pen] ?? 'unknown',
 				thickness: raw.thickness,
 				...(isEraser ? { isEraser: true } : {}),
-				...(raw.trailStatus !== 0 ? { trailStatus: raw.trailStatus, eraserTouched: true } : {}),
+				...(raw.trailStatus !== 0 ? { trailStatus: raw.trailStatus } : {}),
 				...(raw.strokeKind === FILLED_RECT_STROKE_KIND ? { isFilledRect: true } : {}),
 				...(raw.contour ? { contour: raw.contour } : {}),
 			});

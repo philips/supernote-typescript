@@ -444,4 +444,49 @@ describe("parseStrokes", () => {
       expect(withContour / total).toBeGreaterThan(0.95);
     });
   });
+
+  describe("record class (StrokeConfig offset 40)", () => {
+    test("identifies lasso paths exactly, matching the pen id it replaced", async () => {
+      // The lasso exclusion now keys on the record-class field rather than
+      // on `pen === 4`, because firmware reuses pen ids across tools. This
+      // pins the equivalence that made the swap safe: across every fixture,
+      // the set of records the field calls a lasso is precisely the set of
+      // pen=4 records -- no ink accidentally dropped, no loop kept.
+      const RECORD_CLASS_OFFSET = 40, LASSO = -5, CONFIG_SIZE = 208;
+      const fixtures = fs.readdirSync("tests/input").filter((name) => name.endsWith(".note")).sort();
+      let lassoByClass = 0, lassoByPen = 0, ink = 0, disagreements = 0;
+
+      for (const fixture of fixtures) {
+        const sn = new SupernoteX(await readFileToUint8Array(fixture));
+        for (const page of sn.pages) {
+          const buf = page.totalPathBuffer;
+          if (!buf || buf.length < 16) continue;
+          const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+          const count = view.getUint32(0, true);
+          if (!count || count > 1_000_000) continue;
+          let pos = 4;
+          for (let i = 0; i < count; i++) {
+            if (pos + 4 > buf.length) break;
+            const len = view.getUint32(pos, true);
+            const start = pos + 4;
+            if (!len || len < CONFIG_SIZE || start + len > buf.length) break;
+            pos = start + len;
+            const byClass = view.getInt32(start + RECORD_CLASS_OFFSET, true) === LASSO;
+            const byPen = view.getUint32(start, true) === 4;
+            if (byClass) lassoByClass++;
+            if (byPen) lassoByPen++;
+            if (byClass !== byPen) disagreements++;
+            if (view.getInt32(start + RECORD_CLASS_OFFSET, true) === 5000) ink++;
+          }
+        }
+      }
+
+      expect(disagreements).toBe(0);
+      expect(lassoByClass).toBe(lassoByPen);
+      expect(lassoByClass).toBeGreaterThan(0);
+      // The field is not the constant 5000 snlib documents it as, but it is
+      // 5000 for the overwhelming majority -- real ink.
+      expect(ink).toBeGreaterThan(2000);
+    });
+  });
 });

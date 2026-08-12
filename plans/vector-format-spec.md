@@ -88,7 +88,7 @@ tool/color/width-isolated pages, `headings-and-marker.note`,
 | 28 | `page_num` (u32) | **confirmed** — 1-indexed page number, matches the containing page exactly in every fixture |
 | 32 | `unk_3` | reads `0` everywhere |
 | 36 | `unk_4` | reads `0` everywhere |
-| 40 | `unk_5` | **confirmed** always `5000` (matches snlib) |
+| 40 | `record_class` (i32) | **decoded** — not the constant `5000` snlib documents. It states what the record *is*: `5000` ink, `0` two-point-derived geometry, `-1`/`-2`/`-4` eraser gesture, `-5` lasso path. See below. |
 | 44 | `stroke_layer` (u32) | **confirmed** — `test.note` has real `LAYER1` content; its strokes read `1` here, `MAINLAYER` strokes read `0` (0-indexed ignoring background, exactly as snlib says) |
 | 48 | `stroke_kind` (52-byte C string) | **confirmed** — see below; Ratta's own name is `predictName` (Part 1.4) |
 | 100 | `bounding_tl` (i32 x, i32 y) | **decoded** — see below; Ratta's name `upLeftPoint` |
@@ -358,6 +358,46 @@ Findings, each confirmed against device ground truth:
    threshold can be right for all of them. Clipping each stroke to the
    rendered ink mask, rather than deciding per stroke, is what would remove
    the last threshold entirely.
+
+### `record_class` (offset 40) — what a record *is*, and what it still won't tell you
+
+snlib documents offset 40 as `unk_5`, "only ever seen `5000`", and this
+document repeated that. It is wrong: `5000` is the value for real ink, and
+ink is ~97% of records. Every record in every fixture (2,544 across all
+device families and firmware here) falls into one of four groups:
+
+| Value | Records | What |
+|---|---|---|
+| `5000` | 2457 | real ink — every pen, every colour, including white |
+| `0` | 22 | geometry derived from two points: a Heading background (`"0001"`), a link-tag box (`"0000"`), or a ruler line (`"straightLine"`) |
+| `-1`, `-2`, `-4` | 46 | an eraser gesture (three tool modes/eras) |
+| `-5` | 19 | a lasso selection path |
+
+Two things make this worth having. `-5` holds **every** `pen === 4` record
+and nothing else, so `src/strokes.ts` now excludes lasso paths on this
+field instead of on the pen id — durable against firmware reusing ids
+across tools, which it demonstrably does (`pen === 1` is both the older ink
+pen and the Nomad-era eraser). And `0` is a single uniform marker for the
+two-point-derived records that have caused real bugs when mistaken for
+ordinary strokes — the `"straightLine"` ruler-line case in particular.
+
+**What it does not do is tell you whether an erase actually erased
+anything**, which is what it was investigated for. `erase.note`, which
+exercises every erase mechanism, carries genuine erasers at `-4`; and
+`nomad-3.26.40-link-tag-3p.note` page 3's `-4` records sit on top of fully
+visible keyword text having erased nothing. Same class, opposite outcome.
+The field identifies the *tool*, never the *result*.
+
+So the device's own taxonomy (`TRAIL_ERASE_AREA` / `ERASE_LINE_COLOR_VALUE`
+/ `CLEAN SCREEN` / region selection / `ERASER select`, Part 1.4) still
+implies a discriminator exists, and it is still not found — see the open
+questions. Ruled out so far: `disableAreaList`, `point_contour`,
+`flag_draw`, and now `record_class`. A plausible remaining reading is that
+there is nothing to find in the record at all, and the distinction is
+positional — the app decides by replaying trails in order, so a gesture's
+meaning may depend on what the *preceding* records did (a lasso immediately
+before an eraser is a select-then-delete; the same eraser alone is a drag).
+Nothing has tested that yet.
 
 ### `point_contour` — decoded: the device's own rendered outline
 
@@ -1108,12 +1148,21 @@ pass; the findings are folded into the sections above. In brief:
    `strokeLen` rather than parsing the tail. Nothing needs them.
 9. **The erase-vs-select discriminator** — the app distinguishes
    `TRAIL_ERASE_AREA`, `ERASE_LINE_COLOR_VALUE`, `CLEAN SCREEN`, region
-   selection and `ERASER select` (Part 1.4), so the record must carry
-   something this repo hasn't found. Resolving it is what would let the
-   erase replay work on `nomad-3.26.40-link-tag-3p.note` page 3 and remove
-   the last raster dependency in the erase path. `disableAreaList` is ruled
-   out; the named-but-unassigned `StrokeConfig` scalars are the remaining
-   candidates.
+   selection and `ERASER select` (Part 1.4), so something must carry the
+   distinction. Resolving it is what would let the erase replay work on
+   `nomad-3.26.40-link-tag-3p.note` page 3 and remove the last raster
+   dependency in the erase path.
+
+   Ruled out: `disableAreaList`, `point_contour`, `flag_draw`, and
+   `record_class` (offset 40 — it gives the *tool*, not the outcome; see its
+   section above). The named-but-unassigned `StrokeConfig` scalars remain
+   candidates, but the negative results are piling up, and the more likely
+   reading now is that **the distinction isn't in the record at all**. The
+   app replays trails in order, so a gesture's meaning can depend on what
+   preceded it — a lasso immediately before an eraser is a
+   select-then-delete, the same eraser alone is a drag. Testing that
+   ordering hypothesis is cheaper than continuing to search fields, and
+   should come first.
 10. **`m_trailStatus`'s codes** — `-4`/`-16`/`-99` are a status enum, not a
     boolean (Part 1.4). Decoding them may subsume question 9.
 

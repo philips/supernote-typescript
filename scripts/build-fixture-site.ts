@@ -44,8 +44,8 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 		note: 'Draws exactly the 61 of 82 decoded strokes the device does. The doubled "0" in "1270" is gone: that digit was written, erased and rewritten in place, so the erased copy still found about 30% of its own points over black ink.',
 	},
 	test: {
-		isolates: 'The oldest file here (SN_FILE_VER_20220011, A5X) — the only one using the older ids: ink pen 1, marker 5, and colours 48/81 rather than greys.',
-		note: 'Its three pen=5 strokes are a highlighter pass over the first line, which is what identifies 5 as the marker. Most of this page never reaches the output, though, and the pen id is not why: on this format a colour is an id rather than the grey it renders as — 48 draws as 128, 81 as 169 — so the ink-presence check looks for the wrong shade under each stroke and discards 16 of 58, the highlighter included.',
+		isolates: 'The oldest file here (SN_FILE_VER_20220011, A5X) — the only one on the older ids: ink pen 1, marker 5, and colours stored as palette ids rather than greys.',
+		note: 'Its three pen=5 strokes are a highlighter pass over the first line, which is what identifies 5 as the marker. Its export is also what decoded the old colour ids: 48 is dark grey and 81 light grey, each device colour group landing on one of ours to within a stroke half width. Reading them literally made dark grey nearly black and cost the page 16 of its 58 strokes, which the ink-presence check dropped as invisible after hunting for a shade the raster never held.',
 	},
 	'a5x-2.14.28': {
 		isolates: 'The older ink pen (pen=1), and a rare 1:1 export — 146 filled outlines for 146 decoded strokes.',

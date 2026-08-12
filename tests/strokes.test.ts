@@ -857,8 +857,9 @@ describe("parseStrokes", () => {
         expect(marker.thickness).toBeGreaterThan(Math.max(...inkThickness) * 5);
         // ...and its color is the marker form of a base palette value: the
         // device's own engine rewrites 0/48/80 to 1/49/81 for exactly the
-        // two marker ids (see PEN_IDS).
-        expect(marker.color).toBe("rgb(81,81,81)");
+        // two marker ids (see PEN_IDS). Stored as 81 here, decoded to the
+        // grey that id means -- see LEGACY_GREY_IDS.
+        expect(marker.color).toBe("rgb(202,202,202)");
       }
 
       const box = (points: { x: number; y: number }[]) => ({
@@ -951,6 +952,88 @@ describe("parseStrokes", () => {
       const isolation = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
       const tools = parseStrokes(isolation.pages[1].totalPathBuffer, isolation.pageWidth, isolation.pageHeight);
       expect(tools.map((stroke) => stroke.pen).sort()).toEqual(["calligraphy", "inkPen", "marker", "needlePoint"]);
+    });
+
+    test("the older format's grey ids decode to the greys the device itself draws", async () => {
+      // test.note stores 48 and 81 where current firmware stores a grey
+      // level directly, so reading them literally makes dark grey nearly
+      // black. Supernote's own vector export of the same page says which
+      // grey each id means -- the ground truth the 157/201 palette already
+      // comes from -- and its page 1 uses exactly three ink colours.
+      const pdf = await fs.promises.readFile("tests/input/test.pdf");
+      const text = pdf.toString("latin1");
+      const form = [...text.matchAll(/\d+ 0 obj\r?\n?([\s\S]*?)endobj/g)]
+        .filter(([, body]) => body.includes("/Subtype/Form"))
+        .map(([, body]) => {
+          const stream = /stream\r?\n([\s\S]*?)endstream/.exec(body)!
+          return zlib.inflateSync(Buffer.from(stream[1], "latin1")).toString("latin1")
+        })[0]
+
+      // As devicePageSubpaths, but keeping each subpath's fill colour: the
+      // question here is which colour the device drew a stroke in, not just
+      // where.
+      const tokens = form.split(/\s+/)
+      const byGrey = new Map<number, { minX: number; maxX: number; minY: number; maxY: number }[]>()
+      let grey: number | null = null
+      // The colour a subpath is drawn in is whatever was set when it
+      // *started*, not when it ends -- a run's last subpath is followed by
+      // the next run's `rg`, so reading the colour at flush time files it
+      // under the wrong one.
+      let openGrey: number | null = null
+      let points: number[][] = []
+      const flush = () => {
+        if (openGrey === null || points.length < 2) return
+        const xs = points.map((p) => p[0]), ys = points.map((p) => p[1])
+        if (!byGrey.has(openGrey)) byGrey.set(openGrey, [])
+        byGrey.get(openGrey)!.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) })
+      }
+      for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i] === "rg") grey = Math.round(Number(tokens[i - 3]) * 255)
+        else if (tokens[i] === "m") { flush(); openGrey = grey; points = [[Number(tokens[i - 2]), Number(tokens[i - 1])]] }
+        else if ((tokens[i] === "l" || tokens[i] === "c") && points.length) points.push([Number(tokens[i - 2]), Number(tokens[i - 1])])
+      }
+      flush()
+
+      const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      const greyOf = (stroke: (typeof strokes)[number]) => Number(/rgb\((\d+)/.exec(stroke.color)![1])
+
+      // The ids are gone: nothing decodes as the raw 48/81 any more.
+      expect(strokes.some((stroke) => greyOf(stroke) === 48 || greyOf(stroke) === 81)).toBe(false);
+      expect([...new Set(strokes.map(greyOf))].sort((a, b) => a - b)).toEqual([0, 157, 202]);
+
+      // Each of our colour groups sits wholly inside the device's matching
+      // one. 202 is the marker form of 201 (see LEGACY_GREY_IDS), which the
+      // device's export draws at the base grey exactly as it does a modern
+      // marker's 202.
+      for (const [ours, device] of [[0, 0], [157, 157], [202, 201]] as const) {
+        const group = strokes.filter((stroke) => greyOf(stroke) === ours)
+        expect(group.length).toBeGreaterThan(0)
+        const boxes = byGrey.get(device)!
+        expect(boxes.length).toBeGreaterThan(0)
+        const points = group.flatMap((stroke) => stroke.points)
+        const inside = points.filter((p) =>
+          boxes.some((b) => p.x >= b.minX - 1 && p.x <= b.maxX + 1 && p.y >= b.minY - 1 && p.y <= b.maxY + 1),
+        )
+        expect(inside.length).toBe(points.length)
+
+        // ...and covers it: the device's outline stands off our centreline
+        // by the stroke's own half width and no further, which is what rules
+        // out our group merely being a small part of a larger one.
+        const half = Math.max(...group.map((stroke) => stroke.thickness)) / 100
+        const union = {
+          minX: Math.min(...boxes.map((b) => b.minX)), maxX: Math.max(...boxes.map((b) => b.maxX)),
+          minY: Math.min(...boxes.map((b) => b.minY)), maxY: Math.max(...boxes.map((b) => b.maxY)),
+        }
+        const oursBox = {
+          minX: Math.min(...points.map((p) => p.x)), maxX: Math.max(...points.map((p) => p.x)),
+          minY: Math.min(...points.map((p) => p.y)), maxY: Math.max(...points.map((p) => p.y)),
+        }
+        expect(oursBox.minX - union.minX).toBeLessThanOrEqual(half + 2)
+        expect(union.maxX - oursBox.maxX).toBeLessThanOrEqual(half + 2)
+        expect(oursBox.minY - union.minY).toBeLessThanOrEqual(half + 2)
+        expect(union.maxY - oursBox.maxY).toBeLessThanOrEqual(half + 2)
+      }
     });
 
     test("a star mark reports no tool, because the device overwrote its pen field", async () => {

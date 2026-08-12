@@ -169,6 +169,45 @@ const PEN_IDS: Record<number, StrokePen> = {
 	15: 'calligraphy',
 };
 
+/** Grey `color` values that older firmware stored as *ids* rather than as
+ * the grey level they render at, mapped to the levels current firmware
+ * stores directly. Only `.note` files old enough to predate the change use
+ * them -- here, only `test.note` (`SN_FILE_VER_20220011`, A5X).
+ *
+ * Without this a stroke's color is simply wrong: `48` is dark grey, not the
+ * near-black `rgb(48,48,48)` reads as. Supernote's own vector export of
+ * that fixture (`test.pdf`) settles which grey each id means, the same
+ * ground truth the canonical 157/201 palette comes from. Its page 1 draws
+ * exactly three ink colors, and each one's paths land on one of our
+ * decoded color groups with nothing left over:
+ *
+ * | our `color` | device draws | extents agree to | our points inside it |
+ * |---|---|---|---|
+ * | `0` (34 strokes) | `0` | 0-2 px | 100% |
+ * | `48` (21 strokes) | **157** | 0-2 px | 100% |
+ * | `81` (3 strokes) | **201** | 14-16 px, i.e. the band's own half width | 100% |
+ *
+ * The `+1` marker forms (`49`, `81`) map to the `+1` forms of the same
+ * greys, keeping that rule (see `PEN_IDS`) true in both encodings -- the
+ * device's export draws a marker at the base grey either way, exactly as it
+ * does for a modern marker storing 158/202. Only `48` and `81` occur in any
+ * fixture; `49` and `80` are their unobserved counterparts, included
+ * because leaving half of a pair out would decode one marker correctly and
+ * its pen wrongly.
+ *
+ * Applied unconditionally rather than gated on the file version, which
+ * `parseStrokes` never sees -- it is handed a `TOTALPATH` buffer, not the
+ * header. Safe because these four values are not grey levels any firmware
+ * stores: the real palette is 0/157/158/201/202/254, plus 255 for the
+ * eraser. A color device could in principle put a literal 48 here, which is
+ * the one thing that would need the version gate. */
+const LEGACY_GREY_IDS: Record<number, number> = {
+	48: 157,
+	49: 158,
+	80: 201,
+	81: 202,
+};
+
 /** Reserved `color` value meaning "this isn't ink at all, it's an eraser
  * stroke" -- confirmed against https://github.com/Walnut356/snlib's `Color`
  * enum (`Eraser = 255`) and directly against real fixtures: the exact
@@ -627,9 +666,13 @@ export function parseStrokes(
 		const isStarMark = raw?.strokeKind === STAR_MARK_STROKE_KIND;
 		if (raw && !isLinkTag && !isLassoPath && (!isEraser || options.includeErasers)) {
 			const scale = raw.screenHeight / pageHeight;
+			// An older file stores some greys as ids -- see LEGACY_GREY_IDS.
+			// Read after the isEraser test above, which keys on the reserved
+			// 255 this never touches.
+			const grey = LEGACY_GREY_IDS[raw.color] ?? raw.color;
 			strokes.push({
 				points: raw.points.map(([y, x]) => ({ x: -x / scale + pageWidth, y: y / scale })),
-				color: `rgb(${raw.color},${raw.color},${raw.color})`,
+				color: `rgb(${grey},${grey},${grey})`,
 				// A star mark's `pen` was overwritten by the device and names
 				// no tool -- see `STAR_MARK_STROKE_KIND`.
 				pen: isStarMark ? 'unknown' : (PEN_IDS[raw.pen] ?? 'unknown'),

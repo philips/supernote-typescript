@@ -267,31 +267,48 @@ naming only `1` as `MarkerBlack` while calling 158/202 plain
 `TITLESTYLE` metadata (see the Titles section below) encodes the same
 157/201 as literal decimal digits — the base, non-marker forms.
 
-**48 and 80 are not colors "beyond greyscale".** They are the older A5X-era
-grey ids, and they extend the same base/marker pairing (48/49, 80/81). In
-`test.note` — the only fixture old enough to use them — the device's own
-raster draws its `color=48` pen ink at grey 128 and its `color=81` marker
-band at grey 169, so they are two more grey levels under a different
-encoding, not a color palette.
+**48 and 80 are not colors "beyond greyscale" — they are the older
+firmware's grey *ids*.** On that encoding the field names a palette entry;
+on the current one it is the rendered grey itself (0/157/201/254 render as
+exactly that). `test.note` (`SN_FILE_VER_20220011`, A5X) is the only
+fixture old enough to use it, and Supernote's own vector export of that
+page — `test.pdf` — says which grey each id means:
 
-On this older encoding the field is therefore an *id*, where the modern one
-is the rendered grey itself (0/157/201/254 render as exactly that). The
-engine has a table for the same distinction on other legacy ids —
-`0x63 → 0x9d`, `0x64 → 0xc9` and their marker forms, at `0x180049990` —
-but nothing in the binary maps `0x30`/`0x50`, so the 48→128 and 81→169
-pairs rest on measuring `test.note`'s own raster and no more than that.
+| stored `color` | strokes | device draws | extents agree to | our points inside it |
+|---|---|---|---|---|
+| `0` | 34 | `0` | 0–2 px | 100% |
+| `48` | 21 | **157** (dark grey) | 0–2 px | 100% |
+| `81` | 3 | **201** (light grey) | 14–16 px, the band's own half width | 100% |
 
-**This currently costs that fixture most of its vector ink**, and it is
-worth knowing the cause is the color field rather than anything to do with
-pens: `toSvg`'s ink-presence check (`strokeInkPresence`) looks under each
-stroke for raster ink matching the stroke's own declared grey, so it hunts
-for grey 81 where the device drew 169 and grey 48 where it drew 128, finds
-neither, and discards the stroke as invisible. 16 of page 1's 58 strokes go
-that way, the whole highlighter pass among them. Left alone here rather
-than papered over: a remap keyed on one fixture's raster would be guessing
-at the general rule, and the honest fix needs a second old-format fixture
-(or a `SN_FILE_VER`-gated palette) that nothing in the corpus can supply
-yet. See the open questions.
+Each of the page's three ink colors maps onto one device color group with
+nothing left over, and the residual offsets are exactly each stroke's
+rendered half width (`thickness / 100`) — the standoff between a
+centerline and the outline drawn around it. The pairing also holds up
+against the marker rule: `81` is `80 + 1`, it appears only on `pen=5`
+records, and `48` appears only on pen records.
+
+`parseStrokes` maps these to the modern palette (`LEGACY_GREY_IDS`), taking
+the `+1` forms to the `+1` forms — `48 → 157`, `49 → 158`, `80 → 201`,
+`81 → 202` — which keeps "`+1` means a marker" true in both encodings. The
+device's export draws a marker at the base grey either way, exactly as it
+does for a modern marker storing 158/202. This is also what the engine does
+for other legacy ids: `0x180049990` maps `0x63 → 0x9d` and `0x64 → 0xc9`
+with their marker forms `0x67 → 0x9e` and `0x68 → 0xca`. Nothing in the
+binary maps `0x30`/`0x50`, so the export is the evidence for these two.
+
+The raster is a third encoding again and is not what we decode to: the A5X
+screen drew these as greys 128 and 169, where the export and the design
+palette both say 157 and 201.
+
+**Reading the ids literally cost that fixture most of its vector ink**,
+which is worth recording since the symptom looks like a pen problem and
+isn't. `toSvg`'s ink-presence check (`strokeInkPresence`) looks under each
+stroke for raster ink matching its declared grey; hunting for 81 where the
+raster holds 169 finds nothing, and the stroke is dropped as invisible. 16
+of page 1's 58 strokes went that way, the whole highlighter pass included.
+Mapping to the real greys brings the declared value within the check's
+tolerance of the raster (`|157 − 128|` and `|202 − 169|` against a
+tolerance of 48) and all 58 now draw.
 
 `color === 255` (`Eraser`) is filtered out of `parseStrokes`' return value by
 default, not surfaced as an `IStroke`. This is the real explanation for issue
@@ -1512,15 +1529,11 @@ pass; the findings are folded into the sections above. In brief:
    same place: `3`/`9` are the two eraser modes, `4` the lasso, and `15`
    the calligraphy pen with a single id.
 
-   It left one thing behind: **the older format's `color` ids (48/80) are
-   ids, not greys** — see the `color` section. `test.note` draws them as
-   128 and 169, which nothing else in the corpus corroborates and which the
-   binary has no table for, so no mapping is applied. The cost is real and
-   measured: `toSvg`'s ink-presence check searches for the declared grey,
-   misses, and drops 16 of that page's 58 strokes. Closing it wants a
-   second pre-2023 fixture, or gating a legacy palette on `SN_FILE_VER` —
-   which `parseStrokes` currently never sees, since it is handed a
-   `TOTALPATH` buffer and not the file's header.
+   It turned up one more thing, since **resolved** by adding `test.pdf`:
+   the older format's `color` ids (48/80) are ids rather than greys, and
+   the device's own export names them dark grey and light grey. See the
+   `color` section. Reading them literally had been costing that page 16 of
+   its 58 strokes.
 4. ~~`"straightLine"`~~ — observed, via `straight-line.note`. It turned out
    to matter rather than being a loose end: those records store two points,
    which `vectorInk` was reading as a filled rectangle, so every ruler line
@@ -1531,9 +1544,9 @@ pass; the findings are folded into the sections above. In brief:
 6. **`TITLESTYLE` beyond the 4-slot palette** — newer devices with more
    heading styles (or color devices) may use other codes; the `1BBBFFF`
    digit reading is confirmed only for these four values on two greyscale
-   devices. (`test.note`'s stroke colors 48/81 turned out *not* to be a
-   color-device palette — see the `color` section — so extending the Color
-   table still needs a real color-device fixture.)
+   devices. (`test.note`'s stroke colors 48/81 turned out to be older grey
+   *ids*, not a color-device palette — see the `color` section — so
+   extending the Color table still needs a real color-device fixture.)
 7. ~~Decode `point_contour`~~ — done, see its section above: it is the
    device's real rendered outline (with true pressure-varying width), but
    it is **not** a record of what survived erasing, which was the reason

@@ -916,7 +916,10 @@ describe("svg", () => {
       // which is the raster saying everything on it is gone.
       const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"))
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
-      expect(strokes.length).toBe(8) // 5 ink + 3 erasers still decode...
+      // 5 ink + 3 erasers decode, less the one stroke select-and-delete
+      // removed -- its loop carries SELECTION_OP.DELETE, so it is dropped at
+      // decode rather than left to the render check below.
+      expect(strokes.length).toBe(7) // ...the rest still decode...
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
       expect(svg).not.toContain("<path ") // ...but none of them render
@@ -1368,8 +1371,10 @@ describe("svg", () => {
       // the single word "Erase" -- 19 ink strokes decode, but the device's
       // render and its PDF export both show only the handful that are left.
       const sn = new SupernoteX(await readFileToUint8Array("caligraphy.note"))
+      // 19 records decode as ink, less the one a select-and-delete removed
+      // (SELECTION_OP.DELETE on its lasso loop).
       const decoded = parseStrokes(sn.pages[3].totalPathBuffer, sn.pageWidth, sn.pageHeight)
-      expect(decoded.length).toBe(19)
+      expect(decoded.length).toBe(18)
 
       const svgs = await toSvg(sn, { vectorInk: true })
       const inkPaths = svgInkPaths(svgs[3]).filter(({ color }) => color !== "rgb(255,255,255)")

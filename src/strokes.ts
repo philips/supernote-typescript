@@ -273,6 +273,104 @@ const RECORD_CLASS = {
 	LASSO: -5,
 } as const;
 
+/** What a lasso selection *did*, read from `m_copy` (`section_1`'s second
+ * `i32`) on the selection's own record.
+ *
+ * A lasso is stored as two or more records sharing one loop. They are not
+ * byte-identical: the first reads `NONE`, and a companion carries the
+ * operation code instead. That code is the only record of what happened to
+ * the enclosed content -- the strokes themselves are left in `TOTALPATH`
+ * exactly as drawn, whether they were deleted or not.
+ *
+ * Measured by taking each loop's polygon, finding the ink drawn before it
+ * that falls inside, and checking those strokes against the page's own
+ * render:
+ *
+ * | Op | Loops | Ink inside | Gone from render |
+ * |---|---|---|---|
+ * | `14` (delete) | 4 | 37 | 36 (97%) |
+ * | `2`/`4` (edit) | 1 | 10 | 9 (90%) |
+ * | `604` (none) | 2 | 27 | 0 (0%) |
+ *
+ * **Only `DELETE` is acted on.** `2`/`4` appear on `erase-colors.note`, a
+ * colour-change fixture, and the 90% above is misleading: measured per-loop
+ * without excluding ink that a *different* destructive loop also encloses,
+ * those loops turn out to enclose 14 strokes that are still plainly
+ * visible. A recolour rewrites its selection in place, so its contents
+ * survive; treating those loops as deletions destroys real ink.
+ *
+ * `NONE` matters just as much as `DELETE`: it is what
+ * `nomad-3.26.40-link-tag-3p.note` page 3's Keyword/Tag selections carry,
+ * and treating them as deletions is exactly what made a geometric erase
+ * replay unsafe there. */
+const SELECTION_OP = {
+	/** Selection made, nothing destructive done to it. */
+	NONE: 604,
+	/** Selection deleted. Every fixture carrying this is a documented
+	 * select-then-delete. */
+	DELETE: 14,
+} as const;
+
+/** How much of a stroke must fall inside a delete-selection's loop before it
+ * is treated as deleted.
+ *
+ * Deliberately conservative, because the two error directions are not
+ * symmetric: a stroke wrongly dropped here is visible ink destroyed with no
+ * way to get it back, whereas a stroke wrongly *kept* still faces the
+ * existing render-presence check in `src/svg.ts`, which catches it. So this
+ * is set where a delete is unambiguous and everything marginal is left to
+ * the backstop. Sweeping the threshold over every fixture, `0.9` and `0.5`
+ * differ by a single stroke either way, so nothing is really lost by taking
+ * the safe end. */
+const SELECTION_DELETE_CONTAINMENT = 0.9;
+
+/** Even-odd point-in-polygon. The loop is the raw pen path of the lasso, so
+ * it is an arbitrary closed-ish polygon rather than a convex hull. */
+function isInsideLoop(loop: IStrokePoint[], q: IStrokePoint): boolean {
+	let inside = false;
+	for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+		const a = loop[i];
+		const b = loop[j];
+		if (a.y > q.y !== b.y > q.y && q.x < ((b.x - a.x) * (q.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+	}
+	return inside;
+}
+
+/** Drops strokes that a later delete-selection removed -- see
+ * `SELECTION_OP`. Only strokes recorded *before* the loop can have been
+ * selected by it, which is what `at` carries.
+ *
+ * This is the one place a stroke's absence is known outright rather than
+ * inferred from the rendered page, so it costs no raster access and needs
+ * no threshold on how much ink survived. */
+function applySelectionDeletes(strokes: IStroke[], loops: { at: number; loop: IStrokePoint[] }[]): IStroke[] {
+	const deleted = new Set<number>();
+	for (const { at, loop } of loops) {
+		let minX = Infinity;
+		let maxX = -Infinity;
+		let minY = Infinity;
+		let maxY = -Infinity;
+		for (const p of loop) {
+			if (p.x < minX) minX = p.x;
+			if (p.x > maxX) maxX = p.x;
+			if (p.y < minY) minY = p.y;
+			if (p.y > maxY) maxY = p.y;
+		}
+		for (let i = 0; i < at; i++) {
+			if (deleted.has(i)) continue;
+			const points = strokes[i].points;
+			if (points.length === 0) continue;
+			let hits = 0;
+			for (const q of points) {
+				if (q.x < minX || q.x > maxX || q.y < minY || q.y > maxY) continue;
+				if (isInsideLoop(loop, q)) hits++;
+			}
+			if (hits / points.length >= SELECTION_DELETE_CONTAINMENT) deleted.add(i);
+		}
+	}
+	return deleted.size === 0 ? strokes : strokes.filter((_, i) => !deleted.has(i));
+}
+
 /** Sizes of the two fixed-layout sections that sit between `epa_grays` and
  * `point_contour` in a stroke record -- `Section1` and `Section2` in
  * https://github.com/Walnut356/snlib, whose declared field lists come out
@@ -297,6 +395,8 @@ interface RawStroke {
 	recordClass: number;
 	/** See `IStroke.eraserTouched`. */
 	eraseMark: number;
+	/** See `SELECTION_OP`. Only meaningful on a lasso record. */
+	selectionOp: number;
 	/** Already in page-pixel space -- unlike `points`, these need no
 	 * transform (see `readContour`). Only populated when asked for. */
 	contour?: IStrokePoint[][];
@@ -408,14 +508,16 @@ function tryParseStroke(
 	// wholesale; Section1 (and so the erase mark) begins immediately after.
 	for (const elementSize of [2, 4, 1, 8, 4]) {
 		if (p + 4 > strokeEnd)
-			return { pen, color, thickness, strokeKind, screenHeight, recordClass, points, eraseMark: 0 };
+			return { pen, color, thickness, strokeKind, screenHeight, recordClass, points, eraseMark: 0, selectionOp: 0 };
 		p += 4 + view.getUint32(p, true) * elementSize;
 	}
 
+	// Section1 starts here: m_trailStatus, then m_copy (the selection op).
 	const eraseMark = p + 4 <= strokeEnd ? view.getInt32(p, true) : 0;
+	const selectionOp = p + 8 <= strokeEnd ? view.getInt32(p + 4, true) : 0;
 	const contour = includeContours ? readContour(view, byteLength, p, strokeEnd) : undefined;
 
-	return { pen, color, thickness, strokeKind, screenHeight, recordClass, points, eraseMark, contour };
+	return { pen, color, thickness, strokeKind, screenHeight, recordClass, points, eraseMark, selectionOp, contour };
 }
 
 /**
@@ -528,6 +630,9 @@ export function parseStrokes(
 	if (strokeCount === 0 || strokeCount > 1_000_000) return [];
 
 	const strokes: IStroke[] = [];
+	/** `at` is how many strokes had already been emitted when the loop was
+	 * recorded, so everything before that index preceded it on the page. */
+	const deleteLoops: { at: number; loop: IStrokePoint[] }[] = [];
 	let pos = 4;
 	for (let i = 0; i < strokeCount; i++) {
 		if (pos + 4 > byteLength) break;
@@ -546,6 +651,13 @@ export function parseStrokes(
 		// as a guard against one record in `sticker.note` whose StrokeConfig
 		// isn't a StrokeConfig at all.
 		const isLassoPath = raw?.recordClass === RECORD_CLASS.LASSO || raw?.pen === LASSO_PEN_ID;
+		if (raw && isLassoPath && raw.selectionOp === SELECTION_OP.DELETE && raw.points.length >= 3) {
+			const scale = raw.screenHeight / pageHeight;
+			deleteLoops.push({
+				at: strokes.length,
+				loop: raw.points.map(([y, x]) => ({ x: -x / scale + pageWidth, y: y / scale })),
+			});
+		}
 		if (raw && !isLinkTag && !isLassoPath && (!isEraser || options.includeErasers)) {
 			const scale = raw.screenHeight / pageHeight;
 			strokes.push({
@@ -562,6 +674,8 @@ export function parseStrokes(
 
 		pos = strokeEnd;
 	}
+
+	if (deleteLoops.length) return applySelectionDeletes(strokes, deleteLoops);
 
 	return strokes;
 }

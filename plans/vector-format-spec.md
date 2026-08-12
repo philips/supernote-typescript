@@ -449,9 +449,23 @@ erase-marked while still fully present — the mark is contact, not
 disappearance (as its own section says), so a replay keyed on the mark
 alone would still get this page wrong.
 
-Not yet done: `src/strokes.ts` doesn't expose the op code, and `vectorInk`
-still decides by sampling the render. Wiring it through would let a
-lasso-deleted stroke be dropped deterministically rather than by threshold.
+**Acted on.** `parseStrokes` reads the op code and drops the strokes a
+`14` loop enclosed, so a deleted stroke never reaches the renderer — the
+one place a stroke's absence is known outright rather than inferred from
+the rendered page. `vectorInk` needs no change; its render-presence check
+simply has less left to catch.
+
+Two deliberate limits. Only `14` is acted on: `2`/`4` look destructive in
+the table above, but that measurement excluded ink which a *different*
+destructive loop also enclosed, and without that exclusion those loops turn
+out to contain 14 strokes that are still plainly visible. A recolour
+rewrites its selection in place, so its contents survive, and treating
+those loops as deletions destroys real ink. And containment is required to
+be ≥90% rather than a bare majority, because the error directions aren't
+symmetric — a stroke wrongly dropped is ink destroyed, whereas a stroke
+wrongly kept still meets the render-presence check. Sweeping the threshold
+across every fixture, 0.5 and 0.9 differ by one stroke either way, so the
+safe end costs nothing.
 
 **The ordering hypothesis is disproved.** The previous open question
 guessed the distinction was positional — that a lasso immediately before an
@@ -1262,9 +1276,10 @@ pass; the findings are folded into the sections above. In brief:
    that motivated this question. The ordering hypothesis previously
    recorded here was tested and **disproved**; adjacency predicts nothing.
 
-   What remains: (a) wire the op code through `parseStrokes`/`vectorInk` so
-   a lasso-deleted stroke is dropped deterministically instead of by raster
-   threshold; (b) the same question for *eraser* records (`-1`/`-2`/`-4`),
+   ~~(a) wire the op code through `parseStrokes`~~ — done: a delete
+   selection's contents are dropped at decode time, with no raster access.
+
+   What remains: the same question for *eraser* records (`-1`/`-2`/`-4`),
    which carry no equivalent code — though the premise may be weaker than
    it looks, since this document's claim that link-tag page 3's `pen=9`
    records were "selections, not erases" appears to be wrong (the ink

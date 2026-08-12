@@ -287,11 +287,15 @@ describe("parseStrokes", () => {
     // 255) strokes, and the 2 lasso records.
     const sn = new SupernoteX(await readFileToUint8Array("erase.note"));
     const inkOnly = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
-    expect(inkOnly.length).toBe(14); // 10 dark + 4 white, no lasso records
+    // 10 dark + 4 white, no lasso records -- less the one stroke the lasso
+    // then deleted, which is now dropped from the decode itself because the
+    // loop carries SELECTION_OP.DELETE (it was previously returned here and
+    // removed later by sampling the render).
+    expect(inkOnly.length).toBe(13);
     const withErasers = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
       includeErasers: true,
     });
-    expect(withErasers.length).toBe(18); // + the 4 erasers, still no lasso
+    expect(withErasers.length).toBe(17); // + the 4 erasers, still no lasso
 
     // and on the page where lasso selections deleted nothing: same
     // exclusion, none of the 4 selection loops decode as ink.
@@ -406,8 +410,10 @@ describe("parseStrokes", () => {
       // erase-records section.
       const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"));
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
+      // 5 strokes decode, less the one removed by select-and-delete, whose
+      // loop carries SELECTION_OP.DELETE and is now applied at decode time.
       const ink = strokes.filter((s) => !s.isEraser);
-      expect(ink.length).toBe(5);
+      expect(ink.length).toBe(4);
 
       for (const stroke of ink) {
         expect(stroke.contour!.flat().length).toBeGreaterThan(3);
@@ -495,6 +501,26 @@ describe("parseStrokes", () => {
       // The field is not the constant 5000 snlib documents it as, but it is
       // 5000 for the overwhelming majority -- real ink.
       expect(ink).toBeGreaterThan(2000);
+    });
+
+    test("a delete-selection removes the strokes it enclosed, a plain selection does not", async () => {
+      // The op code on a lasso's companion record is the only place the file
+      // says what a selection did (SELECTION_OP). Both halves matter:
+      //
+      // erase.note ends with a select-then-delete, and the stroke inside
+      // that loop is gone from the device's own export -- so it must not be
+      // decoded as ink.
+      const deleted = new SupernoteX(await readFileToUint8Array("erase.note"));
+      const remaining = parseStrokes(deleted.pages[0].totalPathBuffer, deleted.pageWidth, deleted.pageHeight);
+      expect(remaining.length).toBe(13);
+
+      // nomad-3.26.40-link-tag-3p page 3's loops are Keyword/Tag creations
+      // carrying SELECTION_OP.NONE. Their contents are fully visible, and
+      // treating them as deletions is exactly the mistake that made a
+      // geometric erase replay unsafe. Every stroke must survive.
+      const kept = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const p3 = parseStrokes(kept.pages[2].totalPathBuffer, kept.pageWidth, kept.pageHeight);
+      expect(p3.length).toBe(143); // unchanged: none of its four loops is a delete
     });
 
     test("no stroke is emitted with an out-of-range colour", async () => {

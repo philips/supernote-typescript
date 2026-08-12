@@ -77,7 +77,7 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 	},
 	sticker: {
 		isolates: 'The sticker plugin — artwork placed as ordinary stroke records, in a shape the centreline model cannot express.',
-		note: 'The one page whose ratio is wrong about it. Page 2\'s sticker is filled the way a person fills a shape with a pen, black strokes doubling back over themselves with white carved back over the top, so our 22 overlapping outlines get summed where the device\'s export merges its black into a single path counted once. Rasterised instead of summed, the ink we lay down covers 42,704 square pixels against the device\'s 42,800 — the picture agrees even where the number says 1.36×.',
+		note: 'The one page whose ratio is wrong about it. Page 2\'s sticker is filled the way a person fills a shape with a pen, black strokes doubling back over themselves with white carved back over the top, so our 22 overlapping outlines get summed where the device\'s export merges its black into a single path counted once. Rasterised instead of summed, the ink we lay down covers 42,704 square pixels against the device\'s 42,800 — the picture agrees even where the number says 1.36×. The black marker line across it is also what settled draw order: sorting every marker under the pen ink drew the sticker over the line, where the device draws the line over the sticker.',
 	},
 	turkish: {
 		isolates: 'Dense handwriting with erasures throughout, then rewritten in place.',

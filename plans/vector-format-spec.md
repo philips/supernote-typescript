@@ -410,6 +410,63 @@ meaning may depend on what the *preceding* records did (a lasso immediately
 before an eraser is a select-then-delete; the same eraser alone is a drag).
 Nothing has tested that yet.
 
+### Lasso operation codes — what a selection actually *did*
+
+A lasso is recorded as two or more records sharing the same loop geometry.
+They are not byte-identical, which is what this document previously assumed:
+the first reads `m_copy = 604`, and a companion record carries a small
+number instead. **That number is the operation performed on the
+selection.** (`m_copy` is `section_1`'s second `i32` — see Part 1.4. The
+name is Ratta's; "copy" appears to be a misnomer, or at least much narrower
+than what the field carries.)
+
+Measured by taking each loop's polygon, finding the ink strokes drawn
+before it whose points fall inside, and checking those strokes against the
+page's own render. Loops whose contents also fall inside another loop
+carrying a destructive op are excluded, so each figure is attributable to
+one loop:
+
+| Op | Loops | Ink strokes inside | Gone from render | Erase-marked |
+|---|---|---|---|---|
+| `14` | 4 | 37 | **36 (97%)** | 37 |
+| `2` | 1 | 10 | **9 (90%)** | 10 |
+| `604` (no companion) | 2 | 27 | **0 (0%)** | 11 |
+
+Clean separation. `14` is delete — every fixture carrying it is a
+documented select-then-delete (`erase.note`, `erase-no-white-pen.note`,
+`unknown-color.note`, `caligraphy.note` p4). `2` and `4` appear only on
+`erase-colors.note`, a colour-change fixture, so they are non-deleting
+edits that still rewrite the strokes. `604` alone means the selection was
+made and nothing destructive followed — on `nomad-3.26.40-link-tag-3p.note`
+page 3 those are Keyword/Tag creations.
+
+**This is the answer to the failure this document has been carrying.** The
+geometric replay broke on link-tag page 3 because it treated those loops as
+deletions; every one of them is `604`, and none of their 27 enclosed
+strokes is gone. A replay that reads the op code has the information to
+skip them. Note the third column too: 11 of those 27 strokes *are*
+erase-marked while still fully present — the mark is contact, not
+disappearance (as its own section says), so a replay keyed on the mark
+alone would still get this page wrong.
+
+Not yet done: `src/strokes.ts` doesn't expose the op code, and `vectorInk`
+still decides by sampling the render. Wiring it through would let a
+lasso-deleted stroke be dropped deterministically rather than by threshold.
+
+**The ordering hypothesis is disproved.** The previous open question
+guessed the distinction was positional — that a lasso immediately before an
+eraser marks a select-then-delete. It isn't: `erase.note`'s `-4` erasers
+are preceded by ordinary ink and did erase, `erase-colors.note`'s are
+preceded by a lasso, and link-tag page 3's are preceded by ink. Adjacency
+predicts nothing. The operation is written down in the lasso record itself.
+
+One correction that falls out of the same dump: this document describes
+link-tag page 3's `pen=9 color=255` records as "selections, not erases".
+That looks wrong — the ink records immediately around them carry
+`m_trailStatus = -99`, so those erasers did touch ink. They are erasers
+that clipped part of a stroke, i.e. the partial-erase case, not a
+mislabelled selection.
+
 ### `point_contour` — decoded: the device's own rendered outline
 
 Each stroke stores the filled region the device actually renders, as
@@ -1197,16 +1254,23 @@ pass; the findings are folded into the sections above. In brief:
    `nomad-3.26.40-link-tag-3p.note` page 3 and remove the last raster
    dependency in the erase path.
 
-   Ruled out: `disableAreaList`, `point_contour`, `flag_draw`, and
-   `record_class` (offset 40 — it gives the *tool*, not the outcome; see its
-   section above). The named-but-unassigned `StrokeConfig` scalars remain
-   candidates, but the negative results are piling up, and the more likely
-   reading now is that **the distinction isn't in the record at all**. The
-   app replays trails in order, so a gesture's meaning can depend on what
-   preceded it — a lasso immediately before an eraser is a
-   select-then-delete, the same eraser alone is a drag. Testing that
-   ordering hypothesis is cheaper than continuing to search fields, and
-   should come first.
+   **Largely answered for lasso selections** — see the lasso operation-code
+   section above. `m_copy` on a lasso's companion record encodes what the
+   selection did: `604` nothing destructive, `14` delete, `2`/`4` a
+   non-deleting edit. Separation is clean (0/27 enclosed strokes gone under
+   `604`, 36/37 under `14`), and it resolves the link-tag page 3 failure
+   that motivated this question. The ordering hypothesis previously
+   recorded here was tested and **disproved**; adjacency predicts nothing.
+
+   What remains: (a) wire the op code through `parseStrokes`/`vectorInk` so
+   a lasso-deleted stroke is dropped deterministically instead of by raster
+   threshold; (b) the same question for *eraser* records (`-1`/`-2`/`-4`),
+   which carry no equivalent code — though the premise may be weaker than
+   it looks, since this document's claim that link-tag page 3's `pen=9`
+   records were "selections, not erases" appears to be wrong (the ink
+   around them is erase-marked; they are partial erases). Ruled out for
+   erasers: `disableAreaList`, `point_contour`, `flag_draw`,
+   `record_class`, and record ordering.
 10. **`m_trailStatus`'s codes** — `-4`/`-16`/`-99` are a status enum, not a
     boolean (Part 1.4). Decoding them may subsume question 9.
 

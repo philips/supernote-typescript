@@ -52,9 +52,11 @@ tilts                              // u32 count + count * 4 bytes (i16 y, i16 x)
 flag_draw                          // u32 count + count * 1 byte
 epa_points                         // u32 count + count * 8 bytes (same shape as points)
 epa_grays                          // u32 count + count * 4 bytes (i32)
-section_1 (52 bytes, fixed)        // includes stroke_uid (monotonic per-note id)
+section_1 (52 bytes, fixed)        // fully decoded, see Part 1.4: m_trailStatus,
+                                   //   m_copy, m_trailNumInPage (the stroke uid),
+                                   //   m_before/afterShiftAngle, m_before/afterShiftRect
 control_nums                       // u32 count + count * 4 bytes (i32)
-section_2 (10 bytes, fixed)
+section_2 (10 bytes, fixed)        // m_groupNum, m_groupNest, m_groupEnd, m_renderFlag
 point_contour                      // u32 outer count, then that many (u32 count + count * 8 bytes f32 x,y) arrays
 unk_17                             // u32 count + count * 16 bytes
 section_3 (17 bytes, fixed)        // includes rotation_degrees
@@ -88,16 +90,16 @@ tool/color/width-isolated pages, `headings-and-marker.note`,
 | 36 | `unk_4` | reads `0` everywhere |
 | 40 | `unk_5` | **confirmed** always `5000` (matches snlib) |
 | 44 | `stroke_layer` (u32) | **confirmed** — `test.note` has real `LAYER1` content; its strokes read `1` here, `MAINLAYER` strokes read `0` (0-indexed ignoring background, exactly as snlib says) |
-| 48 | `stroke_kind` (52-byte C string) | **confirmed** — see below |
-| 100 | `bounding_tl` (i32 x, i32 y) | **decoded** — see below |
-| 108 | `bounding_mid` (i32 x, i32 y) | **decoded** — exactly `(tl + br) / 2` |
-| 116 | `bounding_br` (i32 x, i32 y) | **decoded** — see below |
+| 48 | `stroke_kind` (52-byte C string) | **confirmed** — see below; Ratta's own name is `predictName` (Part 1.4) |
+| 100 | `bounding_tl` (i32 x, i32 y) | **decoded** — see below; Ratta's name `upLeftPoint` |
+| 108 | `bounding_mid` (i32 x, i32 y) | **decoded** — exactly `(tl + br) / 2`; Ratta's name `keyPoint` |
+| 116 | `bounding_br` (i32 x, i32 y) | **decoded** — see below; Ratta's name `downRightPoint` |
 | 124 | `unk_6` | reads `26` everywhere |
-| 128 | `screen_height` (u32) | **decoded** — used directly for the coordinate `scale` (see below) |
-| 132 | `screen_width` (u32) | present but unused by this repo |
+| 128 | `screen_height` (u32) | **decoded** — used directly for the coordinate `scale` (see below); Ratta's name `maxY` (the canvas-coordinate maximum, not a pixel count) |
+| 132 | `screen_width` (u32) | present but unused by this repo; Ratta's name `maxX` |
 | 136 | `doc_kind` (52-byte C string) | confirmed — see below |
-| 188 | `emr_point_axis` (u32) | reads `1` everywhere (snlib: "should always be 1") |
-| 192 | `unk_7` (4 x u32) | reads all zeros everywhere |
+| 188 | `emr_point_axis` (u32) | reads `1` everywhere (snlib: "should always be 1"); the binary logs it as `m_emrPointAxis` and errors on `!= 1` |
+| 192 | `unk_7` (4 x u32) | **named** — `m_mupdfChapter`, `m_mupdfPosition`, `m_mupdfOffsetX`, `m_mupdfOffsetY` (Part 1.4). Zero in `.note` files; these anchor a stroke to a location in a PDF, i.e. they are for `.mark` annotation files. |
 
 `bounding_tl`/`bounding_br` are the stroke's bounding box **in page-pixel
 coordinates** — the same space the coordinate transform below produces —
@@ -582,6 +584,158 @@ everywhere else.
 The raster resampling is now avoidable: the displayed text color is the
 last three digits of the heading's `TITLESTYLE` value (below).
 
+## Part 1.4 — Field names from Ratta's own binary
+
+The Supernote Partner app for Windows ships Ratta's notebook engine as
+`flutter_note_lib.dll`, built with logging left in. It uses Google glog, so
+every log call site embeds a `__FILE__` string, and one function —
+`logTrails` — prints an entire `TrailContainer` field by field. That gives
+the real name of every field in the stroke record, without a debugger or a
+disassembler: extract the installer, `strings` the payload, read the list.
+
+This route is due to [Walnut356's write-up](https://walnut356.github.io/posts/inspecting-the-supernote-note-format/)
+(the same author as snlib), which found the DLL by profiling the app while
+flipping pages. The post itself is now behind this document on the format
+proper — it stops at "there's a stroke UID and some config values" for
+everything after the point data, and its own open items (thickness, layers,
+highlighter) are solved here. Its lasting value is the RE map.
+
+Reproducing it (Linux, no Windows and no Ghidra needed):
+
+```
+curl -O https://download-firmware.supernote.com/windows-update/2.5.24/supernote_partner-com-2.5.24-windows-setup.exe
+7z x -oext supernote_partner-com-2.5.24-windows-setup.exe   # Inno Setup; 'ext/[0]' is the payload
+# 'ext/[0]' is a plain LZMA1 stream: magic 'zlb\x1a', 5-byte props at +4, data at +9.
+# python3 -c "import lzma,..." with FORMAT_RAW decompresses it whole (~510MB).
+strings -n 6 payload.bin | grep -n logTrails
+```
+
+### The full stroke-record field list
+
+`logTrails` emits these in order (the fixed-size scalars appear reversed in
+`.rdata`, the arrays in forward order):
+
+```
+flagSpecial preNum fontHeight fontWidth pageNum layer penColor penType
+recMod m_thickness trailNum flagPenUp walcomEmrType predictName
+upLeftPointX/Y keyPointX/Y downRightPointX/Y maxX maxY m_emrPointAxis
+m_mupdfChapter m_mupdfPosition m_mupdfOffsetX m_mupdfOffsetY
+disableAreaList m_points pressures angles flagDraw epaPoints epaGrays
+m_trailStatus m_copy m_trailNumInPage m_beforeShiftAngle m_afterShiftAngle
+m_beforeShiftRect m_afterShiftRect m_controlNums m_groupNum m_groupNest
+m_groupEnd m_renderFlag markPenDFillDir
+```
+
+A second list, the parser's own error strings, confirms the on-disk order
+this repo already parses: `disableAreaList`, `m_points`, `pressures`,
+`angles`, `flagDraw`, `epaPoints`, `epaGrays`, `m_controlNums`,
+`renderFlag empty`, `PointContour`, `m_MarkPenDFillDir`. Note `tilts` is
+Ratta's `angles`, and `renderFlag` sits between `control_nums` and
+`point_contour` — exactly where this document had an unnamed `section_2`.
+
+### `section_1` (52 bytes) — now fully decoded
+
+The names account for the block exactly, and every field checks out
+against fixtures (1,134 fully-walked strokes):
+
+| Offset | Field | Observed |
+|---|---|---|
+| +0 | `m_trailStatus` (i32) | `0` (1068), `-99` (56), `-4` (10) — **this is the field this repo exposes as `IStroke.eraserTouched`** |
+| +4 | `m_copy` (i32) | `0` on 1086; non-zero (`97`, `601`–`604`) on strokes produced by copy/paste |
+| +8 | `m_trailNumInPage` (i32) | the per-page stroke uid, sequential from 1 |
+| +12 | `m_beforeShiftAngle` (i32) | `0` everywhere seen |
+| +16 | `m_afterShiftAngle` (i32) | `0` everywhere seen |
+| +20 | `m_beforeShiftRect` (4 x i32) | identity `[0,0,1,1]` on unmoved strokes |
+| +36 | `m_afterShiftRect` (4 x i32) | identity `[0,0,1,1]` on unmoved strokes |
+
+4+4+4+4+4+16+16 = 52. The shift fields are the lasso move/rotate transform,
+which is why they read as identity on ink that was never moved.
+
+That `eraserTouched` is really `m_trailStatus` reframes it: it is a status
+enum, not a boolean, and `-4`/`-16`/`-99` are its codes. The correlation
+this document already records (every `-16` gone, every `-4` intact, `-99`
+mixed) is consistent with that, but the codes are still not decoded, and
+nothing keys on the value.
+
+`section_2`'s 10 bytes are likewise `m_groupNum`, `m_groupNest`,
+`m_groupEnd`, `m_renderFlag` — grouping state plus the render flag.
+
+### The device's own trail taxonomy
+
+The redraw path (`sndataoperationfile.cpp`) classifies every trail as it
+replays it, with one log line per category:
+
+```
+this trail is TRAIL_ERASE_AREA trail        this is region selection trail
+this trail is ERASE_LINE_COLOR_VALUE trail  trail ERASER select:
+this trail is CLEAN SCREEN trail            this is five star
+                                            this is normal trail
+```
+
+Two things follow. First, it corroborates the record types in the erase
+section above, and adds two this repo has no fixture for: a whole-page
+"clean screen" erase, and area erase as a category distinct from the
+color-255 line eraser (`ERASE_LINE_COLOR_VALUE` is literally the
+`color == 255` discriminator, under Ratta's own name).
+
+Second, and more useful: **the app derives visibility by replaying the
+trail list into a bitmap** (`redrawTrails`, `fetchRleMatRedraw`,
+`trails redraw success`), not by reading a per-stroke visibility field.
+That is independent confirmation that no such field exists to be found —
+the raster-consulting approach in the erase section is the same answer the
+device itself computes, not a workaround for a missing one.
+
+It also sharpens the one thing that is still approximate here. This
+document records that a geometric replay mis-erases visible text on
+`nomad-3.26.40-link-tag-3p.note` page 3, because identical-looking records
+were selections rather than erases. The taxonomy above says the app
+distinguishes those cases, so a discriminator does exist in the record.
+Finding it is the concrete next step, and it is now a narrow search rather
+than an open-ended one. `disableAreaList` was the obvious candidate and is
+**ruled out**: it is non-empty on only 6 of 1,134 strokes, holds full-page
+rectangles (`[-1,0,100,1405]`, `[0,0,99,1872]`), and appears on ordinary
+ink and eraser records alike. The remaining candidates are the named-but-
+unassigned scalars — `flagSpecial`, `preNum`, `flagPenUp`, `trailNum`,
+`walcomEmrType`, `recMod` — whose individual offsets among the constant
+`unk_1`/`unk_3`/`unk_4`/`unk_5` slots are not yet pinned down, since the
+log order is not the struct order.
+
+### Other names worth having
+
+The same payload carries the internal source tree, which maps each feature
+to the file that implements it — useful for aiming any future pass:
+
+```
+SnProcess/SnFileProcess/sndatafile.cpp                    stroke record parse
+SnProcess/SnDataProcess/sndataoperationfile.cpp           redraw + trail classification
+SnProcess/SnDataProcess/sndataoperationtrail.cpp          trail edit operations
+SnProcess/snlassosubfunction.cpp                          lasso select
+SnProcess/SnFileProcess/SnFileData/sntitlefeaturemodule.cpp   TITLE_ blocks (Part 1.5)
+SnProcess/SnFileProcess/SnFileData/snkeywordfeaturemodule.cpp KEYWORD_ blocks
+SnProcess/SnFileProcess/SnFileData/snlinkfeaturemodule.cpp    LINK* blocks
+SnProcess/SnFileProcess/SnFileData/snstylemodule.cpp          style
+ratta_draw_and_recg/include/draw_line/adjusttrailcontainer.cpp  stroke geometry adjust
+```
+
+Rendering is OpenCV-based (`CV_8UC4` mats, `overlayImage_fore`), which is
+why layer compositing behaves the way this repo's raster path assumes.
+
+### One correction to the blog
+
+The post states the pressure array has 4-byte elements. It does not — it is
+`u16`, as snlib's own code has it. Walking every record to its declared
+`strokeLen` settles it: with 2-byte pressures every stroke on every
+fully-parsing fixture lands exactly on its end boundary, and with 4-byte
+pressures essentially none do.
+
+That whole-record walk is also how the tail variance in open question 8
+below was characterized: records end exactly at `mark_pen_d_fill_dir` on
+most fixtures, carry 4 trailing bytes more on `SN_FILE_VER_20260016` files,
+stop after `sized_str_3` on older Nomad/A5X files, and stop before the
+sized strings entirely on `SN_FILE_VER_20220011`. Four tail variants, no
+version field that predicts which — which is exactly why `parseStrokes`
+jumping by `strokeLen` rather than parsing the tail is the right design.
+
 ## Part 1.5 — `TITLE_` / `KEYWORD_` footer metadata: where heading style actually lives
 
 The answer to "where is a Heading's background color?" was never in
@@ -943,13 +1097,31 @@ pass; the findings are folded into the sections above. In brief:
      under `toSvg`'s `upscale` option, unlike points.
 8. **The remaining stroke-record tail** — `unk_17`, `unk_22`, and the
    `Section3`/`Section4` spans after `point_contour` are still
-   uncharacterized (their combined size also varies by 4 bytes between
-   firmware generations, which is why the contour decode deliberately
-   parses forward only and never depends on them). Nothing needs them.
+   uncharacterized. `section_1` and `section_2` are no longer among them
+   (Part 1.4 decodes both). The tail's size varies by more than the 4 bytes
+   previously noted: walking every record to its declared `strokeLen` finds
+   **four** variants across the fixtures — ending exactly at
+   `mark_pen_d_fill_dir`; 4 bytes longer (`SN_FILE_VER_20260016`); ending
+   after `sized_str_3` (older Nomad/A5X); and ending before the sized
+   strings (`SN_FILE_VER_20220011`) — with no version field that predicts
+   which. Confirmation that `parseStrokes` should keep jumping by
+   `strokeLen` rather than parsing the tail. Nothing needs them.
+9. **The erase-vs-select discriminator** — the app distinguishes
+   `TRAIL_ERASE_AREA`, `ERASE_LINE_COLOR_VALUE`, `CLEAN SCREEN`, region
+   selection and `ERASER select` (Part 1.4), so the record must carry
+   something this repo hasn't found. Resolving it is what would let the
+   erase replay work on `nomad-3.26.40-link-tag-3p.note` page 3 and remove
+   the last raster dependency in the erase path. `disableAreaList` is ruled
+   out; the named-but-unassigned `StrokeConfig` scalars are the remaining
+   candidates.
+10. **`m_trailStatus`'s codes** — `-4`/`-16`/`-99` are a status enum, not a
+    boolean (Part 1.4). Decoding them may subsume question 9.
 
 ## References
 
 - [github.com/Walnut356/snlib](https://github.com/Walnut356/snlib) — independent Rust `.note` parser; source of the `TOTALPATH` structure this repo now uses (`src/note.rs`, `src/pen.rs`).
+- [walnut356.github.io — Investigating the SuperNote Notebook Format](https://walnut356.github.io/posts/inspecting-the-supernote-note-format/) — the same author's write-up. Behind this document on the format itself, but the source of the Partner-app reverse-engineering route in Part 1.4.
+- [Supernote Partner app for desktop](https://support.supernote.com/Tools-Features/supernote-partner-app-for-desktop) — Windows build ships `flutter_note_lib.dll` with glog logging intact; see Part 1.4 for how to extract it on Linux. macOS is App Store only, no Linux build.
 - [github.com/jya-dev/supernote-tool](https://github.com/jya-dev/supernote-tool) — Python `.note`/`.mark` parser; its `SvgConverter` doesn't read `TOTALPATH` at all (rasterizes, then traces each of a fixed 4-color palette with `potrace`) but corroborates the same canonical palette.
 - Issue [#55](https://github.com/philips/supernote-typescript/issues/55) — original `TOTALPATH` geometry investigation.
 - Issue [#56](https://github.com/philips/supernote-typescript/issues/56) — coverage/phantom-stroke follow-up, now resolved by this format's discovery.

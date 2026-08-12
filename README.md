@@ -163,6 +163,10 @@ CI builds it on every pull request and attaches it as a downloadable
 artifact; merges to `main` publish it to GitHub Pages
 (`.github/workflows/pages.yml`).
 
+The scripts behind it are TypeScript like the rest of the repo, built by
+`tsconfig.scripts.json` — so `npm run build:site` type-checks them, and a
+type error there fails the build rather than surfacing at runtime.
+
 ### Publish
 
 ```

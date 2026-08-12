@@ -23,32 +23,34 @@
 
 import { inflateSync as inflate } from 'node:zlib';
 
-/**
- * A painted path, already converted into SVG's coordinate space.
- * @typedef {object} DevicePath
- * @property {string} d SVG path data.
- * @property {string} [fill] Set when the path was filled.
- * @property {string} [stroke] Set when the path was stroked.
- * @property {number} [strokeWidth] Stroke width in page pixels, with `stroke`.
- * @property {boolean} [evenOdd] Fill used the even-odd rule (`f*`).
- */
+/** A painted path, already converted into SVG's coordinate space. */
+export interface DevicePath {
+	/** SVG path data. */
+	d: string;
+	/** Set when the path was filled. */
+	fill?: string;
+	/** Set when the path was stroked. */
+	stroke?: string;
+	/** Stroke width in page pixels, present alongside `stroke`. */
+	strokeWidth?: number;
+	/** True when the fill used the even-odd rule (`f*`) rather than nonzero. */
+	evenOdd?: boolean;
+}
 
-/**
- * @typedef {object} DevicePage
- * @property {DevicePath[]} paths
- * @property {number} inkArea Total ink the page lays down, in square page
- *   pixels: the enclosed area of each filled path plus length x width of each
- *   stroked one. Compared against the same measure of our own output.
- */
+export interface DevicePage {
+	paths: DevicePath[];
+	/** Total ink the page lays down, in square page pixels: the enclosed area
+	 * of each filled path plus length x width of each stroked one. Compared
+	 * against the same measure taken of our own output. */
+	inkArea: number;
+}
 
-/** @typedef {[number, number, number, number, number, number]} Matrix */
+type Matrix = [number, number, number, number, number, number];
 
-/** @type {Matrix} */
-const IDENTITY = [1, 0, 0, 1, 0, 0];
+const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-/** `a x b`, in PDF's row-vector convention.
- * @param {Matrix} a @param {Matrix} b @returns {Matrix} */
-function multiply(a, b) {
+/** `a x b`, in PDF's row-vector convention. */
+function multiply(a: Matrix, b: Matrix): Matrix {
 	return [
 		a[0] * b[0] + a[1] * b[2],
 		a[0] * b[1] + a[1] * b[3],
@@ -59,26 +61,24 @@ function multiply(a, b) {
 	];
 }
 
-/** @param {Matrix} m @param {number} x @param {number} y @returns {[number, number]} */
-function apply(m, x, y) {
+function apply(m: Matrix, x: number, y: number): [number, number] {
 	return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
 }
 
 /** How much the transform scales lengths, for carrying stroke widths across
- * it. Supernote's own exports only ever use a y-flip, where this is 1.
- * @param {Matrix} m @returns {number} */
-function scaleOf(m) {
+ * it. Supernote's own exports only ever use a y-flip, where this is 1. */
+function scaleOf(m: Matrix): number {
 	return Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
 }
 
-const grey = (v) => `rgb(${Math.round(v * 255)},${Math.round(v * 255)},${Math.round(v * 255)})`;
-const rgb = (r, g, b) =>
+const grey = (v: number) => `rgb(${Math.round(v * 255)},${Math.round(v * 255)},${Math.round(v * 255)})`;
+const rgb = (r: number, g: number, b: number) =>
 	`rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
 
 /** Area enclosed by a closed ring, signed by winding direction so that a
  * letter's inner hole subtracts from the shape it sits in rather than adding
- * to it. @param {[number, number][]} ring @returns {number} */
-function signedArea(ring) {
+ * to it. */
+function signedArea(ring: [number, number][]): number {
 	let sum = 0;
 	for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
 		sum += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
@@ -86,8 +86,7 @@ function signedArea(ring) {
 	return sum / 2;
 }
 
-/** @param {[number, number][]} ring @returns {number} */
-function polylineLength(ring) {
+function polylineLength(ring: [number, number][]): number {
 	let total = 0;
 	for (let i = 1; i < ring.length; i++) {
 		total += Math.hypot(ring[i][0] - ring[i - 1][0], ring[i][1] - ring[i - 1][1]);
@@ -97,9 +96,13 @@ function polylineLength(ring) {
 
 /** Points along a cubic bezier, flattened finely enough that measuring its
  * area or length doesn't lose anything visible at page scale. */
-function flattenCubic(from, c1, c2, to) {
-	/** @type {[number, number][]} */
-	const out = [];
+function flattenCubic(
+	from: [number, number],
+	c1: [number, number],
+	c2: [number, number],
+	to: [number, number],
+): [number, number][] {
+	const out: [number, number][] = [];
 	const steps = 16;
 	for (let i = 1; i <= steps; i++) {
 		const t = i / steps;
@@ -120,15 +123,13 @@ function flattenCubic(from, c1, c2, to) {
  * only ever reads fixtures this repo ships, and keeping it dependency-free
  * means the comparison site needs nothing beyond what's already installed.
  */
-/** @param {Buffer} pdfBytes @returns {Buffer[]} */
-export function extractFormStreams(pdfBytes) {
+export function extractFormStreams(pdfBytes: Buffer): Buffer[] {
 	// latin1 keeps one byte per character, so slicing back out recovers the
 	// original bytes exactly -- binary stream data must survive this round trip.
 	const text = pdfBytes.toString('latin1');
 	const objectPattern = /\d+ 0 obj\r?\n?([\s\S]*?)endobj/g;
-	/** @type {Buffer[]} */
-	const streams = [];
-	let match;
+	const streams: Buffer[] = [];
+	let match: RegExpExecArray | null;
 	while ((match = objectPattern.exec(text))) {
 		const body = match[1];
 		if (!body.includes('/Subtype/Form')) continue;
@@ -154,33 +155,25 @@ export function extractFormStreams(pdfBytes) {
  * coordinates as written -- the same page-pixel space this library decodes
  * strokes into.
  */
-/** @param {Buffer} stream @param {number} pageHeight @returns {DevicePage} */
-export function pdfStreamToSvg(stream, pageHeight) {
+export function pdfStreamToSvg(stream: Buffer, pageHeight: number): DevicePage {
 	const tokens = stream.toString('latin1').split(/\s+/).filter(Boolean);
 
-	/** @type {Matrix} */
-	let ctm = IDENTITY;
-	/** @type {{ctm: Matrix, fill: string, stroke: string, width: number}[]} */
-	const stack = [];
+	let ctm: Matrix = IDENTITY;
+	const stack: { ctm: Matrix; fill: string; stroke: string; width: number }[] = [];
 	let fill = 'rgb(0,0,0)'; // PDF's initial colour is black, for both operators
 	let stroke = 'rgb(0,0,0)';
 	let width = 1;
 
-	/** @type {DevicePath[]} */
-	const paths = [];
+	const paths: DevicePath[] = [];
 	let inkArea = 0;
 
 	// the path being built, as flattened rings in SVG space
-	/** @type {[number, number][][]} */
-	let rings = [];
-	/** @type {[number, number][]} */
-	let current = [];
-	/** @type {[number, number]} */
-	let cursor = [0, 0]; // in pre-transform user space
+	let rings: [number, number][][] = [];
+	let current: [number, number][] = [];
+	let cursor: [number, number] = [0, 0]; // in pre-transform user space
 	let d = '';
 
-	/** @param {number} x @param {number} y @returns {[number, number]} */
-	const toSvg = (x, y) => {
+	const toSvg = (x: number, y: number): [number, number] => {
 		const [px, py] = apply(ctm, x, y);
 		return [px, pageHeight - py];
 	};
@@ -188,13 +181,12 @@ export function pdfStreamToSvg(stream, pageHeight) {
 		if (current.length > 1) rings.push(current);
 		current = [];
 	};
-	const numbers = (count) => tokens.slice(index - count, index).map(Number);
+	const numbers = (count: number) => tokens.slice(index - count, index).map(Number);
 
-	const paint = (doFill, doStroke, evenOdd) => {
+	const paint = (doFill: boolean, doStroke: boolean, evenOdd: boolean) => {
 		closeRing();
 		if (d && (doFill || doStroke)) {
-			/** @type {DevicePath} */
-			const path = { d: d.trim() };
+			const path: DevicePath = { d: d.trim() };
 			if (doFill) {
 				path.fill = fill;
 				if (evenOdd) path.evenOdd = true;
@@ -309,8 +301,7 @@ export function pdfStreamToSvg(stream, pageHeight) {
 }
 
 /** Renders a decoded page as a standalone SVG document. */
-/** @param {DevicePage} page @param {number} width @param {number} height @returns {string} */
-export function devicePageToSvgDocument(page, width, height) {
+export function devicePageToSvgDocument(page: DevicePage, width: number, height: number): string {
 	const body = page.paths
 		.map((p) => {
 			const attrs = [`d="${p.d}"`];

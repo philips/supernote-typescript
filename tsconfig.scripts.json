@@ -1,0 +1,23 @@
+// Build tooling under scripts/ (currently the fixture comparison site).
+//
+// Kept separate from tsconfig.json so the published package is unaffected:
+// that one compiles src/ alone into lib/, which is what `files` ships. This
+// one compiles the scripts together with the library sources they import,
+// into a throwaway directory that is never published.
+//
+// Type errors in build tooling fail `npm run build:site` because of this —
+// running the TypeScript through a transpile-only loader would skip them.
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"outDir": "./.scripts-dist",
+		"declaration": false,
+
+		// The scripts read files and inflate PDF streams, so unlike src/ they
+		// need Node's globals. TypeScript 6 stopped pulling in every installed
+		// @types package on its own, so name it. Already a devDependency.
+		"types": ["node"]
+	},
+	"include": ["./scripts", "./src"]
+}

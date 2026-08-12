@@ -13,16 +13,16 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { SupernoteX, toSvg } from '../lib/index.js';
-import { extractFormStreams, pdfStreamToSvg, devicePageToSvgDocument } from './pdf-vector.mjs';
+import { SupernoteX } from '../src/parsing.js';
+import { toSvg } from '../src/svg.js';
+import { extractFormStreams, pdfStreamToSvg, devicePageToSvgDocument } from './pdf-vector.js';
 
 const INPUT_DIR = 'tests/input';
 const OUT_DIR = 'site';
 
 /** What each fixture is for, and anything notable about how it renders.
  * Fixtures with nothing recorded here still appear; they just carry no note. */
-/** @type {Record<string, {isolates: string, note?: string}>} */
-const FIXTURE_NOTES = {
+const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 	'straight-line': {
 		isolates: 'The ruler tool — the only fixture producing stroke_kind "straightLine".',
 		note: 'These records store just two endpoints, and any two-point record used to be read as a filled rectangle, so page 1\'s six lines rendered as three degenerate invisible boxes. Rect-ness now comes from the record\'s own stroke_kind.',
@@ -78,9 +78,9 @@ const FEATURED = [
 	'headings-and-marker', 'turkish',
 ];
 
-const escapeHtml = (s) =>
+const escapeHtml = (s: string) =>
 	s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const slug = (s) => s.replace(/[^a-zA-Z0-9-]/g, '_');
+const slug = (s: string) => s.replace(/[^a-zA-Z0-9-]/g, '_');
 
 /** Ink a rendered SVG lays down, in square page pixels: each stroked path's
  * length times its width, plus the area of any filled rect. Deliberately
@@ -93,8 +93,7 @@ const slug = (s) => s.replace(/[^a-zA-Z0-9-]/g, '_');
  * eraser they swamp everything else. White *ink* is a different thing and
  * still counts, which is why the test is exact rather than "near white":
  * the white pen records 254, and the device's export draws it too. */
-/** @param {string} svg @returns {number} */
-function svgInkArea(svg) {
+function svgInkArea(svg: string): number {
 	let total = 0;
 	for (const [, d, colour, width] of svg.matchAll(
 		/<path d="([^"]+)" fill="none" stroke="([^"]+)" stroke-width="([\d.]+)"/g,
@@ -114,30 +113,26 @@ function svgInkArea(svg) {
 }
 
 /** Our SVG with the background raster removed, so both sides show ink only. */
-/** @param {string} svg @returns {string} */
-function inkOnly(svg) {
+function inkOnly(svg: string): string {
 	return svg.replace(/<image\b[^>]*\/>/g, '');
 }
 
-/**
- * @typedef {object} PageComparison
- * @property {number} pageNumber
- * @property {string} deviceSvg
- * @property {string} oursSvg
- * @property {number} deviceInk
- * @property {number} oursInk
- */
+interface PageComparison {
+	pageNumber: number;
+	deviceSvg: string;
+	oursSvg: string;
+	deviceInk: number;
+	oursInk: number;
+}
 
-/**
- * @typedef {object} FixtureComparison
- * @property {string} name
- * @property {PageComparison[]} pages
- * @property {string} [isolates]
- * @property {string} [note]
- */
+interface FixtureComparison {
+	name: string;
+	pages: PageComparison[];
+	isolates?: string;
+	note?: string;
+}
 
-/** @param {string} noteFile @returns {Promise<FixtureComparison | null>} */
-async function buildFixture(noteFile) {
+async function buildFixture(noteFile: string): Promise<FixtureComparison | null> {
 	const name = noteFile.replace(/\.note$/, '');
 	const pdfPath = path.join(INPUT_DIR, `${name}.pdf`);
 	try {
@@ -152,8 +147,7 @@ async function buildFixture(noteFile) {
 	const note = new SupernoteX(new Uint8Array(await fs.readFile(path.join(INPUT_DIR, noteFile))));
 	const ours = await toSvg(note, { vectorInk: true, includeText: false });
 
-	/** @type {PageComparison[]} */
-	const pages = [];
+	const pages: PageComparison[] = [];
 	for (let i = 0; i < Math.min(streams.length, ours.length); i++) {
 		const device = pdfStreamToSvg(streams[i], note.pageHeight);
 		const oursSvg = inkOnly(ours[i]);
@@ -169,9 +163,7 @@ async function buildFixture(noteFile) {
 	return { name, pages, isolates: meta.isolates, note: meta.note };
 }
 
-/** @param {number} ours @param {number} device
- * @returns {{text: string, tone: 'match'|'near'|'off'|'none'}} */
-function ratioLabel(ours, device) {
+function ratioLabel(ours: number, device: number): { text: string; tone: 'match' | 'near' | 'off' | 'none' } {
 	if (device <= 0 && ours <= 0) return { text: 'no ink either side', tone: 'none' };
 	if (device <= 0) return { text: 'device draws nothing', tone: 'off' };
 	const ratio = ours / device;
@@ -262,8 +254,7 @@ const BLINK_SCRIPT = `for (const pair of document.querySelectorAll('.pair')) {
   flip.addEventListener('click', () => { pair.dataset.show = pair.dataset.show === 'device' ? 'ours' : 'device'; });
 }`;
 
-/** @param {string} title @param {string} body @returns {string} */
-function page(title, body) {
+function page(title: string, body: string): string {
 	return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -271,8 +262,7 @@ function page(title, body) {
 <body><div class="wrap">${body}</div><script>${BLINK_SCRIPT}</script></body></html>`;
 }
 
-/** @param {FixtureComparison} fx @returns {string} */
-function fixturePage(fx) {
+function fixturePage(fx: FixtureComparison): string {
 	const pairs = fx.pages
 		.map((p) => {
 			const r = ratioLabel(p.oursInk, p.deviceInk);
@@ -303,8 +293,7 @@ ${pairs}
 	);
 }
 
-/** @param {FixtureComparison[]} fixtures @returns {string} */
-function indexPage(fixtures) {
+function indexPage(fixtures: FixtureComparison[]): string {
 	const totalPages = fixtures.reduce((n, f) => n + f.pages.length, 0);
 	const cards = fixtures
 		.map((f) => {
@@ -337,8 +326,7 @@ ${f.isolates ? `<p>${escapeHtml(f.isolates)}</p>` : '<p>Regression coverage.</p>
 
 async function main() {
 	const noteFiles = (await fs.readdir(INPUT_DIR)).filter((f) => f.endsWith('.note')).sort();
-	/** @type {FixtureComparison[]} */
-	const built = [];
+	const built: FixtureComparison[] = [];
 	for (const file of noteFiles) {
 		const fixture = await buildFixture(file);
 		if (fixture && fixture.pages.length > 0) built.push(fixture);

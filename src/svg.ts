@@ -117,8 +117,9 @@ function buildRecognitionTextElements(page: IPdfPage, pageWidth: number): string
  * hides it entirely).
  *
  * `'path'`'s `tier` is `'marker'` exactly when the stroke's own real `pen`
- * field says `'marker'` -- see `buildStrokePathElements` for what `tier`
- * actually changes. */
+ * field says `'marker'` -- it records the *tool*, not a fixed layer. Whether
+ * a given marker stroke ends up beneath the page's other ink is decided per
+ * stroke from what it actually crosses; see `isHighlighterPass`. */
 export type StrokeStyle =
 	| { shape: 'path'; color: string; width: number; tier: 'marker' | 'pen' }
 	| { shape: 'rect'; color: string; fill: 'solid' | 'hatch' }
@@ -202,30 +203,138 @@ function buildPathElement(stroke: IStroke, style: { color: string; width: number
 	return `<path d="${d}" fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
 }
 
-/** Builds every stroke's SVG element in three fixed tiers -- `'rect'`s,
- * then wide ("marker") `'path'`s, then narrow ("pen") `'path'`s -- instead
- * of strictly in `strokes`' order (i.e. TOTALPATH buffer order, which
- * doesn't reliably match how layered content was actually drawn). Confirmed
- * on real fixtures both ways: a Heading's `'rect'` background record sits
- * *after* the digit stroke it's meant to sit behind, and a highlighter
- * pass's record can sit after the pen ink drawn over it too -- either way,
- * drawing in plain buffer order (SVG paints later elements on top) paints
- * the background/highlight over the ink and hides it. Sorting into these
- * tiers sidesteps needing to know the real chronological order at all: a
- * background fill or a wide highlighter mark is safe to draw before
- * narrower ink regardless of when it was actually drawn, since nothing
- * legitimately needs a highlighter mark drawn *over* the pen ink it's
- * highlighting. Relative order *within* each tier still follows
- * `strokes`. A stroke with no entry in `styles` (out-of-range index) is
- * skipped entirely, rather than falling back to a guessed color/width --
- * every stroke `parseStrokes` returns carries its own real style, so a
- * missing entry only happens from a caller-side index mismatch, not
- * anything `deriveStrokeStyle` itself produces. */
+/** Grey level of a `rgb(g,g,g)` ink color -- every color `parseStrokes`
+ * produces is a grey, so the red channel alone orders them from black (0) to
+ * white (254). */
+function greyLevel(color: string): number {
+	return Number(/rgb\((\d+)/.exec(color)?.[1] ?? '0');
+}
+
+/** How far apart two grey levels must sit to count as different shades.
+ * The device's own palette entries are far apart (0, 157, 201, 254) while
+ * the same shade is recorded a level apart in places (0 vs 1, 157 vs 158,
+ * 201 vs 202 -- see plans/vector-format-spec.md), so anything in between
+ * separates "the same shade" from "a genuinely lighter one" without needing
+ * the palette itself. */
+const SAME_GREY_TOLERANCE = 16;
+
+/** At or above this grey level, ink is the palette's white -- the color
+ * used to paint *over* something rather than to shade it (see
+ * `isHighlighterPass`). */
+const WHITE_INK_MIN_GREY = 250;
+
+interface StrokeBounds {
+	minX: number;
+	maxX: number;
+	minY: number;
+	maxY: number;
+}
+
+/** A stroke's own extent, from its sampled centerline or -- for a record
+ * that has none, like the sticker plugin's silhouette -- its rendered
+ * outline. `null` when the record carries no geometry at all. */
+function strokeBounds(stroke: IStroke): StrokeBounds | null {
+	const points = stroke.points.length ? stroke.points : (stroke.contour ?? []).flat();
+	if (points.length === 0) return null;
+	let minX = Infinity;
+	let maxX = -Infinity;
+	let minY = Infinity;
+	let maxY = -Infinity;
+	for (const point of points) {
+		if (point.x < minX) minX = point.x;
+		if (point.x > maxX) maxX = point.x;
+		if (point.y < minY) minY = point.y;
+		if (point.y > maxY) maxY = point.y;
+	}
+	return { minX, maxX, minY, maxY };
+}
+
+function boundsOverlap(a: StrokeBounds, b: StrokeBounds): boolean {
+	return a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY;
+}
+
+/**
+ * Whether the marker-tool stroke at `index` is a *highlighter pass* -- a
+ * wash the device paints beneath the ink already on the page -- rather than
+ * a mark that covers what it crosses.
+ *
+ * The device settles this by darkness, not by tool: where a marker stroke
+ * meets ink that is already darker than it, the darker ink stays on top.
+ * Confirmed on the device's own renders of three fixtures, in both
+ * directions:
+ *
+ * - `nomad-3.15.27-blank-shapes-and-RTR.note` page 1's "TEXT HIGHLIGHT"
+ *   bands and `nomad-3.26.40-link-tag-3p.note` page 1's grey marker rows --
+ *   grey marker records written *after* the black pen strokes they cross,
+ *   which the device still draws with the black ink fully legible on top.
+ * - `sticker.note` page 2 -- a *black* marker line drawn across the sticker
+ *   plugin's artwork, which the device draws over the top, hiding the
+ *   sticker's own white detail strokes where the line crosses them (see
+ *   https://github.com/philips/supernote-typescript/issues/82). Sorting
+ *   every marker beneath every pen stroke is what got this backwards, and
+ *   is why this is decided per stroke.
+ *
+ * White is the exception the darkness rule can't express: a white marker is
+ * never a highlight, it's a cover-up, and the device draws it over whatever
+ * it crosses -- `erase.note` page 1 and `erase-pen.note` page 2 (white
+ * marker over a black marker band) and `nomad-3.26.40-link-tag-3p.note`
+ * page 1's white marker row (over black pen lines), all of which the device
+ * renders as the white winning.
+ *
+ * Only ink recorded *before* this stroke is considered: anything recorded
+ * after it already paints over it in record order, which is what the device
+ * does too.
+ */
+function isHighlighterPass(index: number, boundsList: (StrokeBounds | null)[], greys: number[], drawable: boolean[]): boolean {
+	const bounds = boundsList[index];
+	if (!bounds) return false;
+	const grey = greys[index];
+	if (grey >= WHITE_INK_MIN_GREY) return false;
+	for (let i = 0; i < index; i++) {
+		const other = boundsList[i];
+		if (!other || !drawable[i]) continue;
+		if (greys[i] + SAME_GREY_TOLERANCE >= grey) continue;
+		if (boundsOverlap(bounds, other)) return true;
+	}
+	return false;
+}
+
+/** Builds every stroke's SVG element in `strokes`' own order (i.e. TOTALPATH
+ * buffer order, which is the order the device itself replays them in), with
+ * two exceptions, each for a record whose buffer position doesn't match
+ * where its ink belongs:
+ *
+ * - **`'rect'`s first.** A Heading's `'rect'` background record sits *after*
+ *   the digit stroke it's meant to sit behind, so drawing it in place
+ *   (SVG paints later elements on top) covers that ink entirely.
+ * - **A highlighter pass beneath the rest.** A marker stroke lighter than
+ *   ink it crosses is a wash under that ink even though its record comes
+ *   later -- see `isHighlighterPass`, which is also why this is decided per
+ *   marker stroke rather than by putting every marker in a tier of its own.
+ *
+ * Relative order within each of the three groups still follows `strokes`. A
+ * stroke with no entry in `styles` (out-of-range index) is skipped entirely,
+ * rather than falling back to a guessed color/width -- every stroke
+ * `parseStrokes` returns carries its own real style, so a missing entry only
+ * happens from a caller-side index mismatch, not anything
+ * `deriveStrokeStyle` itself produces. */
 function buildStrokePathElements(strokes: IStroke[], styles: StrokeStyle[] | undefined): { defs: string; elements: string } {
 	const rectElements: string[] = [];
-	const markerElements: string[] = [];
-	const penElements: string[] = [];
+	const highlighterElements: string[] = [];
+	const inkElements: string[] = [];
 	const hatchColors = new Set<string>();
+
+	// Precomputed once per page: isHighlighterPass compares each marker
+	// stroke against every ink stroke recorded before it. Only `'path'`s
+	// count as ink to slide under -- a `'rect'` is drawn ahead of everything
+	// either way (see this function's own doc comment), so no marker needs
+	// reordering on account of one.
+	const boundsList = strokes.map(strokeBounds);
+	const greys = strokes.map((_, i) => {
+		const style = styles?.[i];
+		return style && style.shape !== 'skip' ? greyLevel(style.color) : 0;
+	});
+	const drawable = strokes.map((_, i) => styles?.[i]?.shape === 'path');
 
 	strokes.forEach((stroke, i) => {
 		const style = styles?.[i];
@@ -242,12 +351,13 @@ function buildStrokePathElements(strokes: IStroke[], styles: StrokeStyle[] | und
 		// geometry there is -- see buildContourElement.
 		const element = buildPathElement(stroke, style);
 		if (element === null) return;
-		const bucket = style.tier === 'marker' ? markerElements : penElements;
+		const bucket =
+			style.tier === 'marker' && isHighlighterPass(i, boundsList, greys, drawable) ? highlighterElements : inkElements;
 		bucket.push(element);
 	});
 
 	const defs = [...hatchColors].map(buildHatchPatternDef).join('');
-	return { defs, elements: rectElements.join('') + markerElements.join('') + penElements.join('') };
+	return { defs, elements: rectElements.join('') + highlighterElements.join('') + inkElements.join('') };
 }
 
 export interface AddSvgPageOptions {
@@ -454,10 +564,11 @@ const INK_PRESENCE_SAMPLE_COUNT = 60;
  * erased ink; what it still catches is a stroke that is invisible without
  * having been erased at all. `erase.note`'s rows were covered over with
  * *white ink* rather than erased, and Supernote's own export of that page
- * draws only the white. Those have to be dropped rather than
- * drawn-then-covered, because `buildStrokePathElements` sorts strokes into
- * tiers instead of keeping `TOTALPATH` order, so a white marker cover-up
- * can end up painted *under* the pen stroke it was meant to hide.
+ * draws only the white. Dropping the hidden stroke is not the only way that
+ * page could come out right -- a cover-up is recorded after the ink it
+ * hides, so drawing both in record order covers it (see
+ * `buildStrokePathElements`) -- but it is the cheaper one, and it keeps ink
+ * no viewer will ever see out of the output.
  *
  * Kept hard against zero: for a stroke the file says is live, "not one
  * sampled point of it has any matching ink" is the only safe reason to
@@ -504,7 +615,7 @@ function strokeInkPresence(
 	pageHeight: number,
 ): number {
 	if (stroke.points.length === 0) return 1;
-	const targetGrey = Number(/rgb\((\d+)/.exec(displayColor)?.[1] ?? '0');
+	const targetGrey = greyLevel(displayColor);
 	const radius = Math.max(1, Math.round(stroke.thickness / (THICKNESS_TO_PIXEL_SCALE * 2))) + INK_PRESENCE_SEARCH_MARGIN_PX;
 	const step = Math.max(1, Math.floor(stroke.points.length / INK_PRESENCE_SAMPLE_COUNT));
 

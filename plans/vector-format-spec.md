@@ -802,6 +802,50 @@ everywhere else.
 The raster resampling is now avoidable: the displayed text color is the
 last three digits of the heading's `TITLESTYLE` value (below).
 
+### Draw order — record order, except where the marker tool goes underneath
+
+`TOTALPATH` records are in the order the device replays them, and that is
+also the order it paints them in: later ink covers earlier ink. Two
+exceptions are the whole of what a renderer has to know beyond "draw them in
+order".
+
+**A Heading's rect record sits after the ink it backs.** The 2-point
+background record for a Heading is written *after* the label strokes drawn
+inside it, so painting it in place hides them. Rects are drawn first.
+
+**The marker tool goes under ink that is darker than it.** A highlighter
+pass is recorded after the writing it crosses — in every fixture here, every
+marker record sits later in the buffer than every non-marker stroke it
+overlaps — yet the device still draws that writing on top. It is not the
+tool that decides this, it's the darkness:
+
+| Fixture | Marker | Crosses | Device draws |
+|---|---|---|---|
+| `nomad-3.15.27-blank-shapes-and-RTR.note` p1 | grey 202/158 | black pen text | text on top of the band |
+| `nomad-3.26.40-link-tag-3p.note` p1 | grey 202/158 | black pen lines | lines on top of the bands |
+| `sticker.note` p2 | black 1 | the sticker plugin's artwork | the marker line on top, hiding the sticker's white detail |
+| `nomad-3.26.40-link-tag-3p.note` p1 | white 254 | black pen lines | the white, wiping the lines out |
+| `headings-and-marker.note` p3 | white 254 | the black word "White" | the white, leaving only flecks of black |
+| `erase.note` p1, `erase-pen.note` p2 | white 254 | a black marker band | the white, cutting the band |
+
+Read together: **the darker of the two wins, and white always wins.** White
+is not a shade in this scheme — it is the palette's cover-up color, the same
+role it plays in an eraser record (`ERASER_COLOR`, above).
+
+Both directions were checked against the device's own PDF export *and* the
+page's own raster, which agree. The exports are composited, not a stroke
+list: a page's ink comes out merged into one path per color, with each
+color's geometry already clipped to what is actually visible — which is how
+the sticker page shows it, its white detail arriving as fragments where the
+marker line crossed it.
+
+`src/svg.ts` reproduces this by ordering rather than by blending
+(`isHighlighterPass`): a marker lighter than ink it overlaps is drawn
+beneath the page's other ink, and any other marker is drawn in its own
+record order. Ordering can express every case in the corpus; it would fall
+short only for a single marker stroke that crosses both darker and lighter
+ink at once, which no fixture here does.
+
 ## Part 1.4 — Field names from Ratta's own binary
 
 The Supernote Partner app for Windows ships Ratta's notebook engine as

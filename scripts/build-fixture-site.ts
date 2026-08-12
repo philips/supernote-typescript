@@ -75,6 +75,10 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 		isolates: 'The Heading feature — four background styles — separated from the marker tool.',
 		note: 'Heading fills and their auto-contrast label colours come from the note\'s own TITLE_ footer metadata, giving the exact design palette rather than the raster\'s quantised greys.',
 	},
+	sticker: {
+		isolates: 'The sticker plugin — artwork placed as ordinary stroke records, in a shape the centreline model cannot express.',
+		note: 'The one page whose ratio is wrong about it. Page 2\'s sticker is filled the way a person fills a shape with a pen, black strokes doubling back over themselves with white carved back over the top, so our 22 overlapping outlines get summed where the device\'s export merges its black into a single path counted once. Rasterised instead of summed, the ink we lay down covers 42,704 square pixels against the device\'s 42,800 — the picture agrees even where the number says 1.36×.',
+	},
 	turkish: {
 		isolates: 'Dense handwriting with partial erasures throughout.',
 		note: 'The clearest illustration of what is still approximate: a partly erased stroke renders whole or not at all. Survival across its erased strokes runs smoothly from 0% to 95%, so no single cutoff is right for all of them.',
@@ -87,7 +91,7 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 const FEATURED = [
 	'straight-line', 'horizontal_1270', 'a5x-2.14.28', 'caligraphy',
 	'stroke-isolation', 'erase-pen', 'erase-colors', 'erase', 'erase-no-white-pen',
-	'headings-and-marker', 'turkish',
+	'headings-and-marker', 'sticker', 'turkish',
 ];
 
 const escapeHtml = (s: string) =>

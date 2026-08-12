@@ -13,7 +13,11 @@
  * while to pin down and the conversion depends on them:
  *
  * 1. **Ink lives in Form XObjects**, not the page content stream -- the page
- *    itself just holds a background image (the template) plus a reference.
+ *    content draws only the background image (the template), and the ink
+ *    arrives as the appearance stream of a `/Subtype /Stamp` annotation
+ *    listed in the page's `/Annots`. A page the device drew nothing on
+ *    carries no such annotation, which is why the forms have to be found
+ *    through the page tree rather than counted off in file order.
  * 2. **The exporter uses two different styles, sometimes in one file**:
  *    filled outlines (`f`) that trace the rendered shape of a stroke, and
  *    stroked polylines (`S`) carrying an explicit `w`. The second states a
@@ -116,34 +120,124 @@ function flattenCubic(
 }
 
 /**
- * Pulls out every Form XObject's decompressed content stream, in file order,
- * which for these exports is page order.
+ * Every indirect object's body, keyed by object number.
+ *
+ * latin1 keeps one byte per character, so slicing back out recovers the
+ * original bytes exactly -- binary stream data must survive this round trip.
+ */
+function readObjects(text: string): Map<number, string> {
+	const objects = new Map<number, string>();
+	const objectPattern = /(\d+) 0 obj\r?\n?([\s\S]*?)endobj/g;
+	let match: RegExpExecArray | null;
+	while ((match = objectPattern.exec(text))) objects.set(Number(match[1]), match[2]);
+	return objects;
+}
+
+const refsIn = (fragment: string) => [...fragment.matchAll(/(\d+) 0 R/g)].map((m) => Number(m[1]));
+
+/**
+ * Object numbers of every `/Type /Page`, in the order the page tree lists
+ * them -- which is page order, and the only thing that is.
+ *
+ * Falls back to file order if the file has no catalog to start from, which no
+ * export this repo ships does; it is there so a malformed PDF degrades to the
+ * old behaviour rather than dropping the fixture.
+ */
+function pageObjectNumbers(objects: Map<number, string>): number[] {
+	let root: number | undefined;
+	for (const [, body] of objects) {
+		if (!/\/Type\s*\/Catalog/.test(body)) continue;
+		root = refsIn(/\/Pages\s+\d+ 0 R/.exec(body)?.[0] ?? '')[0];
+		break;
+	}
+
+	const pages: number[] = [];
+	const seen = new Set<number>();
+	const walk = (num: number) => {
+		if (seen.has(num)) return; // a /Kids cycle would otherwise never end
+		seen.add(num);
+		const body = objects.get(num);
+		if (body === undefined) return;
+		const kids = /\/Kids\s*\[([^\]]*)\]/.exec(body);
+		if (kids) {
+			for (const kid of refsIn(kids[1])) walk(kid);
+			return;
+		}
+		// `\b` after "Page" is what keeps this from matching "/Pages"
+		if (/\/Type\s*\/Page\b/.test(body)) pages.push(num);
+	};
+	if (root !== undefined) walk(root);
+	if (pages.length > 0) return pages;
+
+	for (const [num, body] of objects) {
+		if (/\/Type\s*\/Page\b/.test(body)) pages.push(num);
+	}
+	return pages;
+}
+
+/** Form XObjects one page draws, in the order they are painted. */
+function pageFormRefs(objects: Map<number, string>, pageNumber: number): number[] {
+	const body = objects.get(pageNumber) ?? '';
+	const isForm = (ref: number) => /\/Subtype\s*\/Form/.test(objects.get(ref) ?? '');
+
+	// The page content stream draws its own resources first -- for these
+	// exports that is the background template image, but an exporter could put
+	// ink here too, so anything shaped like a Form counts.
+	const resources = /\/Resources\s+\d+ 0 R/.exec(body);
+	const resourceBody = resources ? (objects.get(refsIn(resources[0])[0]) ?? '') : body;
+	const xobject = /\/XObject\s*<<([\s\S]*?)>>/.exec(resourceBody);
+	const refs = refsIn(xobject?.[1] ?? '').filter(isForm);
+
+	// Then its annotations paint on top, and that is where Supernote actually
+	// keeps the ink: one /Subtype /Stamp annotation per page whose appearance
+	// stream (/AP /N) is the Form XObject. Rather than spell out that path,
+	// take whatever the annotation points at that turns out to be a Form --
+	// which also survives an /AP holding a per-state subdictionary.
+	const annots = /\/Annots\s*\[([^\]]*)\]/.exec(body);
+	const annotList = annots
+		? refsIn(annots[1])
+		: refsIn(/\/Annots\s+\d+ 0 R/.exec(body)?.[0] ?? '').flatMap((ref) => refsIn(objects.get(ref) ?? ''));
+	for (const annot of annotList) {
+		for (const ref of refsIn(objects.get(annot) ?? '').filter(isForm)) refs.push(ref);
+	}
+
+	return [...new Set(refs)];
+}
+
+/**
+ * Each page's decompressed Form XObject content streams, **page-indexed**: one
+ * entry per page in the export, in page-tree order, empty where that page
+ * draws no vector ink.
+ *
+ * Resolving per page rather than returning forms in file order is the whole
+ * point. A page with no ink contributes no Form XObject, so a flat list is
+ * only page-aligned as long as every page happens to draw something -- and
+ * four of the exports this repo ships already break that, which would silently
+ * shift every page after the empty one onto the wrong comparison.
  *
  * Deliberately a handful of regexes rather than a real PDF object graph: it
- * only ever reads fixtures this repo ships, and keeping it dependency-free
+ * only ever reads fixtures this repo ships, whose page tree is as regular as
+ * the rest of what this file already parses, and keeping it dependency-free
  * means the comparison site needs nothing beyond what's already installed.
  */
-export function extractFormStreams(pdfBytes: Buffer): Buffer[] {
-	// latin1 keeps one byte per character, so slicing back out recovers the
-	// original bytes exactly -- binary stream data must survive this round trip.
-	const text = pdfBytes.toString('latin1');
-	const objectPattern = /\d+ 0 obj\r?\n?([\s\S]*?)endobj/g;
-	const streams: Buffer[] = [];
-	let match: RegExpExecArray | null;
-	while ((match = objectPattern.exec(text))) {
-		const body = match[1];
-		if (!body.includes('/Subtype/Form')) continue;
-		const streamMatch = /stream\r?\n([\s\S]*?)endstream/.exec(body);
-		if (!streamMatch) continue;
-		const raw = Buffer.from(streamMatch[1], 'latin1');
-		try {
-			streams.push(body.includes('FlateDecode') ? inflate(raw) : raw);
-		} catch {
-			// A stream we can't decompress just means one page has no device
-			// side to show; the rest of the site is still worth building.
+export function extractPageForms(pdfBytes: Buffer): Buffer[][] {
+	const objects = readObjects(pdfBytes.toString('latin1'));
+	return pageObjectNumbers(objects).map((pageNumber) => {
+		const streams: Buffer[] = [];
+		for (const ref of pageFormRefs(objects, pageNumber)) {
+			const body = objects.get(ref) ?? '';
+			const streamMatch = /stream\r?\n([\s\S]*?)endstream/.exec(body);
+			if (!streamMatch) continue;
+			const raw = Buffer.from(streamMatch[1], 'latin1');
+			try {
+				streams.push(body.includes('FlateDecode') ? inflate(raw) : raw);
+			} catch {
+				// Nothing else on the page depends on this one: the page keeps
+				// its place and just shows the ink of whatever else it draws.
+			}
 		}
-	}
-	return streams;
+		return streams;
+	});
 }
 
 /**
@@ -298,6 +392,28 @@ export function pdfStreamToSvg(stream: Buffer, pageHeight: number): DevicePage {
 	}
 
 	return { paths, inkArea };
+}
+
+/**
+ * One page's device ink: every Form XObject it draws, in painting order.
+ *
+ * Each form is interpreted on its own rather than by concatenating the
+ * streams, because Supernote's forms open with their y-flip `cm` and never
+ * balance it with `q`/`Q` -- run end to end, the second form would be drawn
+ * through the first one's transform. PDF invokes each form with a fresh
+ * graphics state anyway, which is exactly what a separate call gives it.
+ *
+ * An empty `forms` yields an empty page, which is a real answer: the device
+ * export says this page has no vector ink.
+ */
+export function pdfPageToSvg(forms: Buffer[], pageHeight: number): DevicePage {
+	const page: DevicePage = { paths: [], inkArea: 0 };
+	for (const form of forms) {
+		const decoded = pdfStreamToSvg(form, pageHeight);
+		page.paths.push(...decoded.paths);
+		page.inkArea += decoded.inkArea;
+	}
+	return page;
 }
 
 /** Renders a decoded page as a standalone SVG document. */

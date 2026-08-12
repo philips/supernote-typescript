@@ -15,7 +15,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { SupernoteX } from '../src/parsing.js';
 import { toSvg } from '../src/svg.js';
-import { extractFormStreams, pdfStreamToSvg, devicePageToSvgDocument } from './pdf-vector.js';
+import { extractPageForms, pdfPageToSvg, devicePageToSvgDocument } from './pdf-vector.js';
 
 const INPUT_DIR = 'tests/input';
 const OUT_DIR = 'site';
@@ -88,6 +88,10 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 		note: 'Page 2 settles what a partial erase looks like: each erased line is marked and the pieces the eraser left are written as separate records carrying only an outline. The device draws exactly those pieces — 5, 4, 4, 5, 5, 5, 5 of them across its seven lines, at the same positions to the pixel — and never the line they came from. Page 3 erases and rewrites in place, where a stroke\'s own ink and its replacement\'s sit on top of each other; the export draws 113 paths for its 113 live records.',
 	},
 	'nomad-3.15.27-blank-shapes-and-RTR': { isolates: 'Shapes, patterns, Headings and keyword highlighting.' },
+	'nomad-3.26.40-blank-2p': {
+		isolates: 'An export that draws nothing at all, on either of its pages.',
+		note: 'Blank on both sides is a result here, not a gap — the device\'s export carries no vector ink for either page, and neither do we. It reads as the weakest fixture and is closer to the opposite: nothing else in the corpus states outright that a page is empty.',
+	},
 	'erase-partial2': { isolates: 'A page erased by selecting and deleting, which removes the records outright.' },
 };
 
@@ -189,15 +193,20 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 		return null; // no device export to compare against
 	}
 
-	const streams = extractFormStreams(await fs.readFile(pdfPath));
-	if (streams.length === 0) return null; // a raster-only export has no vector ink
+	const forms = extractPageForms(await fs.readFile(pdfPath));
 
 	const note = new SupernoteX(new Uint8Array(await fs.readFile(path.join(INPUT_DIR, noteFile))));
 	const ours = await toSvg(note, { vectorInk: true, includeText: false });
 
+	// Page n is page n on both sides now, so a count that disagrees is a real
+	// finding about the fixture rather than something to quietly paper over.
+	if (forms.length !== ours.length) {
+		console.warn(`${name}: export has ${forms.length} pages, note has ${ours.length}; comparing the overlap`);
+	}
+
 	const pages: PageComparison[] = [];
-	for (let i = 0; i < Math.min(streams.length, ours.length); i++) {
-		const device = pdfStreamToSvg(streams[i], note.pageHeight);
+	for (let i = 0; i < Math.min(forms.length, ours.length); i++) {
+		const device = pdfPageToSvg(forms[i], note.pageHeight);
 		const oursSvg = inkOnly(ours[i]);
 		pages.push({
 			pageNumber: i + 1,
@@ -207,6 +216,14 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 			oursInk: svgInkArea(oursSvg),
 		});
 	}
+
+	// An export with no Form XObjects anywhere is either rasterised or a note
+	// that genuinely draws nothing, and the file cannot tell those apart --
+	// both are just a background image. Our own render decides: ink on our
+	// side means the export is raster and there is nothing to compare against,
+	// while nothing on either side is the strongest ground truth in the corpus
+	// ("the device agrees this page is blank") and worth showing as such.
+	if (forms.every((f) => f.length === 0) && pages.some((p) => p.oursInk > 0)) return null;
 	const meta = FIXTURE_NOTES[name] ?? {};
 	return { name, pages, isolates: meta.isolates, note: meta.note };
 }

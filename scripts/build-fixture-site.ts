@@ -43,6 +43,10 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 		isolates: 'Erasing, with the tightest ground truth here — its PDF names stroke by stroke what survived.',
 		note: 'Draws exactly the 61 of 82 decoded strokes the device does. The doubled "0" in "1270" is gone: that digit was written, erased and rewritten in place, so the erased copy still found about 30% of its own points over black ink.',
 	},
+	test: {
+		isolates: 'The oldest file here (SN_FILE_VER_20220011, A5X) — the only one using the older id pair, ink pen 1 and marker 5.',
+		note: 'Its three pen=5 strokes are a highlighter pass over the first line, and used to decode as an unknown tool and so render in pen order — painting the band over the words it highlights. They now tier as marker and go down first.',
+	},
 	'a5x-2.14.28': {
 		isolates: 'The older ink pen (pen=1), and a rare 1:1 export — 146 filled outlines for 146 decoded strokes.',
 		note: 'This pen renders about twice its nominal width. Drawing at nominal laid down 40% of the device\'s ink; measuring each stroke\'s own contour brings that to 84%.',

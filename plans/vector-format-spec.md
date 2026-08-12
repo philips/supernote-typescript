@@ -127,7 +127,7 @@ firmware-dependent, don't key on it.
 | `"0001"` | every 2-point rect record |
 | `"0000"` | a 5-point closed-rectangle record for the "link tag" feature's own indicator box (`pen=0`, like `"0001"`) — never real ink, confirmed against `nomad-3.26.40-link-tag-3p.note`: every one of its `"0000"` records' bounding box matches one of the note's own footer `LINK_*` entries' `LINKRECT` pixel-exact, and none of them appear in the page's own rendered ink. `src/strokes.ts`'s `parseStrokes` excludes these unconditionally now (they used to render as a phantom stroked-outline box in `vectorInk` output, since nothing distinguished them from ordinary ink before this field was decoded). |
 | `"straightLine"` | the ruler/straight-line tool — also **exactly two points**, being the line's endpoints (`straight-line.note`; those records read `pen=10, thickness=400`, i.e. an ordinary needle pen, and `doc_kind: "name is not set"` like a rect) |
-| `"fiveStarsSignal"` | the Stars feature's star mark (`nomad-3.15.27-blank-shapes-and-RTR.note`, drawn with the circled-star gesture; that stroke also reads `pen=5, thickness=100`) |
+| `"fiveStarsSignal"` | the Stars feature's star mark (`nomad-3.15.27-blank-shapes-and-RTR.note`, drawn with the circled-star gesture; that stroke also reads `pen=5, thickness=100`). Those two values are **written by the engine, not by the tool**: on save it walks every trail and stores `penType = 5`, `m_thickness = 100` into any record whose `predictName` is this string (Part 1.4). The record's real tool is therefore unrecoverable, which is why `parseStrokes` reports `pen: 'unknown'` plus `isStarMark: true` for it rather than the `'marker'` that `pen=5` otherwise means. |
 
 **`stroke_kind` is the only sound way to tell a filled rectangle from a
 two-point *line*.** Three unrelated things store exactly two points, and
@@ -172,13 +172,58 @@ reflects which axis needs negating).
 | Value | Meaning | Source |
 |---|---|---|
 | 1 | Ink pen (older firmware) | snlib's `Pen::InkPen = 1`; every ordinary stroke in the Nomad 3.15.27 fixtures and `test.note` reads 1 |
-| 5 | unknown | the `fiveStarsSignal` star mark uses it, but `test.note` also has `pen=5, stroke_kind="others"` strokes — not star-specific, meaning unresolved |
+| 3 | Eraser — `TRAIL_ERASE_AREA` | the engine's trail dispatcher branches on `penType == 3` and forces `penColor = 255`, `preNum = -2` (Part 1.4); all 12 records in the fixtures read `color=255, record_class=-2`, no exceptions |
+| 4 | Region selection (lasso) | dispatcher branch → `preNum = -5`; see the record-class section |
+| 5 | **Marker (older firmware)** — also stamped onto the `fiveStarsSignal` star mark | see below |
+| 9 | Eraser — `ERASER select` | dispatcher branch → `preNum = -4`; all 12 records read `color=255, record_class=-4` |
 | 10 | Needle-point pen | matches snlib's `Pen::NeedlePoint` exactly |
 | 11 | Marker | matches snlib's `Pen::Marker` exactly |
-| 15 | Calligraphy pen | `stroke-isolation.note` page 2's calligraphy stroke (declared width 0.7 → `thickness=900`) reads 15 — previously misreported here as never isolated; re-decoding with the real structure resolved it |
+| 15 | Calligraphy pen — **one id, not several** | `stroke-isolation.note` page 2's calligraphy stroke (declared width 0.7 → `thickness=900`) reads 15, and so does every one of `caligraphy.note`'s 59 strokes — the fixture named for the tool and drawn entirely with it |
 | 16 | Ink pen (newer firmware) | this repo's own finding on Manta fixtures; same tool as 1, different id by device/firmware generation |
 | 0 | (seen on 2-point rect records only) | not a real tool; rects use this consistently, see below |
+| −3 | reserved, never rendered | the engine's render filters skip it alongside 3 and 4; not seen in any fixture |
 | anything else | unknown, not guessed at | `parseStrokes` maps to `'unknown'` |
+
+#### `pen=5` — the marker's older id
+
+Resolved from Ratta's own engine plus the fixtures; it was the last
+unidentified id in real ink. Two separate things land in this slot.
+
+**It is the marker.** `flutter_note_lib.dll` distinguishes tools in exactly
+two places, and both group `5` with `11`:
+
+- the routine at `0x180049940` rewrites a stroke's color into its marker
+  variant (`0 → 1`, `0x30 → 0x31`, `0x50 → 0x51`) for
+  `penType == 5 || penType == 11`, and for nothing else;
+- `getRecognDataPointerEventWithFile`, which builds the handwriting-
+  recognition input, skips `penType` `4`, `5` and `11` — the lasso and both
+  marker ids. Highlighter passes are not handwriting.
+
+The fixtures agree, and say *which* marker id belongs to which era.
+`test.note` is the only `SN_FILE_VER_20220011` (A5X) file here; its ink pen
+is `1`, not `16`; and its three `pen=5` strokes carry `color=81` — the
+marker form of `80` — at `thickness=1500`, which the page's own raster
+renders as wide grey highlighter bands over the black handwriting. No
+fixture contains both `5` and `11`. That is an id superseded across a
+firmware generation, the same pattern as `1 → 16` for the ink pen:
+
+| era | ink pen | marker |
+|---|---|---|
+| A5X, `SN_FILE_VER_20220011` | 1 | **5** |
+| current | 16 | 11 |
+
+**And the star mark borrows it.** On save the engine stores `penType = 5`
+over whatever tool drew a `fiveStarsSignal` record (Part 1.4). Such a record
+is not marker ink, and its real tool is gone — see the `stroke_kind` table.
+
+One caveat on scope, since this route was expected to yield the enum by
+name: it does not. `logTrails` prints `penType` as a bare integer, and the
+binary contains no pen-name strings at all (the `fountain_pen` /
+`calligraphic_brush` strings in the payload belong to MyScript, not Ratta).
+Ids `10`, `15` and `16` never appear as constants anywhere in the DLL — the
+engine only ever special-cases `0`, `1`, `3`, `4`, `5`, `9`, `11` and `−3`.
+So this is still a behavioural identification, just made against Ratta's
+implementation rather than against fixtures alone.
 
 ### `color` field — confirmed values
 
@@ -200,12 +245,34 @@ The 157 vs. 158 (and 201 vs. 202) variance is real, not measurement noise —
 158/202, matching the enum exactly. Two adjacent, deliberately close shades,
 not a decode error.
 
+**The `+1` is the marker, and it is a rule, not a quirk of some fixtures.**
+The engine has a routine for it (`0x180049940`, Part 1.4): when a stroke's
+`penType` is a marker id — `5` or `11`, and no other value — its color is
+rewritten `0 → 1`, `0x30 → 0x31`, `0x50 → 0x51`. A second remap at
+`0x180049990` carries the older ids the same way, `0x63 → 0x9d` and
+`0x64 → 0xc9` for a pen against `0x67 → 0x9e` and `0x68 → 0xca` for a
+marker — i.e. the 157/158 and 201/202 pairs, from the source ids up.
+
+The fixtures match it exactly, with no exceptions in either direction:
+across all 2,948 records, a marker (`pen` 5 or 11) never once writes
+0/48/80/157/201, and a needle/calligraphy/ink pen (10/15/16) never once
+writes 1/49/81/158/202. `tests/strokes.test.ts` sweeps every fixture for
+this. So the base value is the color and `+1` says a marker drew it; snlib
+naming only `1` as `MarkerBlack` while calling 158/202 plain
+`DarkGrey`/`LightGrey` is an incomplete reading of the same pattern.
+
 **157/201 is the canonical design palette.** Supernote's own PDF export
 (`headings-and-marker.pdf`) draws its vector fills at exactly
 `0.6156863 rg` = 157/255 and `0.7882353 rg` = 201/255, and the
 `TITLESTYLE` metadata (see the Titles section below) encodes the same
-157/201 as literal decimal digits. snlib's 158/202 values are the raster-
-quantized variants seen in some marker strokes, not the design colors.
+157/201 as literal decimal digits — the base, non-marker forms.
+
+**48 and 80 are not colors "beyond greyscale".** They are the older A5X-era
+grey ids, and they extend the same base/marker pairing (48/49, 80/81). In
+`test.note` — the only fixture old enough to use them — the device's own
+raster draws its `color=48` pen ink at grey 128 and its `color=81` marker
+band at grey 169, so they are two more grey levels under a different
+encoding, not a color palette.
 
 `color === 255` (`Eraser`) is filtered out of `parseStrokes`' return value by
 default, not surfaced as an `IStroke`. This is the real explanation for issue
@@ -761,6 +828,25 @@ curl -O https://download-firmware.supernote.com/windows-update/2.5.24/supernote_
 strings -n 6 payload.bin | grep -n logTrails
 ```
 
+The field names come out of `strings` alone. Reading the engine's *logic*
+(the `penType` findings below, and the color routine in the `color`
+section) needs one more step, still without Ghidra: the DLL is embedded in
+the payload as an ordinary PE image, so carve it out and disassemble it.
+
+```
+# scan payload.bin for 'MZ' + a valid e_lfanew -> 'PE\0\0'; the image holding
+# the flutter_note_lib.cpp log strings starts at payload offset 46537700 in
+# this build. Its length is max(PointerToRawData + SizeOfRawData) over the
+# section headers (2,121,216 bytes), and its ImageBase is 0x180000000.
+objdump -d -M intel --no-show-raw-insn flutter_note_lib.dll > disasm.txt
+```
+
+To go from a string to the code that uses it, convert its payload offset to
+a VA with the section table (`VA = ImageBase + section.VirtualAddress +
+(offset − section.PointerToRawData)`) and grep the disassembly for that
+address — `objdump` annotates every RIP-relative `lea` with its target. All
+the addresses quoted below are VAs in that image.
+
 ### The full stroke-record field list
 
 `logTrails` emits these in order (the fixed-size scalars appear reversed in
@@ -783,6 +869,46 @@ this repo already parses: `disableAreaList`, `m_points`, `pressures`,
 `renderFlag empty`, `PointContour`, `m_MarkPenDFillDir`. Note `tilts` is
 Ratta's `angles`, and `renderFlag` sits between `control_nums` and
 `point_contour` — exactly where this document had an unnamed `section_2`.
+
+### The in-memory trail struct
+
+`logTrails` also pins where each field *lives*, which is what makes the
+engine's own code readable: it loads them one by one at fixed offsets from a
+trail object of stride `0x340` (832 bytes). This is the in-memory layout,
+not the on-disk one — useful for reading the disassembly, not for parsing.
+
+| Offset | Field | | Offset | Field |
+|---|---|---|---|---|
+| +0x1a0 | `predictName` (`std::string`) | | +0x220 | `pageNum` |
+| +0x1f8 | `walcomEmrType` | | +0x224 | `trailNum` |
+| +0x204 | `penType` | | +0x228 | `flagSpecial` |
+| +0x208 | `penColor` | | +0x22c | `preNum` |
+| +0x20c | `m_thickness` | | +0x230 | `layer` |
+| +0x210 | `recMod` | | +0x298 | `m_trailStatus` |
+| +0x214 | `fontWidth` | | +0x29c | `m_copy` |
+| +0x218 | `fontHeight` | | | |
+
+Two things this repo had already concluded fall straight out of it.
+
+**`record_class` is Ratta's `preNum`.** The trail dispatcher classifies a
+trail by `penType` and writes the result into `+0x22c`: `penType == 3`
+(`TRAIL_ERASE_AREA`) stores `-2` and also forces `penColor = 255`,
+`penType == 9` (`ERASER select`) stores `-4`, and `penType == 4` (region
+selection) stores `-5`. Those are exactly this document's record classes,
+paired with exactly those pen ids across all 2,948 fixture records with no
+exceptions. The on-disk field at `StrokeConfig` offset 40 is therefore
+`preNum`, and its values are the engine's own tool classification rather
+than anything derived.
+
+**`m_trailStatus` really is the visibility field, tested by sign.** Two
+independent render filters (`0x1800629eb`, `0x180028730`) begin with
+`cmp DWORD PTR [trail+0x298], 0` / `jl` — skip the record if it is
+negative. Note that the binary's test is `< 0`, slightly narrower than the
+"non-zero" rule this document arrived at from PDF path counts; every code
+observed in the wild is negative, so the two agree on all real data. The
+same filters then skip `penType` ∈ {`3`, `4`, `-3`} — the erasers'
+and lasso's own motion paths, which is the engine's own statement that
+those records are not ink.
 
 ### `section_1` (52 bytes) — now fully decoded
 
@@ -1315,8 +1441,13 @@ pass; the findings are folded into the sections above. In brief:
    `TITLE_*` keys entirely (unlike `KEYWORD_`/`LINKO_`, which already had a
    workaround) — a re-saved/edited Heading could have silently lost its
    `TITLE_*` metadata before this was fixed.
-3. **`pen=5`'s meaning** — used by the star mark and by some ordinary
-   strokes in `test.note`; not yet isolated to a tool.
+3. **`pen=5`'s meaning** — **resolved** (issue #75): it is the marker,
+   under the id used before `11`, and the star mark separately has `5`
+   stamped onto it by the engine on save. See the `pen` field section for
+   the evidence and for what this route did *not* yield (there is no named
+   pen enum in the binary). The rest of the id table is closed out in the
+   same place: `3`/`9` are the two eraser modes, `4` the lasso, and `15`
+   the calligraphy pen with a single id.
 4. ~~`"straightLine"`~~ — observed, via `straight-line.note`. It turned out
    to matter rather than being a loose end: those records store two points,
    which `vectorInk` was reading as a filled rectangle, so every ruler line
@@ -1327,8 +1458,9 @@ pass; the findings are folded into the sections above. In brief:
 6. **`TITLESTYLE` beyond the 4-slot palette** — newer devices with more
    heading styles (or color devices) may use other codes; the `1BBBFFF`
    digit reading is confirmed only for these four values on two greyscale
-   devices. (`test.note` shows non-greyscale stroke colors 48/81 exist in
-   the wild, so a color-device fixture would also extend the Color table.)
+   devices. (`test.note`'s stroke colors 48/81 turned out *not* to be a
+   color-device palette — see the `color` section — so extending the Color
+   table still needs a real color-device fixture.)
 7. ~~Decode `point_contour`~~ — done, see its section above: it is the
    device's real rendered outline (with true pressure-varying width), but
    it is **not** a record of what survived erasing, which was the reason

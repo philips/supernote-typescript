@@ -407,10 +407,42 @@ The area check also quantifies what the contour adds over stroking the
 centerline at a uniform width: round-tipped tools (needle pen, marker)
 fill ~1.0× their nominal width, but the ink pen measures ~0.65× and the
 chisel-tipped calligraphy pen only ~0.2–0.3×, because their rendered
-width narrows with pressure and tilt. Filling these rings is therefore
-the route to matching the device's own modern vector export; `vectorInk`
-still strokes the centerline at a uniform `thickness`, which can only
-draw the nominal figure.
+width narrows with pressure and tilt.
+
+**`vectorInk` now draws these rings directly**, as one filled `<path>`
+per stroke under the nonzero winding rule (`buildContourElement` in
+`src/svg.ts`), and only falls back to stroking the centerline at a
+uniform width for a record carrying no usable contour. Two things follow
+that a centerline structurally cannot express:
+
+- **Pressure-varying width along a single stroke**, the thing that makes
+  the calligraphy and ink pens sit so far from nominal above.
+- **Regions filled by a stroke doubling back over itself.** This is how
+  the sticker plugin's artwork is built (issue
+  [#68](https://github.com/philips/supernote-typescript/issues/68)):
+  drawn as a uniform-width line, such a stroke renders as the hollow
+  scribble that traces the fill rather than the filled shape. A sticker
+  needs no new format support beyond this — placing one writes plain
+  stroke records into the page's ordinary `TOTALPATH`, adding no new tag,
+  address or section anywhere in the file.
+
+A record can also carry a contour and **no `points` at all** — the
+sticker's own solid silhouette is stored that way, and 38 such records
+appear in each of the nomad fixtures too. Those have no centerline to
+stroke and so used to render as nothing whatsoever; the outline is the
+only geometry they have.
+
+Measured against each page's own render across 15 fixtures, filling the
+outline moves the total disagreeing-pixel count from 570,759 to 462,961
+(-19%), the largest single gains being
+`nomad-3.15.27-blank-shapes-and-RTR.note` (127,911 → 37,771),
+`caligraphy.note` (19,978 → 8,930) and `sticker.note` (6,892 → 1,874).
+Several fixtures move slightly the other way (`vertical_1180.note` 5,079
+→ 6,050, `horizontal_1270.note` 5,591 → 6,615) because a filled outline
+renders a touch bolder than the device's own low-resolution RLE raster —
+which is the expected direction, since that raster is already known to
+under-represent width against the device's own PDF export (see the
+`thickness` section).
 
 ### `thickness` field — solved: hundredths of a page pixel
 
@@ -1084,17 +1116,18 @@ pass; the findings are folded into the sections above. In brief:
    it was prioritized (that is now handled from the raster instead — see
    the erase-records section). It is now used for stroke width instead
    (`strokeRenderWidth`, see the thickness section), which is what the
-   decode turned out to be worth. One follow-on remains:
-   - **Fill the contour** rather than stroking the centerline at the single
-     width derived from it. This buys *shape* fidelity, not area: a uniform
-     width can't express the variation along a stroke, and can't represent
-     a chisel-tipped calligraphy pen at all (its area-correct width is
-     right on average but thin wherever the nib is broad, and thick
-     wherever it's edge-on). It would **not** close the residual area gap
-     documented in the thickness section — the contour's own area is the
-     same ~0.67–0.88× of the device's. The main work is that contour
-     coordinates are absolute page pixels, so they need explicit scaling
-     under `toSvg`'s `upscale` option, unlike points.
+   decode turned out to be worth. Its one follow-on — **fill the contour**
+   rather than stroking the centerline at the single width derived from it
+   — is now done too (see the `point_contour` section). As predicted, that
+   bought *shape* fidelity rather than area: a uniform width can't express
+   the variation along a stroke, can't represent a chisel-tipped
+   calligraphy pen at all, and can't fill a region at all, which is what
+   the sticker plugin (issue #68) turned out to need. It did **not** close
+   the residual area gap documented in the thickness section — the
+   contour's own area is the same ~0.67–0.88× of the device's. Contour
+   coordinates being absolute page pixels is handled in `toSvg` by
+   `withUpscaledContour`, since `upscale` doesn't reach them the way it
+   reaches points.
 8. **The remaining stroke-record tail** — `unk_17`, `unk_22`, and the
    `Section3`/`Section4` spans after `point_contour` are still
    uncharacterized. `section_1` and `section_2` are no longer among them

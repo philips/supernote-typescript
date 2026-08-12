@@ -94,10 +94,19 @@ const escapeHtml = (s: string) =>
 	s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const slug = (s: string) => s.replace(/[^a-zA-Z0-9-]/g, '_');
 
-/** Ink a rendered SVG lays down, in square page pixels: each stroked path's
- * length times its width, plus the area of any filled rect. Deliberately
- * measured off the finished SVG rather than from internals, so it compares
- * like for like with the same measure taken from the device's PDF.
+/** Ink a rendered SVG lays down, in square page pixels: a filled path's
+ * enclosed area, a stroked path's length times its width, plus the area of
+ * any filled rect. Deliberately measured off the finished SVG rather than
+ * from internals, so it compares like for like with the same measure taken
+ * from the device's PDF -- which is drawn in both of those styles too, and
+ * measured the same two ways (see `pdf-vector.ts`).
+ *
+ * Both styles are needed on our side as well: a stroke is normally drawn as
+ * the device's own rendered outline, filled, and only falls back to a
+ * stroked centreline where the record carries no usable contour. Summing
+ * rings *signed* is what makes a filled path's holes subtract rather than
+ * add -- the gap inside an `e` or an `o` is stored as its own
+ * oppositely-wound ring.
  *
  * Pure white (255) is skipped: those are the overlays drawn along an
  * eraser's own path to cover what it took out, so counting them would add
@@ -106,17 +115,36 @@ const slug = (s: string) => s.replace(/[^a-zA-Z0-9-]/g, '_');
  * still counts, which is why the test is exact rather than "near white":
  * the white pen records 254, and the device's export draws it too. */
 function svgInkArea(svg: string): number {
-	let total = 0;
-	for (const [, d, colour, width] of svg.matchAll(
-		/<path d="([^"]+)" fill="none" stroke="([^"]+)" stroke-width="([\d.]+)"/g,
-	)) {
-		if (colour === 'rgb(255,255,255)') continue;
-		const points = [...d.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
-		let length = 0;
-		for (let i = 1; i < points.length; i++) {
-			length += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+	const ringsOf = (d: string) =>
+		d
+			.split('M')
+			.filter((segment) => segment.trim())
+			.map((segment) => [...segment.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]));
+	const signedArea = (ring: number[][]) => {
+		let sum = 0;
+		for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+			sum += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
 		}
-		total += length * Number(width);
+		return sum / 2;
+	};
+
+	let total = 0;
+	for (const [, d, attrs] of svg.matchAll(/<path d="([^"]+)"([^>]*)\/>/g)) {
+		const rings = ringsOf(d);
+		const stroke = /stroke="([^"]+)"/.exec(attrs)?.[1];
+		if (stroke) {
+			if (stroke === 'rgb(255,255,255)') continue;
+			const width = Number(/stroke-width="([\d.]+)"/.exec(attrs)?.[1] ?? 0);
+			for (const ring of rings) {
+				let length = 0;
+				for (let i = 1; i < ring.length; i++) length += Math.hypot(ring[i][0] - ring[i - 1][0], ring[i][1] - ring[i - 1][1]);
+				total += length * width;
+			}
+			continue;
+		}
+		const fill = /fill="([^"]+)"/.exec(attrs)?.[1];
+		if (!fill || fill === 'none' || fill === 'rgb(255,255,255)' || fill.startsWith('url(')) continue;
+		total += Math.abs(rings.reduce((sum, ring) => sum + signedArea(ring), 0));
 	}
 	for (const [, w, h] of svg.matchAll(/<rect x="[^"]*" y="[^"]*" width="([\d.]+)" height="([\d.]+)"/g)) {
 		total += Number(w) * Number(h);

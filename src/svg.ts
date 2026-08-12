@@ -161,7 +161,41 @@ function buildRectElement(stroke: IStroke, style: { color: string; fill: 'solid'
 	return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" fill="${fill}"/>`;
 }
 
-function buildPathElement(stroke: IStroke, style: { color: string; width: number }): string {
+/** Rings with fewer than 3 points enclose no area, so they'd render as
+ * nothing at all -- dropped so a record left holding only degenerate rings
+ * falls back to its centerline rather than emitting an invisible path. */
+const MIN_CONTOUR_RING_POINTS = 3;
+
+/** Builds a `'path'` stroke's filled outline -- the device's own rendered
+ * shape (`IStroke.contour`), drawn as closed rings under SVG's default
+ * nonzero winding rule so a ring wound against the shape it sits in (the
+ * gap inside an `e` or an `o`) comes out as a hole rather than more ink.
+ *
+ * Filling the outline reproduces two things stroking a centerline at one
+ * `stroke-width` structurally cannot, both of which the device does draw:
+ * the pressure-varying width along a single stroke, and a *solid region*
+ * laid down by a stroke that doubles back over itself to fill an area --
+ * which is how the sticker plugin's artwork is built (see
+ * https://github.com/philips/supernote-typescript/issues/68). Drawn as a
+ * uniform-width line, such a stroke came out as the hollow scribble that
+ * traced the fill instead of the filled shape itself. */
+function buildContourElement(rings: IStrokePoint[][], color: string): string {
+	const d = rings
+		.map((ring) => ring.map((point, i) => `${i === 0 ? 'M' : 'L'}${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ') + ' Z')
+		.join(' ');
+	return `<path d="${d}" fill="${color}"/>`;
+}
+
+/** Builds one `'path'` stroke's element, preferring its real rendered
+ * outline (`buildContourElement`) and falling back to stroking the sampled
+ * centerline at `style.width` when the record carries no usable contour --
+ * a firmware whose layout `readContour` doesn't recognize. Returns `null`
+ * when the stroke has no drawable geometry either way. */
+function buildPathElement(stroke: IStroke, style: { color: string; width: number }): string | null {
+	const rings = stroke.contour?.filter((ring) => ring.length >= MIN_CONTOUR_RING_POINTS) ?? [];
+	if (rings.length > 0) return buildContourElement(rings, style.color);
+	if (stroke.points.length === 0) return null;
+
 	const d = stroke.points
 		.map((point, i) => `${i === 0 ? 'M' : 'L'}${point.x.toFixed(2)},${point.y.toFixed(2)}`)
 		.join(' ');
@@ -194,16 +228,22 @@ function buildStrokePathElements(strokes: IStroke[], styles: StrokeStyle[] | und
 	const hatchColors = new Set<string>();
 
 	strokes.forEach((stroke, i) => {
-		if (stroke.points.length === 0) return;
 		const style = styles?.[i];
 		if (!style || style.shape === 'skip') return;
 		if (style.shape === 'rect') {
+			if (stroke.points.length < 2) return;
 			rectElements.push(buildRectElement(stroke, style));
 			if (style.fill === 'hatch') hatchColors.add(style.color);
 			return;
 		}
+		// Not gated on having points: a record can carry a contour and no
+		// sampled centerline at all (the sticker plugin writes its artwork's
+		// solid silhouette that way), in which case the outline is the only
+		// geometry there is -- see buildContourElement.
+		const element = buildPathElement(stroke, style);
+		if (element === null) return;
 		const bucket = style.tier === 'marker' ? markerElements : penElements;
-		bucket.push(buildPathElement(stroke, style));
+		bucket.push(element);
 	});
 
 	const defs = [...hatchColors].map(buildHatchPatternDef).join('');
@@ -874,6 +914,21 @@ function applyHeadingContrastOverrides(
  * `extractPdfPageData` pattern (SVG's own `addSvgPage` step can join the
  * others inside the Worker, since none of it needs the main thread).
  */
+/** Scales a decoded stroke's `contour` by `factor`, leaving everything else
+ * alone. `parseStrokes` transforms `points` out of raw device units using
+ * the page dimensions it's handed, so passing upscaled dimensions upscales
+ * them for free -- but `contour` arrives as absolute pixels in the note's
+ * *native* page space (see `IStroke.contour`), which that transform never
+ * touches, so it has to be scaled here or the outline would be drawn at 1x
+ * over an upscaled raster. A no-op at `upscale: 1`, the default. */
+function withUpscaledContour(stroke: IStroke, factor: number): IStroke {
+	if (factor === 1 || !stroke.contour) return stroke;
+	return {
+		...stroke,
+		contour: stroke.contour.map((ring) => ring.map((point) => ({ x: point.x * factor, y: point.y * factor }))),
+	};
+}
+
 export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promise<string[]> {
 	const { pageNumbers, dpi, includeText, upscale = 1, vectorInk = false } = options;
 	const pages = pageNumbers ? pageNumbers.map((n) => note.pages[n - 1]) : note.pages;
@@ -886,10 +941,15 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 	// TOTALPATH position relative to the ink they were dragged over --
 	// needed so a *partial* erase (see parseStrokes' doc comment) still
 	// looks erased once drawn, instead of leaving the covered ink fully
-	// visible.
+	// visible. includeContours is what buildPathElement draws each stroke
+	// from; withUpscaledContour covers the one part of a stroke that
+	// linear-in-pageWidth/pageHeight does *not* reach.
 	const strokesPerPage = vectorInk
 		? pages.map((page) =>
-				parseStrokes(page.totalPathBuffer, note.pageWidth * upscale, note.pageHeight * upscale, { includeErasers: true }),
+				parseStrokes(page.totalPathBuffer, note.pageWidth * upscale, note.pageHeight * upscale, {
+					includeErasers: true,
+					includeContours: true,
+				}).map((stroke) => withUpscaledContour(stroke, upscale)),
 			)
 		: pages.map((): IStroke[] => []);
 

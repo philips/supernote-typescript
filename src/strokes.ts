@@ -170,21 +170,21 @@ const LINK_TAG_STROKE_KIND = '0000';
  * (see `IStroke.isFilledRect`). */
 const FILLED_RECT_STROKE_KIND = '0001';
 
-/** `pen` id of a lasso/selection *path* record -- the loop a user draws to
- * select content (then delete it, move it, or turn it into a
- * Keyword/Tag) -- not ink, and never rendered by the device. Confirmed
- * against every fixture that has one (all reading `color: 0`,
- * `thickness: 200`, and frequently recorded as two byte-identical
- * consecutive records): `erase.note` (a lasso-select-then-delete; the loop
- * is absent from both the device raster and `erase.pdf`, Supernote's own
- * export), `nomad-3.26.40-link-tag-3p.note` page 3 (keyword/tag-creation
- * selections around fully-visible words -- rendering these drew phantom
- * black circles around the text), and `unknown-color.note` (a path with ~0%
- * presence in the page's own rendered ink). Excluded unconditionally, like
- * `LINK_TAG_STROKE_KIND`: whatever the selection *did* (delete vs. move vs.
- * keyword -- not recoverable from this record, see
- * plans/vector-format-spec.md's erase-records section), the loop itself is
- * never visible content. */
+/** `pen` id of a lasso/selection path. This used to be how such records were
+ * identified; `RECORD_CLASS.LASSO` is now, because it states the record's
+ * kind rather than inferring it from a pen id that firmware reuses across
+ * tools (`pen === 1` is both the older ink pen and the Nomad-era eraser).
+ *
+ * It is still tested, for one specific record: `sticker.note` page 1's last
+ * record is not a stroke at all. Its `StrokeConfig` reads
+ * `screenHeight: 120` on a 2560-tall page, `thickness: 0`, zero points, and
+ * a `color` of 2012028940 -- the bytes are sticker data being read through
+ * the wrong struct (see #68). It happens to land `4` in the `pen` slot, so
+ * the old test dropped it by accident, while the record-class test keeps it
+ * (its class slot reads a perfectly ordinary `5000`) and would emit
+ * `rgb(2012028940,...)`, an invalid CSS color. Keeping both conditions costs
+ * nothing and holds output identical until sticker records are understood
+ * properly. */
 const LASSO_PEN_ID = 4;
 
 /** Byte layout of the fixed-size header (`StrokeConfig` in
@@ -213,7 +213,64 @@ const STROKE_CONFIG = {
 	 * `superNoteNote`-relative offset instead of `StrokeConfig`'s own). */
 	SCREEN_HEIGHT_OFFSET: 128,
 	DOC_KIND_OFFSET: 136,
+	/** See `RECORD_CLASS`. Documented as a constant `5000` by
+	 * https://github.com/Walnut356/snlib (as `unk_5`) -- it isn't. */
+	RECORD_CLASS_OFFSET: 40,
 	SIZE: 208,
+} as const;
+
+/** What kind of thing a stroke record *is*, read as an `i32` from
+ * `STROKE_CONFIG.RECORD_CLASS_OFFSET`. snlib documents this field as a
+ * constant `5000` (`unk_5`); it isn't. Every record in every fixture (2,601
+ * of them, across every device family and firmware here) falls into exactly
+ * one of four groups:
+ *
+ * | Value | Records | What |
+ * |---|---|---|
+ * | `5000` | 2514 | real ink -- every pen, every color, including white |
+ * | `0` | 22 | geometry derived from two points: a Heading background (`"0001"`), a link-tag box (`"0000"`), or a ruler line (`"straightLine"`) |
+ * | `-1`, `-2`, `-4` | 46 | an eraser gesture (three tool modes/eras) |
+ * | `-5` | 19 | a lasso selection path |
+ *
+ * The eraser/lasso split is exact: `-5` holds every `pen === 4` record and
+ * nothing else, which is why it can replace that test. It is also the
+ * durable form of it -- firmware reuses pen ids across tools (`pen === 1`
+ * is both the older ink pen and the Nomad-era eraser), whereas this field
+ * states the record's kind directly.
+ *
+ * **What this field does not do** is say whether an erase gesture actually
+ * erased anything. That was the hope -- Supernote's own engine classifies
+ * trails as `TRAIL_ERASE_AREA` / `ERASE_LINE_COLOR_VALUE` / `CLEAN SCREEN`
+ * / `this is region selection trail` / `trail ERASER select:` as it
+ * replays them, so some discriminator exists -- but it is not this one.
+ * `erase.note`, which exercises every erase mechanism, carries genuine
+ * erasers at `-4`, while `nomad-3.26.40-link-tag-3p.note` page 3's `-4`
+ * records sit on top of fully visible keyword text and erased nothing. Same
+ * class, opposite outcome. So this identifies the *tool*, never the
+ * *result*, and a geometric erase replay still cannot be driven from it. */
+const RECORD_CLASS = {
+	INK: 5000,
+	/** A lasso/selection *path* -- the loop a user draws to select content
+	 * (then delete it, move it, or turn it into a Keyword/Tag). Not ink, and
+	 * never rendered by the device, so it is excluded unconditionally like
+	 * `LINK_TAG_STROKE_KIND`: whatever the selection *did* is not recoverable
+	 * from the record (see plans/vector-format-spec.md's erase-records
+	 * section), but the loop itself is never visible content either way.
+	 *
+	 * Holds exactly the records that previously matched `pen === 4` -- all
+	 * reading `color: 0`, `thickness: 200`, and frequently recorded as two
+	 * byte-identical consecutive records. That those are never rendered was
+	 * established against every fixture that has one: `erase.note` (a
+	 * lasso-select-then-delete; the loop is absent from both the device
+	 * raster and `erase.pdf`, Supernote's own export),
+	 * `nomad-3.26.40-link-tag-3p.note` page 3 (keyword/tag-creation
+	 * selections around fully-visible words -- rendering these drew phantom
+	 * black circles around the text), and `unknown-color.note` (a path with
+	 * ~0% presence in the page's own rendered ink).
+	 *
+	 * Holds every real lasso path, and `pen === 4` holds the same set plus
+	 * exactly one record that isn't a lasso -- see `LASSO_PEN_ID`. */
+	LASSO: -5,
 } as const;
 
 /** Sizes of the two fixed-layout sections that sit between `epa_grays` and
@@ -236,6 +293,8 @@ interface RawStroke {
 	strokeKind: string;
 	screenHeight: number;
 	points: [number, number][]; // raw (y, x) pairs, undivided device units
+	/** See `RECORD_CLASS`. */
+	recordClass: number;
 	/** See `IStroke.eraserTouched`. */
 	eraseMark: number;
 	/** Already in page-pixel space -- unlike `points`, these need no
@@ -319,6 +378,7 @@ function tryParseStroke(
 	const strokeKind = readFixedCString(view, pos + STROKE_CONFIG.STROKE_KIND_OFFSET, STROKE_CONFIG.STROKE_KIND_SIZE);
 	const screenHeight = view.getUint32(pos + STROKE_CONFIG.SCREEN_HEIGHT_OFFSET, true);
 	if (screenHeight === 0) return null;
+	const recordClass = view.getInt32(pos + STROKE_CONFIG.RECORD_CLASS_OFFSET, true);
 
 	let p = pos + STROKE_CONFIG.SIZE;
 
@@ -347,14 +407,15 @@ function tryParseStroke(
 	// epa_points (8), epa_grays (4) -- all length-prefixed, all skipped
 	// wholesale; Section1 (and so the erase mark) begins immediately after.
 	for (const elementSize of [2, 4, 1, 8, 4]) {
-		if (p + 4 > strokeEnd) return { pen, color, thickness, strokeKind, screenHeight, points, eraseMark: 0 };
+		if (p + 4 > strokeEnd)
+			return { pen, color, thickness, strokeKind, screenHeight, recordClass, points, eraseMark: 0 };
 		p += 4 + view.getUint32(p, true) * elementSize;
 	}
 
 	const eraseMark = p + 4 <= strokeEnd ? view.getInt32(p, true) : 0;
 	const contour = includeContours ? readContour(view, byteLength, p, strokeEnd) : undefined;
 
-	return { pen, color, thickness, strokeKind, screenHeight, points, eraseMark, contour };
+	return { pen, color, thickness, strokeKind, screenHeight, recordClass, points, eraseMark, contour };
 }
 
 /**
@@ -429,10 +490,11 @@ function tryParseStroke(
  * comment: a link-tag indicator box, not ink, confirmed against
  * `nomad-3.26.40-link-tag-3p.note`'s own footer `LINK_*` metadata.
  *
- * Strokes whose `pen` is `4` are excluded unconditionally too -- see
- * `LASSO_PEN_ID`'s doc comment: the loop drawn to lasso-select content
- * (for deletion, moving, or Keyword/Tag creation), never rendered by the
- * device.
+ * Select gestures are excluded unconditionally too -- the loop drawn to
+ * lasso-select content (for deletion, moving, or Keyword/Tag creation),
+ * never rendered by the device. These are identified by the record-class
+ * field rather than by pen id; see `RECORD_CLASS`, which is also what tells
+ * a select apart from an erase when the two are otherwise identical.
  *
  * Returns `[]` if `totalPathBuffer` is `null`, too short to hold a single
  * stroke, or its layout isn't recognized (e.g. a genuinely blank page, or a
@@ -477,7 +539,13 @@ export function parseStrokes(
 		const raw = tryParseStroke(view, byteLength, strokeStart, strokeEnd, options.includeContours === true);
 		const isEraser = raw?.color === ERASER_COLOR;
 		const isLinkTag = raw?.strokeKind === LINK_TAG_STROKE_KIND;
-		const isLassoPath = raw?.pen === LASSO_PEN_ID;
+		// `RECORD_CLASS.LASSO` is the durable test -- it states the record's
+		// kind, rather than inferring it from a pen id firmware reuses across
+		// tools. The `pen` check is kept alongside it, and deliberately: see
+		// `LASSO_PEN_ID`, which is no longer really "the lasso test" so much
+		// as a guard against one record in `sticker.note` whose StrokeConfig
+		// isn't a StrokeConfig at all.
+		const isLassoPath = raw?.recordClass === RECORD_CLASS.LASSO || raw?.pen === LASSO_PEN_ID;
 		if (raw && !isLinkTag && !isLassoPath && (!isEraser || options.includeErasers)) {
 			const scale = raw.screenHeight / pageHeight;
 			strokes.push({

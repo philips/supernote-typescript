@@ -444,4 +444,74 @@ describe("parseStrokes", () => {
       expect(withContour / total).toBeGreaterThan(0.95);
     });
   });
+
+  describe("record class (StrokeConfig offset 40)", () => {
+    test("every record-class lasso is a pen=4 record, with one known exception the other way", async () => {
+      // The lasso exclusion keys on the record-class field rather than on
+      // `pen === 4`, because firmware reuses pen ids across tools. This pins
+      // the containment that makes the swap safe -- every lasso the field
+      // names is also a pen=4 record, so nothing new is dropped -- and pins
+      // the single disagreement in the other direction: sticker.note page
+      // 1's last record reads pen=4 without being a lasso, because its
+      // StrokeConfig is sticker bytes read through the wrong struct. Both
+      // conditions are therefore still tested in parseStrokes.
+      const RECORD_CLASS_OFFSET = 40, LASSO = -5, CONFIG_SIZE = 208;
+      const fixtures = fs.readdirSync("tests/input").filter((name) => name.endsWith(".note")).sort();
+      let lassoByClass = 0, lassoByPen = 0, ink = 0;
+      const penOnly: string[] = [], classOnly: string[] = [];
+
+      for (const fixture of fixtures) {
+        const sn = new SupernoteX(await readFileToUint8Array(fixture));
+        for (const [pageIndex, page] of sn.pages.entries()) {
+          const buf = page.totalPathBuffer;
+          if (!buf || buf.length < 16) continue;
+          const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+          const count = view.getUint32(0, true);
+          if (!count || count > 1_000_000) continue;
+          let pos = 4;
+          for (let i = 0; i < count; i++) {
+            if (pos + 4 > buf.length) break;
+            const len = view.getUint32(pos, true);
+            const start = pos + 4;
+            if (!len || len < CONFIG_SIZE || start + len > buf.length) break;
+            pos = start + len;
+            const recordClass = view.getInt32(start + RECORD_CLASS_OFFSET, true);
+            const byClass = recordClass === LASSO;
+            const byPen = view.getUint32(start, true) === 4;
+            if (byClass) lassoByClass++;
+            if (byPen) lassoByPen++;
+            if (byPen && !byClass) penOnly.push(`${fixture} p${pageIndex + 1} #${i}`);
+            if (byClass && !byPen) classOnly.push(`${fixture} p${pageIndex + 1} #${i}`);
+            if (recordClass === 5000) ink++;
+          }
+        }
+      }
+
+      // Containment: the field never claims a lasso that pen=4 doesn't.
+      expect(classOnly).toEqual([]);
+      expect(lassoByClass).toBeGreaterThan(0);
+      expect(lassoByPen).toBe(lassoByClass + 1);
+      expect(penOnly).toEqual(["sticker.note p1 #5"]);
+      // The field is not the constant 5000 snlib documents it as, but it is
+      // 5000 for the overwhelming majority -- real ink.
+      expect(ink).toBeGreaterThan(2000);
+    });
+
+    test("no stroke is emitted with an out-of-range colour", async () => {
+      // sticker.note page 1 #5 would decode to rgb(2012028940,...) if it
+      // reached the output. Guards the whole fixture set, not just that one.
+      const fixtures = fs.readdirSync("tests/input").filter((name) => name.endsWith(".note")).sort();
+      for (const fixture of fixtures) {
+        const sn = new SupernoteX(await readFileToUint8Array(fixture));
+        for (const page of sn.pages) {
+          for (const stroke of parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+            includeErasers: true,
+          })) {
+            const channel = Number(stroke.color.match(/^rgb\((\d+),/)![1]);
+            expect(channel).toBeLessThanOrEqual(255);
+          }
+        }
+      }
+    });
+  });
 });

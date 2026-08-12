@@ -274,6 +274,25 @@ raster draws its `color=48` pen ink at grey 128 and its `color=81` marker
 band at grey 169, so they are two more grey levels under a different
 encoding, not a color palette.
 
+On this older encoding the field is therefore an *id*, where the modern one
+is the rendered grey itself (0/157/201/254 render as exactly that). The
+engine has a table for the same distinction on other legacy ids —
+`0x63 → 0x9d`, `0x64 → 0xc9` and their marker forms, at `0x180049990` —
+but nothing in the binary maps `0x30`/`0x50`, so the 48→128 and 81→169
+pairs rest on measuring `test.note`'s own raster and no more than that.
+
+**This currently costs that fixture most of its vector ink**, and it is
+worth knowing the cause is the color field rather than anything to do with
+pens: `toSvg`'s ink-presence check (`strokeInkPresence`) looks under each
+stroke for raster ink matching the stroke's own declared grey, so it hunts
+for grey 81 where the device drew 169 and grey 48 where it drew 128, finds
+neither, and discards the stroke as invisible. 16 of page 1's 58 strokes go
+that way, the whole highlighter pass among them. Left alone here rather
+than papered over: a remap keyed on one fixture's raster would be guessing
+at the general rule, and the honest fix needs a second old-format fixture
+(or a `SN_FILE_VER`-gated palette) that nothing in the corpus can supply
+yet. See the open questions.
+
 `color === 255` (`Eraser`) is filtered out of `parseStrokes`' return value by
 default, not surfaced as an `IStroke`. This is the real explanation for issue
 #56's original "phantom stroke" report: TOTALPATH records the eraser tool's
@@ -1492,6 +1511,16 @@ pass; the findings are folded into the sections above. In brief:
    pen enum in the binary). The rest of the id table is closed out in the
    same place: `3`/`9` are the two eraser modes, `4` the lasso, and `15`
    the calligraphy pen with a single id.
+
+   It left one thing behind: **the older format's `color` ids (48/80) are
+   ids, not greys** — see the `color` section. `test.note` draws them as
+   128 and 169, which nothing else in the corpus corroborates and which the
+   binary has no table for, so no mapping is applied. The cost is real and
+   measured: `toSvg`'s ink-presence check searches for the declared grey,
+   misses, and drops 16 of that page's 58 strokes. Closing it wants a
+   second pre-2023 fixture, or gating a legacy palette on `SN_FILE_VER` —
+   which `parseStrokes` currently never sees, since it is handed a
+   `TOTALPATH` buffer and not the file's header.
 4. ~~`"straightLine"`~~ — observed, via `straight-line.note`. It turned out
    to matter rather than being a loose end: those records store two points,
    which `vectorInk` was reading as a filled rectangle, so every ruler line

@@ -112,19 +112,97 @@ function pdfFilledArea(stream: Buffer): number {
   return total
 }
 
-/** Ink area a vectorInk SVG actually draws: each stroked path's length times
- * its width. Eraser overlays (pure white) are excluded -- they're a
- * paint-over, not ink. */
-function svgInkArea(svg: string): number {
+interface SvgInkPath {
+  /** Colour the stroke is drawn in, as the SVG's own `rgb(r,g,b)`. */
+  color: string
+  /** Line width in page pixels -- see `svgInkPaths`. */
+  width: number
+  /** Area of ink the path lays down, in square page pixels. */
+  area: number
+  /** The path's own drawn geometry: the outline's rings for a filled path,
+   * the centreline for a stroked one. */
+  rings: { x: number; y: number }[][]
+  /** The whole `d` attribute, for tests that want to match on it directly. */
+  d: string
+}
+
+function ringLength(ring: { x: number; y: number }[], closed: boolean): number {
   let total = 0
-  for (const [, d, color, width] of svg.matchAll(/<path d="([^"]+)" fill="none" stroke="([^"]+)" stroke-width="([\d.]+)"/g)) {
-    if (color === "rgb(255,255,255)") continue
-    const points = [...d.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }))
-    let length = 0
-    for (let i = 1; i < points.length; i++) length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
-    total += length * Number(width)
-  }
+  for (let i = 1; i < ring.length; i++) total += Math.hypot(ring[i].x - ring[i - 1].x, ring[i].y - ring[i - 1].y)
+  if (closed && ring.length > 1) total += Math.hypot(ring[0].x - ring[ring.length - 1].x, ring[0].y - ring[ring.length - 1].y)
   return total
+}
+
+function ringArea(ring: { x: number; y: number }[]): number {
+  let sum = 0
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) sum += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y)
+  return sum / 2
+}
+
+/**
+ * Every ink path a `vectorInk` SVG drew, in document order.
+ *
+ * A stroke normally renders as the device's own rendered outline, filled
+ * (`<path d="..." fill="rgb(...)"/>`); only a record with no usable contour
+ * falls back to stroking its sampled centreline (`fill="none"
+ * stroke="..." stroke-width="..."`). This reports both the same way, so a
+ * test can assert on colour and width without caring which shape it got.
+ *
+ * `width` for a filled outline is *measured back out of the drawn polygon*
+ * rather than read from an attribute: treating the shape as a stadium (a
+ * length-`L` band of width `w` with a round cap at each end) gives
+ * `area = L*w + PI*(w/2)^2` and `perimeter = 2L + PI*w`, which solve to
+ * `w = (P - sqrt(P^2 - 4*PI*A)) / PI`. That deliberately measures the
+ * emitted geometry alone, independent of the `strokeRenderWidth` these
+ * tests exist to check. A shape too round for that to have a real solution
+ * (a filled blob rather than a band -- the sticker plugin draws those) is
+ * reported at its area-equivalent disc width instead.
+ */
+function svgInkPaths(svg: string): SvgInkPath[] {
+  const parseRings = (d: string) =>
+    d
+      .split("M")
+      .filter((segment) => segment.trim())
+      .map((segment) => [...segment.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) })))
+      .filter((ring) => ring.length > 0)
+
+  const paths: SvgInkPath[] = []
+  for (const [, d, attrs] of svg.matchAll(/<path d="([^"]+)"([^>]*)\/>/g)) {
+    const rings = parseRings(d)
+    const strokeColor = /stroke="([^"]+)"/.exec(attrs)?.[1]
+    if (strokeColor) {
+      const width = Number(/stroke-width="([\d.]+)"/.exec(attrs)?.[1] ?? 0)
+      paths.push({ color: strokeColor, width, area: ringLength(rings[0] ?? [], false) * width, rings, d })
+      continue
+    }
+    const fill = /fill="([^"]+)"/.exec(attrs)?.[1]
+    if (!fill || fill === "none" || fill.startsWith("url(")) continue
+    const area = Math.abs(rings.reduce((sum, ring) => sum + ringArea(ring), 0))
+    const perimeter = rings.reduce((sum, ring) => sum + ringLength(ring, true), 0)
+    const discriminant = perimeter * perimeter - 4 * Math.PI * area
+    const width = discriminant >= 0 ? (perimeter - Math.sqrt(discriminant)) / Math.PI : 2 * Math.sqrt(area / Math.PI)
+    paths.push({ color: fill, width, area, rings, d })
+  }
+  return paths
+}
+
+/** Colours of every ink path a vectorInk SVG drew, in document order -- see
+ * `svgInkPaths`. */
+function svgInkColors(svg: string): string[] {
+  return svgInkPaths(svg).map((path) => path.color)
+}
+
+/** Widths of every ink path a vectorInk SVG drew -- see `svgInkPaths`. */
+function svgInkWidths(svg: string): number[] {
+  return svgInkPaths(svg).map((path) => path.width)
+}
+
+/** Ink area a vectorInk SVG actually draws. Eraser overlays (pure white)
+ * are excluded -- they're a paint-over, not ink. */
+function svgInkArea(svg: string): number {
+  return svgInkPaths(svg)
+    .filter((path) => path.color !== "rgb(255,255,255)")
+    .reduce((total, path) => total + path.area, 0)
 }
 
 describe("svg", () => {
@@ -540,7 +618,12 @@ describe("svg", () => {
       const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
 
       const rects = [...svg.matchAll(/<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)" fill="[^"]+"\/>/g)]
-      const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="([^"]+)"/g)]
+      const paths = svgInkPaths(svg).map((path): [unknown, string, string, string] => [
+        undefined,
+        String(path.rings[0][0].x),
+        String(path.rings[0][0].y),
+        path.color,
+      ])
       expect(rects.length).toBe(4)
 
       const expectedTextColors = ["rgb(254,254,254)", "rgb(254,254,254)", "rgb(0,0,0)", "rgb(0,0,0)"]
@@ -585,8 +668,14 @@ describe("svg", () => {
       const tap = twoPointStrokes.find((s) => !s.isFilledRect)!
       expect(Math.hypot(tap.points[1].x - tap.points[0].x, tap.points[1].y - tap.points[0].y)).toBeLessThan(1)
 
+      // The tap is drawn as its own rendered outline (see svgInkPaths), so
+      // what's checked is that some path is drawn around where it sits --
+      // not that the centreline's coordinates appear verbatim.
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
-      expect(svg).toContain(`M${tap.points[0].x.toFixed(2)},${tap.points[0].y.toFixed(2)}`)
+      const drawnAtTheTap = svgInkPaths(svg).filter((path) =>
+        path.rings.flat().some((point) => Math.hypot(point.x - tap.points[0].x, point.y - tap.points[0].y) <= Math.max(2, path.width)),
+      )
+      expect(drawnAtTheTap.length).toBe(1)
     })
 
     test("white-pen erasing renders by painting the white ink over the dark, in that order (erase-pen.note)", { timeout: 60000 }, async () => {
@@ -611,7 +700,7 @@ describe("svg", () => {
       const svgs = await toSvg(sn, { vectorInk: true })
 
       for (const pageIndex of [0, 1, 2]) {
-        const drawn = [...svgs[pageIndex].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1])
+        const drawn = svgInkColors(svgs[pageIndex])
         expect(drawn.length).toBe(2)
         // the dark stroke first (plain black, or the marker's own near-black)
         expect(drawn[0]).toMatch(/^rgb\([01],[01],[01]\)$/)
@@ -620,8 +709,58 @@ describe("svg", () => {
       }
 
       // the control page keeps its single stroke and gains no white
-      const control = [...svgs[3].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1])
+      const control = svgInkColors(svgs[3])
       expect(control).toEqual(["rgb(0,0,0)"])
+    })
+
+    test("a plugin sticker's filled artwork renders solid, not as the scribble that traces it (sticker.note, issue #68)", { timeout: 30000 }, async () => {
+      // Supernote's beta plugin support includes a built-in "sticker"
+      // plugin. Placing a sticker adds no new container to the format at
+      // all -- no new tag, address or section anywhere in the file -- it
+      // just writes the artwork's strokes into the page's ordinary
+      // TOTALPATH. What it does add is a stroke shape a centreline can't
+      // express: the artwork is filled by strokes doubling back over
+      // themselves, so drawing them as uniform-width lines produced the
+      // hollow scribble that traces the fill instead of the filled shape.
+      const sn = new SupernoteX(await readFileToUint8Array("sticker.note"))
+      const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true })
+      expect(strokes.length).toBe(51)
+
+      // The silhouette record is the case that pins this down: it carries a
+      // rendered outline and *no sampled points whatsoever*, so there is no
+      // centreline to stroke and it used to render as nothing at all.
+      const silhouette = strokes.filter((stroke) => stroke.points.length === 0)
+      expect(silhouette.length).toBe(1)
+      expect(silhouette[0].contour!.length).toBeGreaterThan(1)
+
+      const [, svg] = await toSvg(sn, { vectorInk: true })
+      const drawn = svgInkPaths(svg)
+
+      // every drawable stroke reaches the output, the point-less one included
+      expect(drawn.length).toBeGreaterThanOrEqual(45)
+      const silhouetteArea = Math.abs(
+        silhouette[0].contour!.reduce((sum, ring) => {
+          let signed = 0
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) signed += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y)
+          return sum + signed / 2
+        }, 0),
+      )
+      expect(silhouetteArea).toBeGreaterThan(1000)
+      expect(drawn.some((path) => Math.abs(path.area - silhouetteArea) / silhouetteArea < 0.01)).toBe(true)
+
+      // and the artwork comes out solid: the sticker sits in a ~125x160px
+      // box, and the ink drawn inside it covers most of that box rather
+      // than the few percent a traced outline would.
+      const box = { minX: 895, maxX: 1025, minY: 1195, maxY: 1370 }
+      const inside = drawn.filter((path) =>
+        path.rings.flat().every((p) => p.x >= box.minX && p.x <= box.maxX && p.y >= box.minY && p.y <= box.maxY),
+      )
+      const blackArea = inside.filter((path) => path.color === "rgb(0,0,0)").reduce((sum, path) => sum + path.area, 0)
+      expect(blackArea / ((box.maxX - box.minX) * (box.maxY - box.minY))).toBeGreaterThan(0.5)
+
+      // the white detail strokes (colour 254) are real ink carved back over
+      // that fill, not erasers and not background
+      expect(inside.some((path) => path.color === "rgb(254,254,254)")).toBe(true)
     })
 
     test("the ruler tool's straight lines render as lines, not as filled boxes (straight-line.note)", { timeout: 30000 }, async () => {
@@ -638,12 +777,32 @@ describe("svg", () => {
       expect(page1.some((s) => s.isFilledRect)).toBe(false)
 
       const svgs = await toSvg(sn, { vectorInk: true })
-      expect([...svgs[0].matchAll(/<path /g)].length).toBe(6)
+      const drawn = svgInkPaths(svgs[0])
+      expect(drawn.length).toBe(6)
       expect(svgs[0]).not.toContain("<rect ")
-      // each line is drawn between its own two endpoints
+      // Each line is drawn spanning its own two endpoints. A line renders as
+      // the device's own rendered outline of it (see svgInkPaths), so what
+      // has to match the endpoints is the drawn shape's extent, allowing for
+      // the outline standing off the centreline by half the line's width --
+      // and that shape has to stay a line rather than filling the box its
+      // endpoints span, which is what this fixture regression-tests.
       for (const stroke of page1) {
         const [a, b] = stroke.points
-        expect(svgs[0]).toContain(`M${a.x.toFixed(2)},${a.y.toFixed(2)} L${b.x.toFixed(2)},${b.y.toFixed(2)}`)
+        const match = drawn.find((path) => {
+          const points = path.rings.flat()
+          const near = (value: number, target: number) => Math.abs(value - target) <= path.width
+          return (
+            near(Math.min(...points.map((p) => p.x)), Math.min(a.x, b.x)) &&
+            near(Math.max(...points.map((p) => p.x)), Math.max(a.x, b.x)) &&
+            near(Math.min(...points.map((p) => p.y)), Math.min(a.y, b.y)) &&
+            near(Math.max(...points.map((p) => p.y)), Math.max(a.y, b.y))
+          )
+        })
+        expect(match).toBeDefined()
+        // a line, not a filled box: its area is a thin band across the span,
+        // far short of the whole rectangle its endpoints bound
+        const span = Math.abs(b.x - a.x) * Math.abs(b.y - a.y)
+        if (span > 0) expect(match!.area).toBeLessThan(span / 2)
       }
     })
 
@@ -738,9 +897,9 @@ describe("svg", () => {
       // white-ink cover-up strokes. So nothing dark may render: what's left
       // is those 4 white strokes plus the 4 white eraser overlays, all of
       // which are white-on-white and so visually blank, matching the PDF.
-      const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="([^"]+)"/g)]
+      const paths = svgInkPaths(svg)
       expect(paths.length).toBe(8)
-      const whiteCount = paths.filter(([, , , color]) => color === "rgb(255,255,255)" || color === "rgb(254,254,254)").length
+      const whiteCount = paths.filter(({ color }) => color === "rgb(255,255,255)" || color === "rgb(254,254,254)").length
       expect(whiteCount).toBe(8)
     })
 
@@ -780,8 +939,7 @@ describe("svg", () => {
       expect(decoded.filter((s) => s.eraserTouched && !s.isEraser).length).toBe(82 - drawnByDevice)
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
-      const paths = [...svg.matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)]
-      const inkPaths = paths.filter(([, color]) => color !== "rgb(255,255,255)")
+      const inkPaths = svgInkPaths(svg).filter(({ color }) => color !== "rgb(255,255,255)")
       expect(inkPaths.length).toBe(drawnByDevice)
 
       // The specific stroke this pins down: the "0" of "1270" was written,
@@ -789,8 +947,38 @@ describe("svg", () => {
       // of it, the erased one still finds ~30% of its own points over black
       // ink, so a presence check alone kept it and the page rendered "12700"
       // with a doubled zero. It is the erase mark that settles it.
-      expect(svg).not.toContain("M1308")
-      expect(svg).not.toContain("M1309")
+      //
+      // Asserted by counting what lands on top of it rather than by
+      // matching literal `d` text, since a path is drawn as its rendered
+      // outline (see svgInkPaths) and so never contains the centreline's
+      // own coordinates verbatim: the zero's own spot holds exactly the one
+      // surviving stroke, not the erased one as well. The pair is found by
+      // the thing that defines it -- an erased stroke and a surviving one
+      // starting within a couple of pixels of each other.
+      const survivors = decoded.filter((stroke) => !stroke.isEraser && !stroke.eraserTouched)
+      const erasedZero = decoded.find(
+        (stroke) =>
+          !stroke.isEraser &&
+          stroke.eraserTouched &&
+          stroke.points[0] !== undefined &&
+          survivors.some((other) => other.points[0] && Math.hypot(other.points[0].x - stroke.points[0].x, other.points[0].y - stroke.points[0].y) < 3),
+      )
+      expect(erasedZero).toBeDefined()
+      const bounds = {
+        minX: Math.min(...erasedZero!.points.map((p) => p.x)),
+        maxX: Math.max(...erasedZero!.points.map((p) => p.x)),
+        minY: Math.min(...erasedZero!.points.map((p) => p.y)),
+        maxY: Math.max(...erasedZero!.points.map((p) => p.y)),
+      }
+      const overTheZero = inkPaths.filter((path) => {
+        const points = path.rings.flat()
+        const center = {
+          x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+          y: points.reduce((sum, p) => sum + p.y, 0) / points.length,
+        }
+        return center.x >= bounds.minX && center.x <= bounds.maxX && center.y >= bounds.minY && center.y <= bounds.maxY
+      })
+      expect(overTheZero.length).toBe(1)
     })
 
     test("rects (highlight backgrounds) always draw before paths, regardless of TOTALPATH order", { timeout: 30000 }, async () => {
@@ -824,21 +1012,21 @@ describe("svg", () => {
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
 
       const rects = [...svg.matchAll(/<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"/g)]
-      const paths = [...svg.matchAll(/<path d="M(-?[\d.]+),(-?[\d.]+)[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)]
+      const paths = svgInkPaths(svg)
       expect(rects.length).toBeGreaterThan(0)
 
       // any path whose first point falls inside a Heading rect is a digit
       // stroke drawn over that Heading's background -- none should be
       // anywhere near as wide as the background itself.
       const digitWidths = paths
-        .filter(([, xStr, yStr]) => {
-          const x = Number(xStr), y = Number(yStr)
+        .filter((path) => {
+          const { x, y } = path.rings[0][0]
           return rects.some(([, rx, ry, rw, rh]) => {
             const left = Number(rx), top = Number(ry)
             return x >= left && x <= left + Number(rw) && y >= top && y <= top + Number(rh)
           })
         })
-        .map(([, , , width]) => Number(width))
+        .map((path) => path.width)
       expect(digitWidths.length).toBeGreaterThan(0)
       for (const width of digitWidths) {
         expect(width).toBeLessThan(15)
@@ -864,10 +1052,37 @@ describe("svg", () => {
       expect(markerStrokes.length).toBeGreaterThan(0)
       expect(penStrokes.length).toBeGreaterThan(0)
 
+      // Each stroke is drawn as its own rendered outline (see svgInkPaths),
+      // whose points are the outline's rather than the centreline's, so a
+      // stroke is located in the output by extent instead of by coordinate
+      // equality: an outline hugs its own stroke, standing off it by half
+      // the line's width, so the drawn path whose bounding box is closest
+      // to the stroke's own is that stroke's. Draw order is then that
+      // path's position in document order.
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
-      const needle = (s: (typeof strokes)[number]) => `M${s.points[0].x.toFixed(2)},${s.points[0].y.toFixed(2)}`
-      const lastMarkerIndex = Math.max(...markerStrokes.map((s) => svg.indexOf(needle(s))).filter((i) => i !== -1))
-      const firstPenIndex = Math.min(...penStrokes.map((s) => svg.indexOf(needle(s))).filter((i) => i !== -1))
+      const boundsOf = (points: { x: number; y: number }[]) => ({
+        minX: Math.min(...points.map((p) => p.x)),
+        maxX: Math.max(...points.map((p) => p.x)),
+        minY: Math.min(...points.map((p) => p.y)),
+        maxY: Math.max(...points.map((p) => p.y)),
+      })
+      const drawn = svgInkPaths(svg).map((path, index) => ({ index, ...boundsOf(path.rings.flat()) }))
+      const drawIndexOf = (stroke: (typeof strokes)[number]) => {
+        const want = boundsOf(stroke.points)
+        let best = -1
+        let bestDistance = Infinity
+        for (const path of drawn) {
+          const distance =
+            Math.abs(path.minX - want.minX) + Math.abs(path.maxX - want.maxX) + Math.abs(path.minY - want.minY) + Math.abs(path.maxY - want.maxY)
+          if (distance < bestDistance) {
+            bestDistance = distance
+            best = path.index
+          }
+        }
+        return best
+      }
+      const lastMarkerIndex = Math.max(...markerStrokes.map(drawIndexOf).filter((i) => i !== -1))
+      const firstPenIndex = Math.min(...penStrokes.map(drawIndexOf).filter((i) => i !== -1))
       expect(lastMarkerIndex).toBeGreaterThan(-1)
       expect(firstPenIndex).toBeGreaterThan(-1)
       expect(lastMarkerIndex).toBeLessThan(firstPenIndex)
@@ -912,7 +1127,7 @@ describe("svg", () => {
       // measured here.
       const [svg] = await toSvg(sn, { pageNumbers: [3], vectorInk: true })
 
-      const colors = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1])
+      const colors = svgInkColors(svg)
       expect(colors).toEqual(["rgb(0,0,0)", "rgb(157,157,157)", "rgb(201,201,201)", "rgb(254,254,254)"])
     })
 
@@ -929,13 +1144,13 @@ describe("svg", () => {
       const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [5], vectorInk: true })
 
-      const paths = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="([^"]+)" stroke-width="([^"]+)"/g)]
+      const paths = svgInkPaths(svg)
       expect(paths.length).toBe(2)
-      expect(paths[0][1]).toBe("rgb(1,1,1)")
-      expect(paths[1][1]).toBe("rgb(254,254,254)")
+      expect(paths[0].color).toBe("rgb(1,1,1)")
+      expect(paths[1].color).toBe("rgb(254,254,254)")
       // same tool/width setting on both strokes -- widths should match
       // exactly, both read from the same real thickness field.
-      expect(Number(paths[1][2])).toBeCloseTo(Number(paths[0][2]), -1)
+      expect(paths[1].width).toBeCloseTo(paths[0].width, -1)
     })
 
     test("samples wider stroke widths for a larger pen-width setting", { timeout: 30000 }, async () => {
@@ -944,9 +1159,7 @@ describe("svg", () => {
       // width setting, in decreasing order: 1.0, 0.6, 0.3, 0.1.
       const [svg] = await toSvg(sn, { pageNumbers: [4], vectorInk: true })
 
-      const widths = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)].map((m) =>
-        Number(m[1]),
-      )
+      const widths = svgInkWidths(svg)
       expect(widths.length).toBe(4)
       expect(widths[0]).toBeGreaterThan(widths[1])
       expect(widths[1]).toBeGreaterThan(widths[2])
@@ -963,9 +1176,7 @@ describe("svg", () => {
       // the greatest width, not a fixed array position.
       const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
 
-      const widths = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)].map((m) =>
-        Number(m[1]),
-      )
+      const widths = svgInkWidths(svg)
       expect(widths.length).toBe(4)
       const markerWidth = Math.max(...widths)
       const narrowestPenWidth = Math.min(...widths)
@@ -1010,9 +1221,7 @@ describe("svg", () => {
 
       const sn = new SupernoteX(await readFileToUint8Array("headings-and-marker.note"))
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
-      const widths = [...svg.matchAll(/<path d="[^"]*" fill="none" stroke="[^"]+" stroke-width="([^"]+)"/g)]
-        .map((m) => Number(m[1]))
-        .sort((a, b) => a - b)
+      const widths = svgInkWidths(svg).sort((a, b) => a - b)
       expect(widths.length).toBe(32)
 
       const median = widths[Math.floor(widths.length / 2)]
@@ -1046,7 +1255,7 @@ describe("svg", () => {
 
       const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"))
       const [, , , page4] = await toSvg(sn, { vectorInk: true })
-      const ourWidths = [...page4.matchAll(/stroke-width="([\d.]+)"/g)].map((m) => Number(m[1]))
+      const ourWidths = svgInkWidths(page4)
       expect(ourWidths.length).toBe(deviceWidths.length)
       ourWidths.forEach((width, i) => {
         expect(Math.abs(width - deviceWidths[i]) / deviceWidths[i]).toBeLessThan(0.03)
@@ -1072,7 +1281,7 @@ describe("svg", () => {
       expect(new Set(strokes.map((s) => s.thickness))).toEqual(new Set([200])) // 2px nominal
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
-      const widths = [...svg.matchAll(/stroke-width="([\d.]+)"/g)].map((m) => Number(m[1])).sort((a, b) => a - b)
+      const widths = svgInkWidths(svg).sort((a, b) => a - b)
       expect(widths.length).toBe(fillCount)
       const median = widths[Math.floor(widths.length / 2)]
       expect(median).toBeGreaterThan(3) // nominal would put every one of these at 2.0
@@ -1105,11 +1314,11 @@ describe("svg", () => {
       // page 1 is untouched, so every one of its strokes must survive
       const page1 = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
       expect(page1.every((s) => !s.eraserTouched)).toBe(true)
-      expect([...svgs[0].matchAll(/<path d="M[^"]*" fill="none"/g)].length).toBe(page1.length)
+      expect(svgInkPaths(svgs[0]).length).toBe(page1.length)
 
       // and both colours are still drawn on the erased page -- neither got
       // wholly mistaken for the other and dropped
-      const drawnColours = new Set([...svgs[1].matchAll(/<path d="M[^"]*" fill="none" stroke="([^"]+)"/g)].map((m) => m[1]))
+      const drawnColours = new Set(svgInkColors(svgs[1]))
       expect(drawnColours).toContain("rgb(0,0,0)")
       expect([...drawnColours].some((c) => /rgb\(15[0-9],/.test(c))).toBe(true)
     })
@@ -1132,9 +1341,7 @@ describe("svg", () => {
         const nominalWidth = strokes[0].thickness / 100
         expect(new Set(strokes.map((s) => s.thickness)).size).toBe(1) // one setting per page
 
-        const widths = [...svgs[pageIndex].matchAll(/stroke-width="([\d.]+)"/g)]
-          .map((m) => Number(m[1]))
-          .sort((a, b) => a - b)
+        const widths = svgInkWidths(svgs[pageIndex]).sort((a, b) => a - b)
         const median = widths[Math.floor(widths.length / 2)]
         expect(median).toBeGreaterThan(nominalWidth * 0.25)
         expect(median).toBeLessThan(nominalWidth * 0.6)
@@ -1165,9 +1372,7 @@ describe("svg", () => {
       expect(decoded.length).toBe(19)
 
       const svgs = await toSvg(sn, { vectorInk: true })
-      const inkPaths = [...svgs[3].matchAll(/<path d="[^"]*" fill="none" stroke="([^"]+)"/g)].filter(
-        ([, color]) => color !== "rgb(255,255,255)",
-      )
+      const inkPaths = svgInkPaths(svgs[3]).filter(({ color }) => color !== "rgb(255,255,255)")
       expect(inkPaths.length).toBe(7)
 
       const deviceArea = pdfFilledArea(extractPdfFormXObjectStreams(await fs.readFile("tests/input/caligraphy.pdf"))[3])
@@ -1216,7 +1421,9 @@ describe("svg", () => {
       const groundTruthGreys = groupNearDuplicates(extractPdfColors(pdfStreams[2]).map(([r]) => r)) // every ground-truth color here is neutral grey (r === g === b)
 
       const [svg] = await toSvg(sn, { pageNumbers: [3], vectorInk: true })
-      const sampledGreys = groupNearDuplicates([...svg.matchAll(/stroke="rgb\((\d+),\d+,\d+\)"/g)].map((m) => Number(m[1])))
+      const sampledGreys = groupNearDuplicates(
+        svgInkColors(svg).map((color) => Number(/rgb\((\d+)/.exec(color)![1])),
+      )
 
       expect(sampledGreys.length).toBe(groundTruthGreys.length)
       for (let i = 0; i < sampledGreys.length; i++) {

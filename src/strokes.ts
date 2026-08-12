@@ -71,9 +71,15 @@ export interface IStroke {
 	 * or nothing at all. */
 	isFilledRect?: boolean;
 	/** The device's own rendered outline of this stroke (`point_contour` in
-	 * https://github.com/Walnut356/snlib) -- closed polygons in the same
-	 * page-pixel space as `points`, only present when `parseStrokes` was
-	 * called with `includeContours: true`.
+	 * https://github.com/Walnut356/snlib) -- closed polygons, only present
+	 * when `parseStrokes` was called with `includeContours: true`.
+	 *
+	 * Stored by the device as absolute pixels in the note's own *native*
+	 * page space, so unlike `points` these are not re-derived from the
+	 * `pageWidth`/`pageHeight` handed to `parseStrokes`: the two share a
+	 * coordinate space only when those are the note's real dimensions.
+	 * Scale them yourself if you decode against scaled dimensions (`toSvg`
+	 * does, in `withUpscaledContour`).
 	 *
 	 * Unlike `points` (the pen's sampled *centerline*, which has to be
 	 * stroked at a uniform `thickness` to be drawn), this is the filled

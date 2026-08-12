@@ -20,6 +20,18 @@ import { extractFormStreams, pdfStreamToSvg, devicePageToSvgDocument } from './p
 const INPUT_DIR = 'tests/input';
 const OUT_DIR = 'site';
 
+/** The site is published to GitHub Pages on its own domain, so nothing on it
+ * points back at the code by default. Both links are absolute for that reason.
+ * They pin to `main` rather than a tag: what the site shows is whatever `main`
+ * currently renders, so the spec beside it should track the same branch. */
+const REPO_URL = 'https://github.com/philips/supernote-typescript';
+const SPEC_URL = `${REPO_URL}/blob/main/plans/vector-format-spec.md`;
+
+/** Closes out every page's footer. The comparison only means anything if you
+ * can get from a suspicious-looking page to the format notes explaining what
+ * the decoder thought it was reading. */
+const COLOPHON = `<p class="colophon"><a href="${REPO_URL}">supernote-typescript on GitHub</a> <span aria-hidden="true">&middot;</span> <a href="${SPEC_URL}">Vector format spec</a></p>`;
+
 /** What each fixture is for, and anything notable about how it renders.
  * Fixtures with nothing recorded here still appear; they just carry no note. */
 const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
@@ -214,6 +226,10 @@ h1{font-size:clamp(27px,4vw,38px);line-height:1.14;letter-spacing:-.02em;margin:
 .pill.none{background:var(--surface);color:var(--muted);border-style:dashed}
 .back{font-family:var(--mono);font-size:12px;text-decoration:none;color:var(--muted)}
 .back:hover{color:var(--ink)}
+.toplinks{display:flex;flex-wrap:wrap;gap:18px;margin-top:14px;font-family:var(--mono);font-size:12px}
+.toplinks a{text-decoration:none;border-bottom:1px solid var(--rule);padding-bottom:2px}
+.toplinks a:hover,.toplinks a:focus-visible{border-bottom-color:var(--accent)}
+.colophon{margin:14px 0 0;font-family:var(--mono);font-size:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
 .isolates{margin:0;font-size:15.5px;max-width:70ch}
 .note{margin:12px 0 0;font-size:14.5px;color:var(--muted);max-width:70ch;border-left:2px solid var(--rule);padding-left:14px}
 .pair{margin:22px 0 0;background:var(--surface);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
@@ -289,7 +305,8 @@ ${fx.isolates ? `<p class="isolates">${escapeHtml(fx.isolates)}</p>` : ''}
 ${fx.note ? `<p class="note">${escapeHtml(fx.note)}</p>` : ''}
 </header>
 ${pairs}
-<footer><p>Both sides are vector ink only. The device's ink comes from the Form XObjects in its own PDF export; ours is <code>toSvg({ vectorInk: true })</code> with the background raster removed, since the device keeps its background in a separate image.</p></footer>`,
+<footer><p>Both sides are vector ink only. The device's ink comes from the Form XObjects in its own PDF export; ours is <code>toSvg({ vectorInk: true })</code> with the background raster removed, since the device keeps its background in a separate image.</p>
+${COLOPHON}</footer>`,
 	);
 }
 
@@ -317,10 +334,12 @@ ${f.isolates ? `<p>${escapeHtml(f.isolates)}</p>` : '<p>Regression coverage.</p>
 <h1>What the device drew, and what we drew</h1>
 <p class="lede">Every fixture that ships with Supernote's own PDF export, page by page: the device's vector ink beside the vector ink this library produces. Both sides are real SVG, so differences hold up when you zoom in.</p>
 <div class="meta"><span class="chip">${fixtures.length} fixtures</span><span class="chip">${totalPages} pages</span><span class="chip">built from tests/input</span></div>
+<nav class="toplinks"><a href="${REPO_URL}">supernote-typescript on GitHub</a><a href="${SPEC_URL}">Vector format spec</a></nav>
 </header>
 <div class="grid">${cards}</div>
 <footer><p>Each page is labelled with the ink it draws as a fraction of the device's — total stroke length times width, plus filled area. It is a blunt measure and only meaningful next to the picture, but it catches a whole stroke going missing, and a tool being drawn at the wrong width. Pages where the device draws no vector ink at all (an entirely erased page) are marked as such rather than scored.</p>
-<p>Rebuild with <code>npm run build:site</code>.</p></footer>`,
+<p>Rebuild with <code>npm run build:site</code>. The <a href="${SPEC_URL}">vector format spec</a> covers how the strokes behind the right-hand panels are decoded.</p>
+${COLOPHON}</footer>`,
 	);
 }
 

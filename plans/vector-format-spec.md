@@ -253,10 +253,11 @@ what can and cannot be recovered from the stroke log:
 
 Findings, each confirmed against device ground truth:
 
-1. **The device omits fully-erased strokes from its own exports, but the
-   erased ink stays in `TOTALPATH` unmarked** (previously known) — and,
-   new: **which strokes are erased is not recoverable by replaying the
-   eraser records.** Three independent proofs:
+1. **Which strokes are erased is not recoverable by replaying the eraser
+   records.** (It doesn't have to be: the stroke itself records it, in
+   `m_trailStatus` — finding 3. This finding still stands as a warning
+   against the geometric approach, and against reading meaning into an
+   eraser record's own shape.) Three independent proofs:
    - `erase.note`'s row-3 line extends well past every recorded eraser
      path's geometry (the covering `pen=9` record's own points stop ~350px
      short of the line's right end), yet the whole line is erased.
@@ -285,51 +286,45 @@ Findings, each confirmed against device ground truth:
    array) was decoded and ruled out the same way earlier — all-`1` even on
    fully-erased strokes.
 
-   (What `TOTALPATH` *does* record is that an eraser was applied at all —
-   see the erase mark below. What it does not record is the resulting
-   geometry: the surviving shape exists only in the rendered `RATTA_RLE`
-   layers, which is why the device's own exporter, which recomputes from
-   them, can omit erased strokes while the stroke log cannot.)
+   (A stroke's *own* outline is never clipped by an erase. What records the
+   erase is `m_trailStatus` on the stroke — finding 3 — and, where the
+   firmware splits a stroke rather than removing it whole, the surviving
+   geometry is a *separate* point-less record whose only content is its
+   contour. So `point_contour` does carry the survivors; just never in the
+   erased stroke's own record.)
 
-3. **The erase mark — a per-stroke record that an eraser was applied.**
-   `Section1`'s first `u32` (snlib's `unk_8`), immediately after
-   `epa_grays`, reads `0` on a stroke no eraser ever touched and a small
-   negative value otherwise. Exposed as `IStroke.eraserTouched`.
+3. **`m_trailStatus` — the per-stroke visibility field.** `section_1`'s
+   first `i32` (snlib's `unk_8`), immediately after `epa_grays`, reads `0`
+   on a stroke the device still draws and a small negative code otherwise.
+   Exposed as `IStroke.trailStatus`.
 
-   It marks *contact*, not disappearance — a touched stroke may still be
-   largely visible, because the eraser only clipped part of it — but it is
-   a sound one-way answer, and that is what makes it useful: across every
-   fixture, **all 2,181 strokes reading `0` are fully present in the page's
-   own render**. So a stroke without the mark is definitely still there,
-   and only marked strokes need the render consulted at all.
-
-   Observed values are `-4`, `-16` and `-99`. They correlate with how much
-   survived (every `-16` is completely gone, every `-4` fully intact, `-99`
-   mixed) but the encoding isn't confirmed and nothing keys on the value.
-
-   On `horizontal_1270.note` — the one page with per-stroke ground truth —
-   exactly the 21 strokes its PDF omits carry the mark, and none of the 61
-   it draws do.
+   This was first read here as an "erase mark" meaning eraser *contact*
+   rather than disappearance, and only trusted one way (a `0` is certainly
+   still there). It is stronger than that: **the codes are a removal
+   taxonomy, and the device's own PDF exports draw exactly the records
+   reading `0`** — 152 of 189 on `turkish.note`, 61 of 82 on
+   `horizontal_1270.note`, both counts exact. See Part 1.4 for the code
+   table and the evidence per code, including `-4`, which stores each
+   surviving fragment of a partially erased stroke as its own contour-only
+   record.
 4. **What ships**: `pen=4` selection paths are excluded from
    `parseStrokes` unconditionally (they rendered as phantom black loops;
    never visible on-device in any fixture, whatever the selection did),
    alongside the existing `color=255` filtering + `includeErasers` white
    overlay.
-5. **Erase-exact output: the mark says *whether*, the raster says *how
-   much*.** `src/svg.ts`'s `vectorInk` combines the two. For a stroke
-   carrying the erase mark it measures how much survives in the page's own
-   render (`strokeInkPresence` — sample along the stroke, look for ink of
-   its *displayed* colour nearby) and drops it below `0.5`. On
-   `horizontal_1270.note` that reproduces all 82 of the page's decisions
-   exactly: erased strokes score `0.00–0.30` there, survivors `0.86–1.00`.
+5. **Erase-exact output: the record says whether, on its own.**
+   `src/svg.ts`'s `vectorInk` drops every stroke carrying a
+   `m_trailStatus`, with no reference to the raster at all. That is the
+   device's own decision rather than a measurement of one, and it settles
+   the case a measurement cannot: an erased stroke sitting under its own
+   replacement still finds ink under most of its points, which is what left
+   a second `0` visible in `horizontal_1270.note`'s "1270" before the mark
+   was read at all.
 
-   The mark is what allows a confident threshold. Without it the check had
-   to run against every stroke, forcing it down near zero — safe against
-   deleting live ink, but too low to catch an erased stroke sitting under
-   whatever was written in its place. That is precisely what left a second
-   `0` visible in that page's "1270": the digit was written, erased, and
-   rewritten on the same spot, so ~30% of the erased one's points still
-   found black ink underneath the replacement.
+   Until the codes were decoded, this ran as a two-threshold rule — measure
+   how much of a marked stroke survives in the render and drop it below
+   `0.5` — which reproduced that page's 82 decisions but had to guess at
+   partial survival everywhere else. The status field removes the guess.
 
    A near-zero threshold is still applied to *unmarked* strokes, because
    they can be invisible without ever being erased: `erase.note`'s rows
@@ -351,19 +346,20 @@ Findings, each confirmed against device ground truth:
    everything on it was erased — so nothing renders at all, including the
    white eraser overlays, which is exactly `erase-no-white-pen.note`.
 
-   **What's still approximate.** A *partially* erased stroke is all-or-
-   nothing here: it renders whole or not at all, where the device shows the
-   surviving fragments. `turkish.note` is the clearest case — its marked
-   strokes' survival runs smoothly from `0.00` to `0.95` with no gap, so no
-   threshold can be right for all of them. Clipping each stroke to the
-   rendered ink mask, rather than deciding per stroke, is what would remove
-   the last threshold entirely.
+   **What's still approximate.** On firmware that splits a partially
+   erased stroke (the `m_copy = 602` eraser, `-4` in Part 1.4), nothing is:
+   the surviving fragments are their own records and get drawn as such.
+   Elsewhere a partial erase has not been observed to leave a partly-drawn
+   stroke — `turkish.note` looked like the clearest counterexample, its
+   marked strokes' measured survival running smoothly from `0.00` to `0.95`
+   with no gap, but its device PDF draws none of them: that gradient is
+   replacement ink written over the erased words, not survival.
 
 ### `record_class` (offset 40) — what a record *is*, and what it still won't tell you
 
 snlib documents offset 40 as `unk_5`, "only ever seen `5000`", and this
 document repeated that. It is wrong: `5000` is the value for real ink, and
-ink is ~97% of records. Every record in every fixture (2,601 across all
+ink is ~97% of records. Every record in every `.note` fixture (2,601 across all
 device families and firmware here) falls into one of four groups:
 
 | Value | Records | What |
@@ -416,9 +412,10 @@ A lasso is recorded as two or more records sharing the same loop geometry.
 They are not byte-identical, which is what this document previously assumed:
 the first reads `m_copy = 604`, and a companion record carries a small
 number instead. **That number is the operation performed on the
-selection.** (`m_copy` is `section_1`'s second `i32` — see Part 1.4. The
-name is Ratta's; "copy" appears to be a misnomer, or at least much narrower
-than what the field carries.)
+selection.** (`m_copy` is `section_1`'s second `i32`; Part 1.4 tables its
+full range, including the tool ids it carries on eraser records. The name
+is Ratta's, and "copy" is a misnomer, or at least far narrower than what
+the field holds.)
 
 Measured by taking each loop's polygon, finding the ink strokes drawn
 before it whose points fall inside, and checking those strokes against the
@@ -426,7 +423,7 @@ page's own render. Loops whose contents also fall inside another loop
 carrying a destructive op are excluded, so each figure is attributable to
 one loop:
 
-| Op | Loops | Ink strokes inside | Gone from render | Erase-marked |
+| Op | Loops | Ink strokes inside | Gone from render | Carry a `m_trailStatus` |
 |---|---|---|---|---|
 | `14` | 4 | 37 | **36 (97%)** | 37 |
 | `2` | 1 | 10 | **9 (90%)** | 10 |
@@ -434,52 +431,52 @@ one loop:
 
 Clean separation. `14` is delete — every fixture carrying it is a
 documented select-then-delete (`erase.note`, `erase-no-white-pen.note`,
-`unknown-color.note`, `caligraphy.note` p4). `2` and `4` appear only on
-`erase-colors.note`, a colour-change fixture, so they are non-deleting
-edits that still rewrite the strokes. `604` alone means the selection was
-made and nothing destructive followed — on `nomad-3.26.40-link-tag-3p.note`
-page 3 those are Keyword/Tag creations.
+`unknown-color.note`, `caligraphy.note` p4), and every stroke it encloses
+carries `m_trailStatus = -16`, the code for exactly that operation. `2` and
+`4` appear only on `erase-colors.note`, a colour-change fixture, so they
+are non-deleting edits that rewrite their selection in place — their
+sources read `-3`, the moved-away code, and the ink itself lives on in a
+later record. `604` alone means the selection was made and nothing
+destructive followed; on `nomad-3.26.40-link-tag-3p.note` page 3 those are
+Keyword/Tag creations.
 
-**This is the answer to the failure this document has been carrying.** The
+**This settles the failure this document carried for a while.** The
 geometric replay broke on link-tag page 3 because it treated those loops as
 deletions; every one of them is `604`, and none of their 27 enclosed
-strokes is gone. A replay that reads the op code has the information to
-skip them. Note the third column too: 11 of those 27 strokes *are*
-erase-marked while still fully present — the mark is contact, not
-disappearance (as its own section says), so a replay keyed on the mark
-alone would still get this page wrong.
+strokes is gone.
 
-**Acted on.** `parseStrokes` reads the op code and drops the strokes a
-`14` loop enclosed, so a deleted stroke never reaches the renderer — the
-one place a stroke's absence is known outright rather than inferred from
-the rendered page. `vectorInk` needs no change; its render-presence check
-simply has less left to catch.
+The last column of that table needs care, and reading it wrongly is what a
+first pass at this did. Eleven of those 27 strokes carry a status *and* look
+present when their centrelines are sampled against the render — but they
+are not survivors of a selection. That page erases and rewrites in the same
+place, so what the samples find is the replacement's ink; attributing each
+pixel to the record whose outline covers it drops all of them to zero, and
+the page's own PDF export draws 113 paths for its 113 status-free records
+and none of the marked ones (Part 1.4). A status means gone, on that page
+as everywhere else.
 
-Two deliberate limits. Only `14` is acted on: `2`/`4` look destructive in
-the table above, but that measurement excluded ink which a *different*
-destructive loop also enclosed, and without that exclusion those loops turn
-out to contain 14 strokes that are still plainly visible. A recolour
-rewrites its selection in place, so its contents survive, and treating
-those loops as deletions destroys real ink. And containment is required to
-be ≥90% rather than a bare majority, because the error directions aren't
-symmetric — a stroke wrongly dropped is ink destroyed, whereas a stroke
-wrongly kept still meets the render-presence check. Sweeping the threshold
-across every fixture, 0.5 and 0.9 differ by one stroke either way, so the
-safe end costs nothing.
+**Nothing keys on the op code.** It is corroboration rather than a decoder
+input: `m_trailStatus` already records, per stroke, what each of these
+operations did to it — `-16` for a `14` loop's contents, `-3` for a `2`/`4`
+loop's — which is exact where containment needs a threshold, and stated by
+the file rather than recomputed from geometry. Acting on the op code was
+tried and removed for that reason; see the commit history of #79. What the
+op code adds is the ability to say what a *loop* was for, which no
+per-stroke field answers.
 
-**The ordering hypothesis is disproved.** The previous open question
-guessed the distinction was positional — that a lasso immediately before an
-eraser marks a select-then-delete. It isn't: `erase.note`'s `-4` erasers
-are preceded by ordinary ink and did erase, `erase-colors.note`'s are
-preceded by a lasso, and link-tag page 3's are preceded by ink. Adjacency
-predicts nothing. The operation is written down in the lasso record itself.
+**The ordering hypothesis is disproved.** An earlier open question guessed
+the erase-vs-select distinction was positional — that a lasso immediately
+before an eraser marks a select-then-delete. It isn't: `erase.note`'s `-4`
+erasers are preceded by ordinary ink and did erase, `erase-colors.note`'s
+are preceded by a lasso, and link-tag page 3's are preceded by ink.
+Adjacency predicts nothing. The operation is written down in the lasso
+record itself.
 
-One correction that falls out of the same dump: this document describes
-link-tag page 3's `pen=9 color=255` records as "selections, not erases".
-That looks wrong — the ink records immediately around them carry
-`m_trailStatus = -99`, so those erasers did touch ink. They are erasers
-that clipped part of a stroke, i.e. the partial-erase case, not a
-mislabelled selection.
+One correction that falls out of the same dump: this document once
+described link-tag page 3's `pen=9 color=255` records as "selections, not
+erases". That is wrong — the ink records around them carry
+`m_trailStatus = -99`, so those erasers did touch ink, and the page's PDF
+export confirms the ink is gone.
 
 ### `point_contour` — decoded: the device's own rendered outline
 
@@ -794,8 +791,8 @@ against fixtures (1,134 fully-walked strokes):
 
 | Offset | Field | Observed |
 |---|---|---|
-| +0 | `m_trailStatus` (i32) | `0` (1068), `-99` (56), `-4` (10) — **this is the field this repo exposes as `IStroke.eraserTouched`** |
-| +4 | `m_copy` (i32) | `0` on 1086; non-zero (`97`, `601`–`604`) on strokes produced by copy/paste |
+| +0 | `m_trailStatus` (i32) | **decoded — the per-stroke visibility field**, see below. `0` (2703), `-99` (122), `-16` (36), `-4` (20), `-3` (9), `-2` (1) across 2,948 records, every `.note` plus `digest_test.mark` |
+| +4 | `m_copy` (i32) | small stable ids identifying the operation that produced the record, see below |
 | +8 | `m_trailNumInPage` (i32) | the per-page stroke uid, sequential from 1 |
 | +12 | `m_beforeShiftAngle` (i32) | `0` everywhere seen |
 | +16 | `m_afterShiftAngle` (i32) | `0` everywhere seen |
@@ -805,11 +802,112 @@ against fixtures (1,134 fully-walked strokes):
 4+4+4+4+4+16+16 = 52. The shift fields are the lasso move/rotate transform,
 which is why they read as identity on ink that was never moved.
 
-That `eraserTouched` is really `m_trailStatus` reframes it: it is a status
-enum, not a boolean, and `-4`/`-16`/`-99` are its codes. The correlation
-this document already records (every `-16` gone, every `-4` intact, `-99`
-mixed) is consistent with that, but the codes are still not decoded, and
-nothing keys on the value.
+### `m_trailStatus` — solved: this *is* the per-stroke visibility field
+
+**A non-zero `m_trailStatus` means the device no longer draws the record.**
+Supernote's own vector PDF exports confirm it by count, on two fixtures
+from different firmware eras and in the two different export styles:
+
+| Fixture | Ink records | `m_trailStatus == 0` | Paths in the device's PDF |
+|---|---|---|---|
+| `turkish.note` p1 | 189 | **152** | **152** |
+| `horizontal_1270.note` p1 | 82 | **61** | **61** |
+| `nomad-3.26.40-link-tag-3p.note` p3 | 143 | **113** | **113** |
+
+This overturns the conclusion recorded further up this document — that no
+per-stroke visibility field exists and the raster is the only thing that
+knows. The trail-taxonomy reading that supported it (the app replays trails
+into a bitmap rather than reading a visibility flag) is still true of *how
+the app renders*; it just doesn't follow that the flag isn't there. It is,
+and the exporter's output matches it exactly.
+
+The value says how the record stopped being drawn. Each code is pinned to a
+mechanism by a fixture whose README records what was actually done on the
+device:
+
+| Code | Meaning | Evidence |
+|---|---|---|
+| `-99` | erased with the eraser tool, or otherwise removed whole | the bulk of every erase fixture; 21/21 on `horizontal_1270.note` and 37/37 on `turkish.note` match what the device PDFs omit |
+| `-16` | deleted via lasso-select-and-delete | exactly one stroke each on `erase.note` (row 6, the README's lasso-delete row), `erase-no-white-pen.note` and `caligraphy.note` p4 — the three fixtures documented as using all three erase mechanisms — plus all 33 strokes of `unknown-color.note` p1, which carries one lasso pair and no eraser records |
+| `-4` | **partially erased** — the surviving pieces follow as separate contour-only records | `nomad-3.15.27-blank-2p.note` / `nomad-3.26.40-link-tag-3p.note` p2, whose export draws the pieces and never the stroke — see below |
+| `-3` | moved away by a lasso drag; the ink now lives in a later record at the new position | `erase-colors.note` p2 uids 1–9, each with an identical-point-count twin at a shifted bbox (uids 15–23) carrying `m_copy = 97` |
+| `-2` | unconfirmed — consistent with the binary's `CLEAN SCREEN` trail category | seen once: `straight-line.note` p3's only stroke, on a page that renders blank with no eraser and no lasso record present |
+
+Measured against the pages' own renders, `-16` scores 0.000 ink presence on
+all 35 records and `-3` averages 0.019 — gone, as claimed. `-99` averages
+0.213 rather than 0, and every one of the 24 records that still finds ink
+under half its points is a case where a *different, live* record sits on
+top of it: the erased word was rewritten in the same place. That is the
+same false positive that once left a doubled `0` in `horizontal_1270.note`'s
+"1270", and it is why the raster can't be the primary record even though it
+usually agrees.
+
+**Attributing the ink is what settles those cases**, and
+`nomad-3.26.40-link-tag-3p.note` page 3 is where it matters most: a naive
+measurement makes its marked strokes look alive — 15 of the 30 find ink
+under half their points, several under every point — because that page
+erases and rewrites in the same place. Its export (added later, and now the
+third exact count in the table above) says outright that all 30 are gone.
+The measurement agrees once the ink is attributed rather than merely
+found.
+Paint each *live* record's own `point_contour` into a mask, subtract it
+from the page's ink, and re-measure: **every marked stroke drops to 0.00,
+while all 113 live strokes stay present** — the same 113 the export draws.
+No ink on that page needs a marked stroke to explain it. A centreline
+sample cannot tell a stroke's own ink from its replacement's; the outlines
+can, because each stroke declares the exact region it covers. Worth keeping
+in mind wherever a page has no export to check against.
+
+**`-4`: partial erase is recorded, as replacement geometry.** On the two
+Nomad pages, each `-4` stroke is followed *in file order* by point-less
+records — no `m_points`, same pen/colour/thickness, one `point_contour`
+each — that hold the fragments the eraser left behind. Reading page 2 of
+either file in `m_trailNumInPage` order shows the mechanism directly: seven
+pen lines are drawn (uids 111–117, all marked `-4`), then an eraser sweep
+(uid 118) is followed by one fragment record per line, then the next sweep
+(133) replaces those with a new generation, and so on. The uids the file
+skips are the superseded generations, deleted as each later sweep re-cut
+the piece. The five surviving fragments of line 1 tile the original with
+four gaps in exactly the four places the eraser crossed it.
+
+**Supernote's own export draws exactly those fragments.** On
+`nomad-3.26.40-link-tag-3p.pdf` page 2, each of the seven erased pen lines
+comes out as its own fragment records and nothing else — 5, 4, 4, 5, 5, 5
+and 5 subpaths, matching each fragment record's own extent to within a
+pixel — and no subpath anywhere spans the line they came from. That is
+per-*piece* ground truth, a level finer than the per-stroke counts above,
+and it is what makes `-4` a decode rather than an inference.
+
+Rasterised against the page's own render, the fragments hold 87–100% ink,
+and the parent's area *minus* the fragments holds 0–4% (`link-tag`) or
+8–21% (`blank-2p`, whose render is coarser). So the parent must not be
+drawn and the fragments must be: drawing both paints the erased part back
+in. `src/svg.ts` skips every record carrying a status, which does both at
+once, since the fragments themselves read `0`.
+
+### `m_copy` — an operation id, not a copy counter
+
+The value is stable across fixtures *and* device families, and tracks the
+kind of record rather than any notion of generation:
+
+| Value | Seen on |
+|---|---|
+| `601` | drag eraser (`pen=3, color=255`) |
+| `602` | Nomad-era eraser (`pen=1, color=255`) — the one that splits strokes and produces `-4` |
+| `603` | area/lasso eraser (`pen=9, color=255`) |
+| `604` | lasso selection path (`pen=4`), the first of the pair |
+| `14` / `4` / `2` | the *second* record of a lasso pair: `14` on all four pages where the selection was deleted, `4`/`2` where it was moved or copied |
+| `400` | Heading / badge filled rect (`pen=0`, `stroke_kind` `"0001"`) |
+| `500` | link-tag box (`pen=0`, `stroke_kind` `"0000"`) |
+| `97` / `99` | ordinary ink; common enough to cover whole pages (every stroke of `sticker.note`) so **not** a "this stroke was pasted" marker |
+
+The "produced by copy/paste" reading this document previously recorded is
+therefore wrong for `601`–`604`, which are tool ids. It also gives issue
+[#70](https://github.com/philips/supernote-typescript/issues/70) its
+discriminator from a different direction: with per-stroke visibility
+available directly, a geometric replay of the eraser records — the thing
+that mis-erased visible text on `nomad-3.26.40-link-tag-3p.note` page 3 —
+isn't needed at all.
 
 `section_2`'s 10 bytes are likewise `m_groupNum`, `m_groupNest`,
 `m_groupEnd`, `m_renderFlag` — grouping state plus the render flag.
@@ -835,24 +933,23 @@ color-255 line eraser (`ERASE_LINE_COLOR_VALUE` is literally the
 Second, and more useful: **the app derives visibility by replaying the
 trail list into a bitmap** (`redrawTrails`, `fetchRleMatRedraw`,
 `trails redraw success`), not by reading a per-stroke visibility field.
-That is independent confirmation that no such field exists to be found —
-the raster-consulting approach in the erase section is the same answer the
-device itself computes, not a workaround for a missing one.
+This was read here, at the time, as confirmation that no per-stroke
+visibility field exists to be found. That inference was wrong, and
+`m_trailStatus` is the counterexample (Part 1.4): how the app *renders* a
+page says nothing about what its file records. What the paragraph gets
+right is narrower — replaying the trails is how the device produces the
+bitmap, so the bitmap can never disagree with the trail list.
 
-It also sharpens the one thing that is still approximate here. This
-document records that a geometric replay mis-erases visible text on
-`nomad-3.26.40-link-tag-3p.note` page 3, because identical-looking records
-were selections rather than erases. The taxonomy above says the app
-distinguishes those cases, so a discriminator does exist in the record.
-Finding it is the concrete next step, and it is now a narrow search rather
-than an open-ended one. `disableAreaList` was the obvious candidate and is
-**ruled out**: it is non-empty on only 6 of 1,134 strokes, holds full-page
-rectangles (`[-1,0,100,1405]`, `[0,0,99,1872]`), and appears on ordinary
-ink and eraser records alike. The remaining candidates are the named-but-
-unassigned scalars — `flagSpecial`, `preNum`, `flagPenUp`, `trailNum`,
-`walcomEmrType`, `recMod` — whose individual offsets among the constant
-`unk_1`/`unk_3`/`unk_4`/`unk_5` slots are not yet pinned down, since the
-log order is not the struct order.
+It also bears on the question that was open here: a geometric replay
+mis-erases visible text on `nomad-3.26.40-link-tag-3p.note` page 3, because
+identical-looking records were selections rather than erases, so a
+discriminator had to exist somewhere in the record. It does, in two places
+— `m_trailStatus` on the affected ink (which simply is the answer, without
+replaying anything) and `m_copy` on the eraser or lasso record itself,
+which identifies the tool. `disableAreaList` was the obvious candidate and
+is **ruled out**: it is non-empty on only 6 of 1,134 strokes, holds
+full-page rectangles (`[-1,0,100,1405]`, `[0,0,99,1872]`), and appears on
+ordinary ink and eraser records alike.
 
 ### Other names worth having
 
@@ -1261,33 +1358,24 @@ pass; the findings are folded into the sections above. In brief:
    strings (`SN_FILE_VER_20220011`) — with no version field that predicts
    which. Confirmation that `parseStrokes` should keep jumping by
    `strokeLen` rather than parsing the tail. Nothing needs them.
-9. **The erase-vs-select discriminator** — the app distinguishes
-   `TRAIL_ERASE_AREA`, `ERASE_LINE_COLOR_VALUE`, `CLEAN SCREEN`, region
-   selection and `ERASER select` (Part 1.4), so something must carry the
-   distinction. Resolving it is what would let the erase replay work on
-   `nomad-3.26.40-link-tag-3p.note` page 3 and remove the last raster
-   dependency in the erase path.
-
-   **Largely answered for lasso selections** — see the lasso operation-code
-   section above. `m_copy` on a lasso's companion record encodes what the
-   selection did: `604` nothing destructive, `14` delete, `2`/`4` a
-   non-deleting edit. Separation is clean (0/27 enclosed strokes gone under
-   `604`, 36/37 under `14`), and it resolves the link-tag page 3 failure
-   that motivated this question. The ordering hypothesis previously
-   recorded here was tested and **disproved**; adjacency predicts nothing.
-
-   ~~(a) wire the op code through `parseStrokes`~~ — done: a delete
-   selection's contents are dropped at decode time, with no raster access.
-
-   What remains: the same question for *eraser* records (`-1`/`-2`/`-4`),
-   which carry no equivalent code — though the premise may be weaker than
-   it looks, since this document's claim that link-tag page 3's `pen=9`
-   records were "selections, not erases" appears to be wrong (the ink
-   around them is erase-marked; they are partial erases). Ruled out for
-   erasers: `disableAreaList`, `point_contour`, `flag_draw`,
-   `record_class`, and record ordering.
-10. **`m_trailStatus`'s codes** — `-4`/`-16`/`-99` are a status enum, not a
-    boolean (Part 1.4). Decoding them may subsume question 9.
+9. **The erase-vs-select discriminator** — **resolved**, and it did not
+   need a geometric replay at all: `m_trailStatus` on the affected ink says
+   directly whether the device still draws it, and `m_copy` on the eraser
+   or lasso record names the tool (Part 1.4). Two hypotheses were tested
+   and disproved on the way, both worth not re-trying: that the
+   distinction lives in another `StrokeConfig` scalar — `disableAreaList`,
+   `point_contour`, `flag_draw` and `record_class` are each ruled out, the
+   last of them naming the *tool* and never the outcome — and that it lives
+   in record *ordering*, where adjacency turns out to predict nothing
+   (`erase.note`'s erasers follow ordinary ink and did erase,
+   `erase-colors.note`'s follow a lasso, and link-tag page 3's follow ink).
+   What remains open is only the mapping from `m_copy`'s ids to the app's
+   own trail categories (`TRAIL_ERASE_AREA`, `ERASE_LINE_COLOR_VALUE`,
+   `CLEAN SCREEN`, `ERASER select`), which nothing needs.
+10. **`m_trailStatus`'s codes** — **resolved** (Part 1.4): `-2`/`-3`/`-4`/
+    `-16`/`-99`, a removal taxonomy, with `-4` pointing at the
+    contour-only records that carry a partial erase's survivors. Two codes
+    are thinly evidenced: `-2` (one instance) and `-3` (one page).
 
 ## References
 

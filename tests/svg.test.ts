@@ -837,6 +837,44 @@ describe("svg", () => {
       expect(svg).toContain('stroke="rgb(255,255,255)"')
     })
 
+    test("a partially erased stroke draws as its surviving fragments, not whole (nomad-3.26.40-link-tag-3p.note)", { timeout: 30000 }, async () => {
+      // Page 2 has seven pen lines crossed by four eraser sweeps. The
+      // device recorded that by marking each line `trailStatus: -4` and
+      // writing the pieces it left behind as separate point-less records
+      // carrying only a contour (see strokes.test.ts). So what should be
+      // drawn over each line is several short fragments and *not* the
+      // line itself -- drawing the line too would paint the erased gaps
+      // back in, which is what happened while the mark was only known to
+      // mean "an eraser touched this".
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+      const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true })
+      const line = strokes.find((stroke) => stroke.trailStatus === -4 && stroke.points.length > 100 && stroke.thickness === 200)
+      expect(line).toBeDefined()
+
+      const box = {
+        minX: Math.min(...line!.points.map((p) => p.x)),
+        maxX: Math.max(...line!.points.map((p) => p.x)),
+        minY: Math.min(...line!.points.map((p) => p.y)),
+        maxY: Math.max(...line!.points.map((p) => p.y)),
+      }
+      const [svg] = await toSvg(sn, { pageNumbers: [2], vectorInk: true })
+      const over = svgInkPaths(svg).filter((path) => {
+        const points = path.rings.flat()
+        const center = {
+          x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+          y: points.reduce((sum, p) => sum + p.y, 0) / points.length,
+        }
+        return center.x >= box.minX && center.x <= box.maxX && center.y >= box.minY && center.y <= box.maxY
+      })
+      // its five surviving fragments, and no sixth path spanning the line
+      expect(over.length).toBe(5)
+      const spanY = (path: (typeof over)[number]) => {
+        const ys = path.rings.flat().map((p) => p.y)
+        return Math.max(...ys) - Math.min(...ys)
+      }
+      for (const path of over) expect(spanY(path)).toBeLessThan((box.maxY - box.minY) / 2)
+    })
+
     test("a link-tag indicator box never renders as ink, matching the raster (nomad-3.26.40-link-tag-3p.note)", { timeout: 30000 }, async () => {
       // Page 2 (1-indexed) has three "link tag" boxes -- confirmed via the
       // note's own LINK_* footer metadata (see strokes.test.ts) to be a
@@ -916,10 +954,7 @@ describe("svg", () => {
       // which is the raster saying everything on it is gone.
       const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"))
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
-      // 5 ink + 3 erasers decode, less the one stroke select-and-delete
-      // removed -- its loop carries SELECTION_OP.DELETE, so it is dropped at
-      // decode rather than left to the render check below.
-      expect(strokes.length).toBe(7) // ...the rest still decode...
+      expect(strokes.length).toBe(8) // 5 ink + 3 erasers still decode...
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
       expect(svg).not.toContain("<path ") // ...but none of them render
@@ -938,8 +973,8 @@ describe("svg", () => {
       const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"))
       const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
       expect(decoded.filter((s) => !s.isEraser).length).toBe(82) // every stroke still decodes...
-      // ...and exactly the 21 the device erased carry the erase mark
-      expect(decoded.filter((s) => s.eraserTouched && !s.isEraser).length).toBe(82 - drawnByDevice)
+      // ...and exactly the 21 the device erased carry a trail status
+      expect(decoded.filter((s) => s.trailStatus !== undefined && !s.isEraser).length).toBe(82 - drawnByDevice)
 
       const [svg] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
       const inkPaths = svgInkPaths(svg).filter(({ color }) => color !== "rgb(255,255,255)")
@@ -949,7 +984,7 @@ describe("svg", () => {
       // erased, and rewritten in place. Because the replacement sits on top
       // of it, the erased one still finds ~30% of its own points over black
       // ink, so a presence check alone kept it and the page rendered "12700"
-      // with a doubled zero. It is the erase mark that settles it.
+      // with a doubled zero. It is `trailStatus` that settles it.
       //
       // Asserted by counting what lands on top of it rather than by
       // matching literal `d` text, since a path is drawn as its rendered
@@ -958,11 +993,11 @@ describe("svg", () => {
       // surviving stroke, not the erased one as well. The pair is found by
       // the thing that defines it -- an erased stroke and a surviving one
       // starting within a couple of pixels of each other.
-      const survivors = decoded.filter((stroke) => !stroke.isEraser && !stroke.eraserTouched)
+      const survivors = decoded.filter((stroke) => !stroke.isEraser && stroke.trailStatus === undefined)
       const erasedZero = decoded.find(
         (stroke) =>
           !stroke.isEraser &&
-          stroke.eraserTouched &&
+          stroke.trailStatus !== undefined &&
           stroke.points[0] !== undefined &&
           survivors.some((other) => other.points[0] && Math.hypot(other.points[0].x - stroke.points[0].x, other.points[0].y - stroke.points[0].y) < 3),
       )
@@ -1316,7 +1351,7 @@ describe("svg", () => {
 
       // page 1 is untouched, so every one of its strokes must survive
       const page1 = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
-      expect(page1.every((s) => !s.eraserTouched)).toBe(true)
+      expect(page1.every((s) => s.trailStatus === undefined)).toBe(true)
       expect(svgInkPaths(svgs[0]).length).toBe(page1.length)
 
       // and both colours are still drawn on the erased page -- neither got
@@ -1371,10 +1406,8 @@ describe("svg", () => {
       // the single word "Erase" -- 19 ink strokes decode, but the device's
       // render and its PDF export both show only the handful that are left.
       const sn = new SupernoteX(await readFileToUint8Array("caligraphy.note"))
-      // 19 records decode as ink, less the one a select-and-delete removed
-      // (SELECTION_OP.DELETE on its lasso loop).
       const decoded = parseStrokes(sn.pages[3].totalPathBuffer, sn.pageWidth, sn.pageHeight)
-      expect(decoded.length).toBe(18)
+      expect(decoded.length).toBe(19)
 
       const svgs = await toSvg(sn, { vectorInk: true })
       const inkPaths = svgInkPaths(svgs[3]).filter(({ color }) => color !== "rgb(255,255,255)")

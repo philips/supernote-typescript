@@ -75,9 +75,17 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 		isolates: 'The Heading feature — four background styles — separated from the marker tool.',
 		note: 'Heading fills and their auto-contrast label colours come from the note\'s own TITLE_ footer metadata, giving the exact design palette rather than the raster\'s quantised greys.',
 	},
+	sticker: {
+		isolates: 'The sticker plugin — artwork placed as ordinary stroke records, in a shape the centreline model cannot express.',
+		note: 'The one page whose ratio is wrong about it. Page 2\'s sticker is filled the way a person fills a shape with a pen, black strokes doubling back over themselves with white carved back over the top, so our 22 overlapping outlines get summed where the device\'s export merges its black into a single path counted once. Rasterised instead of summed, the ink we lay down covers 42,704 square pixels against the device\'s 42,800 — the picture agrees even where the number says 1.36×.',
+	},
 	turkish: {
-		isolates: 'Dense handwriting with partial erasures throughout.',
-		note: 'The clearest illustration of what is still approximate: a partly erased stroke renders whole or not at all. Survival across its erased strokes runs smoothly from 0% to 95%, so no single cutoff is right for all of them.',
+		isolates: 'Dense handwriting with erasures throughout, then rewritten in place.',
+		note: 'Long read as the case no cutoff could get right, because survival measured across its erased strokes runs smoothly from 0% to 95%. It was measuring the replacement: the device draws 152 paths for the 152 records reading m_trailStatus 0, and none of the 37 marked ones.',
+	},
+	'nomad-3.26.40-link-tag-3p': {
+		isolates: 'Partial erasing — the one firmware that splits a stroke instead of removing it, and stores what it left behind.',
+		note: 'Page 2 settles what a partial erase looks like: each erased line is marked and the pieces the eraser left are written as separate records carrying only an outline. The device draws exactly those pieces — 5, 4, 4, 5, 5, 5, 5 of them across its seven lines, at the same positions to the pixel — and never the line they came from. Page 3 erases and rewrites in place, where a stroke\'s own ink and its replacement\'s sit on top of each other; the export draws 113 paths for its 113 live records.',
 	},
 	'nomad-3.15.27-blank-shapes-and-RTR': { isolates: 'Shapes, patterns, Headings and keyword highlighting.' },
 	'erase-partial2': { isolates: 'A page erased by selecting and deleting, which removes the records outright.' },
@@ -87,7 +95,7 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 const FEATURED = [
 	'straight-line', 'horizontal_1270', 'a5x-2.14.28', 'caligraphy',
 	'stroke-isolation', 'erase-pen', 'erase-colors', 'erase', 'erase-no-white-pen',
-	'headings-and-marker', 'turkish',
+	'headings-and-marker', 'sticker', 'turkish',
 ];
 
 const escapeHtml = (s: string) =>

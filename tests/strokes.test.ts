@@ -532,6 +532,95 @@ describe("parseStrokes", () => {
       }
     });
 
+    test("a marked stroke's remaining ink always belongs to a live record (nomad-3.26.40-link-tag-3p.note p3)", async () => {
+      // This page has no PDF export to check against, and measured naively
+      // it looks like a counterexample: sample along each marked stroke's
+      // centreline and most of them find ink, several under every point.
+      // They were erased and then *rewritten in the same place*, so what
+      // the samples find is the replacement's ink, not their own.
+      //
+      // Attributing the ink settles it: paint every live record's own
+      // rendered outline into a mask, subtract it from the page's ink, and
+      // re-measure. Nothing of a marked stroke survives that subtraction,
+      // while every live stroke is present -- so no ink on this page needs
+      // a marked stroke to explain it.
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const page = sn.pages[2];
+      const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
+      const width = sn.pageWidth, height = sn.pageHeight;
+
+      const decoder = new RattaRLEDecoder();
+      const ink = new Uint8Array(width * height);
+      for (const name of ["MAINLAYER", "LAYER1", "LAYER2", "LAYER3"] as const) {
+        const buffer = page[name]?.bitmapBuffer as Uint8Array | undefined;
+        if (!buffer?.length) continue;
+        const pixels = decoder.decode(buffer, width, height);
+        for (let i = 0, p = 0; p < ink.length; i += 4, p++) if (!ink[p] && pixels[i + 3] > 0) ink[p] = 1;
+      }
+
+      // The device's rasteriser spreads a little past the declared outline,
+      // so a live record claims its own contour plus a small margin.
+      const MARGIN = 3;
+      const claimed = new Uint8Array(width * height);
+      const claim = (rings: { x: number; y: number }[][]) => {
+        const xs = rings.flat().map((p) => p.x), ys = rings.flat().map((p) => p.y);
+        if (!xs.length) return;
+        for (let y = Math.max(0, Math.floor(Math.min(...ys)) - MARGIN); y <= Math.min(height - 1, Math.ceil(Math.max(...ys)) + MARGIN); y++) {
+          for (let x = Math.max(0, Math.floor(Math.min(...xs)) - MARGIN); x <= Math.min(width - 1, Math.ceil(Math.max(...xs)) + MARGIN); x++) {
+            let inside = false;
+            for (const ring of rings) {
+              for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                if (ring[i].y > y !== ring[j].y > y && x < ((ring[j].x - ring[i].x) * (y - ring[i].y)) / (ring[j].y - ring[i].y) + ring[i].x) {
+                  inside = !inside;
+                }
+              }
+            }
+            if (!inside) continue;
+            for (let dy = -MARGIN; dy <= MARGIN; dy++) {
+              for (let dx = -MARGIN; dx <= MARGIN; dx++) {
+                if (y + dy >= 0 && y + dy < height && x + dx >= 0 && x + dx < width) claimed[(y + dy) * width + x + dx] = 1;
+              }
+            }
+          }
+        }
+      };
+      const live = strokes.filter((stroke) => stroke.trailStatus === undefined);
+      const marked = strokes.filter((stroke) => stroke.trailStatus !== undefined);
+      expect(marked.length).toBeGreaterThan(25);
+      for (const stroke of live) claim(stroke.contour ?? []);
+
+      const presence = (stroke: (typeof strokes)[number], mask: Uint8Array) => {
+        const samples = stroke.points.length ? stroke.points : (stroke.contour ?? []).flat();
+        if (!samples.length) return 0;
+        const radius = Math.max(1, Math.round(stroke.thickness / 200)) + 1;
+        const step = Math.max(1, Math.floor(samples.length / 60));
+        let sampled = 0, found = 0;
+        for (let i = 0; i < samples.length; i += step) {
+          sampled++;
+          const cx = Math.round(samples[i].x), cy = Math.round(samples[i].y);
+          let hit = false;
+          for (let y = cy - radius; y <= cy + radius && !hit; y++) {
+            if (y < 0 || y >= height) continue;
+            for (let x = cx - radius; x <= cx + radius; x++) {
+              if (x >= 0 && x < width && mask[y * width + x]) { hit = true; break; }
+            }
+          }
+          if (hit) found++;
+        }
+        return found / sampled;
+      };
+
+      const unclaimed = new Uint8Array(width * height);
+      for (let p = 0; p < ink.length; p++) unclaimed[p] = ink[p] && !claimed[p] ? 1 : 0;
+
+      // Measured against all the page's ink, most marked strokes look alive
+      // -- that is the trap this guards against.
+      expect(marked.filter((stroke) => presence(stroke, ink) >= 0.5).length).toBeGreaterThan(10);
+      // Measured against ink no live record accounts for, none of them are.
+      for (const stroke of marked) expect(presence(stroke, unclaimed)).toBe(0);
+      for (const stroke of live) expect(presence(stroke, ink)).toBeGreaterThan(0.5);
+    });
+
     test("is left off entirely on a stroke the device still draws", async () => {
       // The field is absent rather than 0 on a live stroke, so `in` and a
       // plain truthiness check agree with each other, and the 21 marked

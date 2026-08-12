@@ -718,6 +718,17 @@ same false positive that once left a doubled `0` in `horizontal_1270.note`'s
 "1270", and it is why the raster can't be the primary record even though it
 usually agrees.
 
+**Attributing the ink is what settles those cases**, and it matters most on
+`nomad-3.26.40-link-tag-3p.note` page 3, which has no PDF export to appeal
+to and where a naive measurement makes the marked strokes look alive — 15
+of its 30 find ink under half their points, several under every point.
+Paint each *live* record's own `point_contour` into a mask, subtract it
+from the page's ink, and re-measure: **every marked stroke drops to 0.00,
+while all 113 live strokes stay present.** No ink on that page needs a
+marked stroke to explain it. A centreline sample cannot tell a stroke's own
+ink from its replacement's; the outlines can, because each stroke declares
+the exact region it covers.
+
 **`-4`: partial erase is recorded, as replacement geometry.** On the two
 Nomad pages, each `-4` stroke is followed *in file order* by point-less
 records — no `m_points`, same pen/colour/thickness, one `point_contour`

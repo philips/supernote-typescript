@@ -8,6 +8,7 @@ export { toPdf, createPdfContext, addPdfPage, addTextOnlyPdfPage } from './pdf.j
 export type { ToPdfOptions, PdfContext, AddPdfPageOptions } from './pdf.js';
 export { toSvg, addSvgPage } from './svg.js';
 export type { ToSvgOptions, AddSvgPageOptions } from './svg.js';
+export type { StrokeStyle, VectorInkPrimitive } from './vector-ink.js';
 export { parseStrokes } from './strokes.js';
 export type { IStroke, IStrokePoint, StrokePen } from './strokes.js';
 export { SupernoteAtelier } from './atelier.js';

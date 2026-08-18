@@ -3,7 +3,10 @@ import { encodePng } from "image-js"
 import { toPdf, createPdfContext, addPdfPage, addTextOnlyPdfPage, recognitionCoordinateScale } from "../src/pdf"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
+import { toSvg } from "../src/svg"
 import { PDFParse } from "pdf-parse"
+import { PDFDocument, PDFRawStream } from "pdf-lib"
+import { inflateSync } from "node:zlib"
 import { describe, test, expect } from 'vitest'
 
 function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
@@ -16,6 +19,15 @@ function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
       }
     });
   });
+}
+
+function getPageContentString(pdf: PDFDocument, pageIndex: number): string {
+  const page = pdf.getPage(pageIndex)
+  const contents = page.node.Contents()
+  if (!contents) return ''
+  const streamRef = contents.get(0)
+  const stream = pdf.context.lookup(streamRef) as PDFRawStream
+  return inflateSync(Buffer.from(stream.contents)).toString('latin1')
 }
 
 describe("pdf", () => {
@@ -161,6 +173,47 @@ describe("pdf", () => {
     expect(recognitionCoordinateScale(1404)).toBeCloseTo((1404 * 11.9) / 1920)
   })
 
+  test("toPdf({ vectorInk: true }) renders the searchable text layer unchanged", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const pdfBytes = await toPdf(sn, { vectorInk: true })
+    expect(pdfBytes.byteLength).toBeGreaterThan(0)
+
+    const parser = new PDFParse({ data: pdfBytes })
+    const result = await parser.getText()
+    await parser.destroy()
+
+    for (const word of ["Real", "time", "recognition", "paragraph", "reflow", "together"]) {
+      expect(result.text).toContain(word)
+    }
+  })
+
+  test("toPdf({ vectorInk: true }) draws ink as vector paths instead of embedding it in the page image", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+    const pdfBytes = await toPdf(sn, { vectorInk: true })
+    const pdf = await PDFDocument.load(pdfBytes)
+    const content = getPageContentString(pdf, 0)
+
+    // A vector-ink page emits PDF path construction operators (`m` for
+    // moveto). A plain raster page only embeds the image with `Do`.
+    expect(content).toMatch(/\b\d+(\.\d+)? \d+(\.\d+)? m\b/)
+  })
+
+  test("vectorInk PDF and SVG use the same vector-ink pipeline", { timeout: 30000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+    const [svg] = await toSvg(sn, { vectorInk: true, includeText: false })
+    const pdfBytes = await toPdf(sn, { vectorInk: true })
+    const pdf = await PDFDocument.load(pdfBytes)
+    const content = getPageContentString(pdf, 0)
+
+    // Both outputs should contain vector primitives. Counting exact
+    // primitives is backend-specific, so we just assert both succeeded and
+    // both contain visible path data.
+    expect(svg).toContain('<path')
+    expect(svg).toContain('</svg>')
+    expect(content).toMatch(/\b\d+(\.\d+)? \d+(\.\d+)? m\b/)
+    expect(pdfBytes.byteLength).toBeGreaterThan(0)
+  })
+
   test("handles a note from a non-Manta device (pageWidth 1404, e.g. A5X) without throwing", { timeout: 30000 }, async () => {
     const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
     expect(sn.pageWidth).toBe(1404)
@@ -172,5 +225,11 @@ describe("pdf", () => {
     const result = await parser.getText()
     await parser.destroy()
     expect(result.text).toContain("Subject")
+  })
+
+  test("toPdf({ vectorInk: true, upscale: 2 }) renders without throwing", { timeout: 60000 }, async () => {
+    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+    const pdfBytes = await toPdf(sn, { vectorInk: true, upscale: 2 })
+    expect(pdfBytes.byteLength).toBeGreaterThan(0)
   })
 })

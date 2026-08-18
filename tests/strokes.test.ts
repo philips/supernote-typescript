@@ -827,4 +827,230 @@ describe("parseStrokes", () => {
       }
     });
   });
+
+  describe("pen ids", () => {
+    /** The record's own `stroke_kind` (Ratta's `predictName`), read straight
+     * out of a raw StrokeConfig -- these sweeps walk the buffer themselves
+     * rather than going through parseStrokes, which doesn't surface it. */
+    function strokeKindAt(view: DataView, pos: number): string {
+      const bytes = new Uint8Array(view.buffer, view.byteOffset + pos, 52);
+      const end = bytes.indexOf(0);
+      return new TextDecoder().decode(bytes.subarray(0, end < 0 ? 52 : end));
+    }
+
+    test("pen=5 is the marker under the id older firmware used for it (test.note)", async () => {
+      // test.note is the only SN_FILE_VER_20220011 (A5X) fixture here, and
+      // the only file with pen=5 ordinary ink. Its three pen=5 strokes are
+      // a highlighter pass over the first line of handwriting: far wider
+      // than the pen ink they cover, and covering it. Both are asserted
+      // because either alone is weak -- a wide stroke needn't be a marker,
+      // and an overlapping one needn't be either.
+      const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+      const markers = strokes.filter((stroke) => stroke.pen === "marker");
+      expect(markers.length).toBe(3);
+
+      // Pen ink only: the page also carries a Heading background rect, whose
+      // thickness field isn't a stroke width at all.
+      const inkThickness = strokes.filter((s) => s.pen !== "marker" && !s.isFilledRect).map((s) => s.thickness);
+      for (const marker of markers) {
+        expect(marker.thickness).toBeGreaterThan(Math.max(...inkThickness) * 5);
+        // ...and its color is the marker form of a base palette value: the
+        // device's own engine rewrites 0/48/80 to 1/49/81 for exactly the
+        // two marker ids (see PEN_IDS). Stored as 81 here, decoded to the
+        // grey that id means -- see LEGACY_GREY_IDS.
+        expect(marker.color).toBe("rgb(202,202,202)");
+      }
+
+      const box = (points: { x: number; y: number }[]) => ({
+        minX: Math.min(...points.map((p) => p.x)), maxX: Math.max(...points.map((p) => p.x)),
+        minY: Math.min(...points.map((p) => p.y)), maxY: Math.max(...points.map((p) => p.y)),
+      });
+      // The band's own half width, which its centerline points stop short
+      // of on every side.
+      const band = box(markers.flatMap((stroke) => stroke.points));
+      const margin = Math.max(...markers.map((stroke) => stroke.thickness)) / 100;
+      const inBand = (p: { x: number; y: number }) =>
+        p.x >= band.minX - margin && p.x <= band.maxX + margin &&
+        p.y >= band.minY - margin && p.y <= band.maxY + margin;
+
+      // Whatever the band touches, it very nearly covers -- the shape of a
+      // highlighter pass over a line of text, rather than one wide stroke
+      // happening to cross some ink.
+      const covered = strokes.filter(
+        (stroke) => stroke.pen !== "marker" && !stroke.isFilledRect && stroke.points.some(inBand),
+      );
+      expect(covered.length).toBeGreaterThan(5);
+      const points = covered.flatMap((stroke) => stroke.points);
+      expect(points.filter(inBand).length / points.length).toBeGreaterThan(0.9);
+    });
+
+    test("the marker ids are the only ones that use the +1 palette variants", async () => {
+      // The rule the device's own color routine implements (see PEN_IDS) --
+      // a marker writes 1/49/81/158/202 where every other tool writes
+      // 0/48/80/157/201. Sweeping every fixture is what makes this a test
+      // of the id mapping rather than of one file: if pen=5 were not a
+      // marker, its color 81 would be the sole exception on either side.
+      const MARKER_ONLY = new Set([1, 49, 81, 158, 202]);
+      const BASE_ONLY = new Set([0, 48, 80, 157, 201]);
+      const CONFIG_SIZE = 208;
+      const fixtures = fs.readdirSync("tests/input").filter((name) => name.endsWith(".note")).sort();
+      const markerWithBaseColor: string[] = [], toolWithMarkerColor: string[] = [];
+      let markerRecords = 0, toolRecords = 0;
+
+      for (const fixture of fixtures) {
+        const sn = new SupernoteX(await readFileToUint8Array(fixture));
+        for (const [pageIndex, page] of sn.pages.entries()) {
+          const buf = page.totalPathBuffer;
+          if (!buf || buf.length < 16) continue;
+          const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+          const count = view.getUint32(0, true);
+          if (!count || count > 1_000_000) continue;
+          let pos = 4;
+          for (let i = 0; i < count; i++) {
+            if (pos + 4 > buf.length) break;
+            const len = view.getUint32(pos, true);
+            const start = pos + 4;
+            if (!len || len < CONFIG_SIZE || start + len > buf.length) break;
+            pos = start + len;
+            const pen = view.getUint32(start, true), color = view.getUint32(start + 4, true);
+            const where = `${fixture} p${pageIndex + 1} #${i} pen=${pen} color=${color}`;
+            // The star mark reuses pen=5 without being marker ink at all,
+            // and is the one record excluded here -- see STAR_MARK_STROKE_KIND.
+            if (strokeKindAt(view, start + 48) === "fiveStarsSignal") continue;
+            if (pen === 5 || pen === 11) {
+              markerRecords++;
+              if (BASE_ONLY.has(color)) markerWithBaseColor.push(where);
+            } else if (pen === 10 || pen === 15 || pen === 16) {
+              toolRecords++;
+              if (MARKER_ONLY.has(color)) toolWithMarkerColor.push(where);
+            }
+          }
+        }
+      }
+
+      expect(markerWithBaseColor).toEqual([]);
+      expect(toolWithMarkerColor).toEqual([]);
+      expect(markerRecords).toBeGreaterThan(100);
+      expect(toolRecords).toBeGreaterThan(1000);
+    });
+
+    test("pen=15 is the calligraphy pen, and it is the tool's only id", async () => {
+      // caligraphy.note is named for the tool and drawn entirely with it.
+      // Every ink record on every page reads 15, which is what rules out
+      // the tool having several ids (e.g. one per nib angle).
+      const sn = new SupernoteX(await readFileToUint8Array("caligraphy.note"));
+      let calligraphy = 0;
+      for (const page of sn.pages) {
+        const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
+        for (const stroke of strokes) expect(stroke.pen).toBe("calligraphy");
+        calligraphy += strokes.length;
+      }
+      expect(calligraphy).toBeGreaterThan(50);
+
+      // ...and the isolated one-stroke-per-tool page agrees.
+      const isolation = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
+      const tools = parseStrokes(isolation.pages[1].totalPathBuffer, isolation.pageWidth, isolation.pageHeight);
+      expect(tools.map((stroke) => stroke.pen).sort()).toEqual(["calligraphy", "inkPen", "marker", "needlePoint"]);
+    });
+
+    test("the older format's grey ids decode to the greys the device itself draws", async () => {
+      // test.note stores 48 and 81 where current firmware stores a grey
+      // level directly, so reading them literally makes dark grey nearly
+      // black. Supernote's own vector export of the same page says which
+      // grey each id means -- the ground truth the 157/201 palette already
+      // comes from -- and its page 1 uses exactly three ink colours.
+      const pdf = await fs.promises.readFile("tests/input/test.pdf");
+      const text = pdf.toString("latin1");
+      const form = [...text.matchAll(/\d+ 0 obj\r?\n?([\s\S]*?)endobj/g)]
+        .filter(([, body]) => body.includes("/Subtype/Form"))
+        .map(([, body]) => {
+          const stream = /stream\r?\n([\s\S]*?)endstream/.exec(body)!
+          return zlib.inflateSync(Buffer.from(stream[1], "latin1")).toString("latin1")
+        })[0]
+
+      // As devicePageSubpaths, but keeping each subpath's fill colour: the
+      // question here is which colour the device drew a stroke in, not just
+      // where.
+      const tokens = form.split(/\s+/)
+      const byGrey = new Map<number, { minX: number; maxX: number; minY: number; maxY: number }[]>()
+      let grey: number | null = null
+      // The colour a subpath is drawn in is whatever was set when it
+      // *started*, not when it ends -- a run's last subpath is followed by
+      // the next run's `rg`, so reading the colour at flush time files it
+      // under the wrong one.
+      let openGrey: number | null = null
+      let points: number[][] = []
+      const flush = () => {
+        if (openGrey === null || points.length < 2) return
+        const xs = points.map((p) => p[0]), ys = points.map((p) => p[1])
+        if (!byGrey.has(openGrey)) byGrey.set(openGrey, [])
+        byGrey.get(openGrey)!.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) })
+      }
+      for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i] === "rg") grey = Math.round(Number(tokens[i - 3]) * 255)
+        else if (tokens[i] === "m") { flush(); openGrey = grey; points = [[Number(tokens[i - 2]), Number(tokens[i - 1])]] }
+        else if ((tokens[i] === "l" || tokens[i] === "c") && points.length) points.push([Number(tokens[i - 2]), Number(tokens[i - 1])])
+      }
+      flush()
+
+      const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
+      const greyOf = (stroke: (typeof strokes)[number]) => Number(/rgb\((\d+)/.exec(stroke.color)![1])
+
+      // The ids are gone: nothing decodes as the raw 48/81 any more.
+      expect(strokes.some((stroke) => greyOf(stroke) === 48 || greyOf(stroke) === 81)).toBe(false);
+      expect([...new Set(strokes.map(greyOf))].sort((a, b) => a - b)).toEqual([0, 157, 202]);
+
+      // Each of our colour groups sits wholly inside the device's matching
+      // one. 202 is the marker form of 201 (see LEGACY_GREY_IDS), which the
+      // device's export draws at the base grey exactly as it does a modern
+      // marker's 202.
+      for (const [ours, device] of [[0, 0], [157, 157], [202, 201]] as const) {
+        const group = strokes.filter((stroke) => greyOf(stroke) === ours)
+        expect(group.length).toBeGreaterThan(0)
+        const boxes = byGrey.get(device)!
+        expect(boxes.length).toBeGreaterThan(0)
+        const points = group.flatMap((stroke) => stroke.points)
+        const inside = points.filter((p) =>
+          boxes.some((b) => p.x >= b.minX - 1 && p.x <= b.maxX + 1 && p.y >= b.minY - 1 && p.y <= b.maxY + 1),
+        )
+        expect(inside.length).toBe(points.length)
+
+        // ...and covers it: the device's outline stands off our centreline
+        // by the stroke's own half width and no further, which is what rules
+        // out our group merely being a small part of a larger one.
+        const half = Math.max(...group.map((stroke) => stroke.thickness)) / 100
+        const union = {
+          minX: Math.min(...boxes.map((b) => b.minX)), maxX: Math.max(...boxes.map((b) => b.maxX)),
+          minY: Math.min(...boxes.map((b) => b.minY)), maxY: Math.max(...boxes.map((b) => b.maxY)),
+        }
+        const oursBox = {
+          minX: Math.min(...points.map((p) => p.x)), maxX: Math.max(...points.map((p) => p.x)),
+          minY: Math.min(...points.map((p) => p.y)), maxY: Math.max(...points.map((p) => p.y)),
+        }
+        expect(oursBox.minX - union.minX).toBeLessThanOrEqual(half + 2)
+        expect(union.maxX - oursBox.maxX).toBeLessThanOrEqual(half + 2)
+        expect(oursBox.minY - union.minY).toBeLessThanOrEqual(half + 2)
+        expect(union.maxY - oursBox.maxY).toBeLessThanOrEqual(half + 2)
+      }
+    });
+
+    test("a star mark reports no tool, because the device overwrote its pen field", async () => {
+      // See STAR_MARK_STROKE_KIND: the engine stores pen=5/thickness=100
+      // over whatever the user actually drew with, so 'marker' would be a
+      // false reading of a real id. The flag says the tool is gone rather
+      // than merely unrecognized -- the ink itself is kept and rendered.
+      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"));
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
+      const stars = strokes.filter((stroke) => stroke.isStarMark);
+      expect(stars.length).toBe(1);
+      expect(stars[0].pen).toBe("unknown");
+      expect(stars[0].thickness).toBe(100);
+      expect(stars[0].points.length).toBeGreaterThan(0);
+      // absent, not false, on everything else -- the same shape as the
+      // other optional flags
+      for (const stroke of strokes) expect("isStarMark" in stroke).toBe(stroke === stars[0]);
+    });
+  });
 });

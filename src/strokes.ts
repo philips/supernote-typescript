@@ -9,7 +9,7 @@ export interface IStrokePoint {
  * `pen` field. Not every device tool has a confirmed id yet -- an
  * unrecognized numeric id is kept as `'unknown'` rather than guessed at (see
  * `parseStrokes`'s doc comment for how these were found). */
-export type StrokePen = 'needlePoint' | 'inkPen' | 'marker' | 'unknown';
+export type StrokePen = 'needlePoint' | 'inkPen' | 'marker' | 'calligraphy' | 'unknown';
 
 /** One continuous pen stroke (a single pen-down-to-pen-up motion), decoded
  * from a page's `TOTALPATH` data -- including its real color, tool, and
@@ -87,6 +87,13 @@ export interface IStroke {
 	 * turned each of `straight-line.note`'s lines into either a filled box
 	 * or nothing at all. */
 	isFilledRect?: boolean;
+	/** True for the Stars feature's star mark, read from the record's own
+	 * `stroke_kind` (`"fiveStarsSignal"`) -- see `STAR_MARK_STROKE_KIND`,
+	 * which is also why such a stroke's `pen` is `'unknown'`. Ordinary ink
+	 * as far as rendering goes; the flag exists so a caller can tell that
+	 * this one's tool is genuinely unrecoverable rather than merely
+	 * unrecognized. */
+	isStarMark?: boolean;
 	/** The device's own rendered outline of this stroke (`point_contour` in
 	 * https://github.com/Walnut356/snlib) -- closed polygons, only present
 	 * when `parseStrokes` was called with `includeContours: true`.
@@ -131,11 +138,74 @@ export interface IStroke {
  * enum. `10`/`11` match that enum's `NeedlePoint`/`Marker` exactly; `16` is
  * this repo's own finding (unconfirmed against snlib, which doesn't list a
  * value for `InkPen`), consistently seen wherever a stroke's tool is known
- * to be the ink pen. Any other id maps to `'unknown'` rather than a guess. */
+ * to be the ink pen. Any other id maps to `'unknown'` rather than a guess.
+ *
+ * `15` is the calligraphy pen: `caligraphy.note` (named for the tool)
+ * carries 59 ink strokes and every one of them reads 15 -- its only other
+ * records are eraser and lasso gestures -- as does `stroke-isolation.note`
+ * page 2's calligraphy stroke. One id, not several.
+ *
+ * `5` is the marker again, under the id older firmware used for it -- see
+ * `STAR_MARK_STROKE_KIND` for the one other thing that lands in this slot.
+ * Ratta's own engine (`flutter_note_lib.dll`, see
+ * plans/vector-format-spec.md Part 1.4) treats `5` and `11` as the same
+ * tool in both places it distinguishes tools at all: the routine that
+ * rewrites a stroke's color into its marker variant (`0 -> 1`, `48 -> 49`,
+ * `80 -> 81`) runs for `penType == 5 || penType == 11` and nothing else,
+ * and `getRecognDataPointerEventWithFile`, which feeds handwriting
+ * recognition, skips `penType` `4`, `5` and `11` -- the lasso and both
+ * marker ids. The fixtures agree: `test.note` is the only
+ * `SN_FILE_VER_20220011` (A5X) file here, its ink pen is `1` rather than
+ * `16`, and its three `pen=5` strokes carry color `81` -- the marker form
+ * of `80` -- at thickness 1500, rendering in the page's own raster as wide
+ * grey highlighter bands over the black handwriting. No fixture contains
+ * both `5` and `11`, which is what an id superseded across a firmware
+ * generation looks like -- the same pattern as `1` -> `16` for the ink pen. */
 const PEN_IDS: Record<number, StrokePen> = {
 	10: 'needlePoint',
 	16: 'inkPen',
 	11: 'marker',
+	5: 'marker',
+	15: 'calligraphy',
+};
+
+/** Grey `color` values that older firmware stored as *ids* rather than as
+ * the grey level they render at, mapped to the levels current firmware
+ * stores directly. Only `.note` files old enough to predate the change use
+ * them -- here, only `test.note` (`SN_FILE_VER_20220011`, A5X).
+ *
+ * Without this a stroke's color is simply wrong: `48` is dark grey, not the
+ * near-black `rgb(48,48,48)` reads as. Supernote's own vector export of
+ * that fixture (`test.pdf`) settles which grey each id means, the same
+ * ground truth the canonical 157/201 palette comes from. Its page 1 draws
+ * exactly three ink colors, and each one's paths land on one of our
+ * decoded color groups with nothing left over:
+ *
+ * | our `color` | device draws | extents agree to | our points inside it |
+ * |---|---|---|---|
+ * | `0` (34 strokes) | `0` | 0-2 px | 100% |
+ * | `48` (21 strokes) | **157** | 0-2 px | 100% |
+ * | `81` (3 strokes) | **201** | 14-16 px, i.e. the band's own half width | 100% |
+ *
+ * The `+1` marker forms (`49`, `81`) map to the `+1` forms of the same
+ * greys, keeping that rule (see `PEN_IDS`) true in both encodings -- the
+ * device's export draws a marker at the base grey either way, exactly as it
+ * does for a modern marker storing 158/202. Only `48` and `81` occur in any
+ * fixture; `49` and `80` are their unobserved counterparts, included
+ * because leaving half of a pair out would decode one marker correctly and
+ * its pen wrongly.
+ *
+ * Applied unconditionally rather than gated on the file version, which
+ * `parseStrokes` never sees -- it is handed a `TOTALPATH` buffer, not the
+ * header. Safe because these four values are not grey levels any firmware
+ * stores: the real palette is 0/157/158/201/202/254, plus 255 for the
+ * eraser. A color device could in principle put a literal 48 here, which is
+ * the one thing that would need the version gate. */
+const LEGACY_GREY_IDS: Record<number, number> = {
+	48: 157,
+	49: 158,
+	80: 201,
+	81: 202,
 };
 
 /** Reserved `color` value meaning "this isn't ink at all, it's an eraser
@@ -191,6 +261,25 @@ const LINK_TAG_STROKE_KIND = '0000';
  * (see `IStroke.isFilledRect`). */
 const FILLED_RECT_STROKE_KIND = '0001';
 
+/** `stroke_kind` of the Stars feature's star mark (see
+ * https://support.supernote.com/1759244-using-titles-keywords-and-stars).
+ * Real, user-created content that renders like any other ink -- unlike
+ * `LINK_TAG_STROKE_KIND`, it is not filtered out.
+ *
+ * It gets its own flag because the device overwrites the record's `pen`
+ * field for it, so that field can't be trusted here: Ratta's own engine
+ * (see `PEN_IDS`) walks every trail on save and, for each one whose
+ * `predictName` -- this field -- equals `fiveStarsSignal`, stores `5` into
+ * `penType` and `100` into `m_thickness`. Both stores are visible in
+ * `flutter_note_lib.dll` at `0x180092f3c` and `0x1800bcc29`, and the one
+ * star record in the fixtures
+ * (`nomad-3.15.27-blank-shapes-and-RTR.note` page 1) reads exactly
+ * `pen=5, thickness=100`. Whatever tool the user had selected is gone, so
+ * `parseStrokes` reports `'unknown'` for a star rather than the `'marker'`
+ * `5` would otherwise decode to -- the id is real, it just isn't this
+ * record's tool. */
+const STAR_MARK_STROKE_KIND = 'fiveStarsSignal';
+
 /** `pen` id of a lasso/selection path. This used to be how such records were
  * identified; `RECORD_CLASS.LASSO` is now, because it states the record's
  * kind rather than inferring it from a pen id that firmware reuses across
@@ -220,11 +309,12 @@ const STROKE_CONFIG = {
 	PEN_OFFSET: 0,
 	COLOR_OFFSET: 4,
 	THICKNESS_OFFSET: 8,
-	/** 52-byte C string -- see `LINK_TAG_STROKE_KIND`'s doc comment for the
-	 * one value this module actually checks for (`"0000"`); real ink always
-	 * reads `"others"` (or, once, `"fiveStarsSignal"` for the Stars
-	 * feature's star mark -- still real, user-drawn ink), and a 2-point rect
-	 * record always reads `"0001"`. */
+	/** 52-byte C string -- Ratta's own name for it is `predictName` (see
+	 * plans/vector-format-spec.md Part 1.4). Real ink always reads
+	 * `"others"`; the special values this module checks for are
+	 * `LINK_TAG_STROKE_KIND` (`"0000"`), `FILLED_RECT_STROKE_KIND`
+	 * (`"0001"`, a 2-point rect record) and `STAR_MARK_STROKE_KIND`
+	 * (`"fiveStarsSignal"`, still real user-drawn ink). */
 	STROKE_KIND_OFFSET: 48,
 	STROKE_KIND_SIZE: 52,
 	/** In the same device units `parseStrokes`' `scale` divides through --
@@ -573,16 +663,24 @@ export function parseStrokes(
 		// as a guard against one record in `sticker.note` whose StrokeConfig
 		// isn't a StrokeConfig at all.
 		const isLassoPath = raw?.recordClass === RECORD_CLASS.LASSO || raw?.pen === LASSO_PEN_ID;
+		const isStarMark = raw?.strokeKind === STAR_MARK_STROKE_KIND;
 		if (raw && !isLinkTag && !isLassoPath && (!isEraser || options.includeErasers)) {
 			const scale = raw.screenHeight / pageHeight;
+			// An older file stores some greys as ids -- see LEGACY_GREY_IDS.
+			// Read after the isEraser test above, which keys on the reserved
+			// 255 this never touches.
+			const grey = LEGACY_GREY_IDS[raw.color] ?? raw.color;
 			strokes.push({
 				points: raw.points.map(([y, x]) => ({ x: -x / scale + pageWidth, y: y / scale })),
-				color: `rgb(${raw.color},${raw.color},${raw.color})`,
-				pen: PEN_IDS[raw.pen] ?? 'unknown',
+				color: `rgb(${grey},${grey},${grey})`,
+				// A star mark's `pen` was overwritten by the device and names
+				// no tool -- see `STAR_MARK_STROKE_KIND`.
+				pen: isStarMark ? 'unknown' : (PEN_IDS[raw.pen] ?? 'unknown'),
 				thickness: raw.thickness,
 				...(isEraser ? { isEraser: true } : {}),
 				...(raw.trailStatus !== 0 ? { trailStatus: raw.trailStatus } : {}),
 				...(raw.strokeKind === FILLED_RECT_STROKE_KIND ? { isFilledRect: true } : {}),
+				...(isStarMark ? { isStarMark: true } : {}),
 				...(raw.contour ? { contour: raw.contour } : {}),
 			});
 		}

@@ -263,11 +263,11 @@ function boundsOverlap(a: StrokeBounds, b: StrokeBounds): boolean {
  * Confirmed on the device's own renders of three fixtures, in both
  * directions:
  *
- * - `nomad-3.15.27-blank-shapes-and-RTR.note` page 1's "TEXT HIGHLIGHT"
- *   bands and `nomad-3.26.40-link-tag-3p.note` page 1's grey marker rows --
+ * - `blank-a6x-3.15.27-shapes-rtr.note` page 1's "TEXT HIGHLIGHT"
+ *   bands and `link-n6-3.26.40-partial-erase-3p.note` page 1's grey marker rows --
  *   grey marker records written *after* the black pen strokes they cross,
  *   which the device still draws with the black ink fully legible on top.
- * - `sticker.note` page 2 -- a *black* marker line drawn across the sticker
+ * - `sticker-n5-20260016-plugin-artwork.note` page 2 -- a *black* marker line drawn across the sticker
  *   plugin's artwork, which the device draws over the top, hiding the
  *   sticker's own white detail strokes where the line crosses them (see
  *   https://github.com/philips/supernote-typescript/issues/82). Sorting
@@ -276,8 +276,8 @@ function boundsOverlap(a: StrokeBounds, b: StrokeBounds): boolean {
  *
  * White is the exception the darkness rule can't express: a white marker is
  * never a highlight, it's a cover-up, and the device draws it over whatever
- * it crosses -- `erase.note` page 1 and `erase-pen.note` page 2 (white
- * marker over a black marker band) and `nomad-3.26.40-link-tag-3p.note`
+ * it crosses -- `erase-n5-20260016-all-mechanisms.note` page 1 and `erase-n5-20260016-white-pen-cover.note` page 2 (white
+ * marker over a black marker band) and `link-n6-3.26.40-partial-erase-3p.note`
  * page 1's white marker row (over black pen lines), all of which the device
  * renders as the white winning.
  *
@@ -502,7 +502,7 @@ interface InkMask {
  * doc comment), so alpha alone already distinguishes real ink from
  * background. The brightness check just silently excluded genuine *white*
  * ink as if it were background instead -- confirmed against a real white-pen
- * stroke (see stroke-isolation.note, issue #56's follow-up investigation),
+ * stroke (see stroke-n5-20260016-isolation-tools-colors-widths.note, issue #56's follow-up investigation),
  * which undercounted coverage and made color sampling unable to ever detect
  * a white pen. */
 function buildInkMask(page: IPage, pageWidth: number, pageHeight: number): InkMask | null {
@@ -562,7 +562,7 @@ const INK_PRESENCE_SAMPLE_COUNT = 60;
  * for** -- i.e. those with no `IStroke.trailStatus`. Erasing *is* recorded
  * per stroke (see that field), so this no longer decides anything about
  * erased ink; what it still catches is a stroke that is invisible without
- * having been erased at all. `erase.note`'s rows were covered over with
+ * having been erased at all. `erase-n5-20260016-all-mechanisms.note`'s rows were covered over with
  * *white ink* rather than erased, and Supernote's own export of that page
  * draws only the white. Dropping the hidden stroke is not the only way that
  * page could come out right -- a cover-up is recorded after the ink it
@@ -598,7 +598,7 @@ const INK_PRESENCE_GREY_TOLERANCE = 48;
  *
  * What is left for this to do is the opposite case -- a stroke the file
  * says is live that nonetheless isn't visible, because later *white ink*
- * was drawn over it (`erase.note`; see `MAX_HIDDEN_INK_PRESENCE`). Those
+ * was drawn over it (`erase-n5-20260016-all-mechanisms.note`; see `MAX_HIDDEN_INK_PRESENCE`). Those
  * carry no status, so only the render knows.
  *
  * `displayColor` is the color the stroke is *rendered* in rather than
@@ -788,7 +788,7 @@ function sampleRect(
 /** Converts `IStroke.thickness` (an opaque on-device unit -- see its own doc
  * comment) to an SVG stroke-width in page pixels. `thickness / 100` is the
  * real unit: hundredths of a page pixel, confirmed two independent ways
- * against `headings-and-marker.pdf` (Supernote's own PDF export, which draws
+ * against `heading-n5-20260016-backgrounds-marker.pdf` (Supernote's own PDF export, which draws
  * ink in the page's own pixel space) -- every width-slider position maps to
  * a clean integer pixel width this way (0.1->200->2px, ... 1.0->1200->12px,
  * marker->3800->38px), and each stroke's own `bounding_tl`/`br` extents (not
@@ -834,7 +834,7 @@ function polylineLength(points: IStrokePoint[]): number {
  * older ink pen (`pen=1`, everything from the A5X and Nomad fixtures)
  * renders **1.5-2x wider** than nominal, which is what made `vectorInk`
  * output look consistently too thin next to the same page's raster.
- * Confirmed end-to-end against `a5x-2.14.28.pdf`, Supernote's own vector
+ * Confirmed end-to-end against `ink-a5x-2.14.28-old-pen-width.pdf`, Supernote's own vector
  * export of one of those pages: drawing every stroke at nominal width laid
  * down only 40% of the ink the device does.
  *

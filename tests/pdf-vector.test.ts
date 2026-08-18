@@ -72,15 +72,15 @@ describe('extractPageForms', () => {
 describe('extractPageForms on the shipped exports', () => {
 	const pageCounts: Record<string, number[]> = {
 		// the two fixtures whose export draws nothing on a trailing page --
-		// page 3 of sticker is blank, page 3 of straight-line is erased away
-		'sticker.pdf': [1, 1, 0],
-		'straight-line.pdf': [1, 1, 0],
+		// page 3 of sticker is blank, page 3 of line-n5-20260016-ruler-tool is erased away
+		'sticker-n5-20260016-plugin-artwork.pdf': [1, 1, 0],
+		'line-n5-20260016-ruler-tool.pdf': [1, 1, 0],
 		// four pens, every stroke erased: a vector export that draws nothing
-		'erase-no-white-pen.pdf': [0],
-		'nomad-3.26.40-blank-2p.pdf': [0, 0],
+		'erase-n5-20260016-no-white-pen.pdf': [0],
+		'blank-a6x-3.26.40-two-pages.pdf': [0, 0],
 		// and a couple that do draw on every page
-		'caligraphy.pdf': [1, 1, 1, 1],
-		'stroke-isolation.pdf': [1, 1, 1, 1, 1],
+		'caligraphy-n5-20260016-widths-erase.pdf': [1, 1, 1, 1],
+		'stroke-n5-20260016-isolation-tools-colors-widths.pdf': [1, 1, 1, 1, 1],
 	}
 
 	for (const [file, expected] of Object.entries(pageCounts)) {

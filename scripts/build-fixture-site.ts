@@ -35,64 +35,64 @@ const COLOPHON = `<p class="colophon"><a href="${REPO_URL}">supernote-typescript
 /** What each fixture is for, and anything notable about how it renders.
  * Fixtures with nothing recorded here still appear; they just carry no note. */
 const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
-	'straight-line': {
+	'line-n5-20260016-ruler-tool': {
 		isolates: 'The ruler tool — the only fixture producing stroke_kind "straightLine".',
 		note: 'These records store just two endpoints, and any two-point record used to be read as a filled rectangle, so page 1\'s six lines rendered as three degenerate invisible boxes. Rect-ness now comes from the record\'s own stroke_kind.',
 	},
-	horizontal_1270: {
+	'erase-n6-20230015-horizontal-1270': {
 		isolates: 'Erasing, with the tightest ground truth here — its PDF names stroke by stroke what survived.',
 		note: 'Draws exactly the 61 of 82 decoded strokes the device does. The doubled "0" in "1270" is gone: that digit was written, erased and rewritten in place, so the erased copy still found about 30% of its own points over black ink.',
 	},
-	test: {
+	'test-a5x-20220011-old-pen-ids': {
 		isolates: 'The oldest file here (SN_FILE_VER_20220011, A5X) — the only one on the older ids: ink pen 1, marker 5, and colours stored as palette ids rather than greys.',
 		note: 'Its three pen=5 strokes are a highlighter pass over the first line, which is what identifies 5 as the marker. Its export is also what decoded the old colour ids: 48 is dark grey and 81 light grey, each device colour group landing on one of ours to within a stroke half width. Reading them literally made dark grey nearly black and cost the page 16 of its 58 strokes, which the ink-presence check dropped as invisible after hunting for a shade the raster never held.',
 	},
-	'a5x-2.14.28': {
+	'ink-a5x-2.14.28-old-pen-width': {
 		isolates: 'The older ink pen (pen=1), and a rare 1:1 export — 146 filled outlines for 146 decoded strokes.',
 		note: 'This pen renders about twice its nominal width. Drawing at nominal laid down 40% of the device\'s ink; measuring each stroke\'s own contour brings that to 84%.',
 	},
-	caligraphy: {
+	'caligraphy-n5-20260016-widths-erase': {
 		isolates: 'The calligraphy pen at three width settings; page 4 is a page erased down to one word.',
 		note: 'A chisel nib lays down far less ink than its width implies — the opposite of the ink pen. Nominal covered about 1.9x the device\'s ink.',
 	},
-	'stroke-isolation': {
+	'stroke-n5-20260016-isolation-tools-colors-widths': {
 		isolates: 'One variable per page: page 2 the pen tools, page 3 colours, page 4 width settings, page 5 marker black and white.',
 		note: 'Page 4 is the width calibration. Its PDF states each width as a number rather than drawing an outline — 12, 7, 4, 2 — and widths measured from the contour land on 12.01, 7.02, 4.05, 1.99 without consulting the pen or the thickness setting.',
 	},
-	'erase-pen': {
+	'erase-n5-20260016-white-pen-cover': {
 		isolates: 'Erasing with a white pen rather than the eraser tool. Page 4 is the control, dark ink only.',
 		note: 'Not erasing in the format\'s terms: both strokes are ordinary ink, and the page is right as long as the white is painted after the dark — which is what the device\'s own export does.',
 	},
-	'erase-colors': {
+	'erase-n5-20260016-mixed-colors': {
 		isolates: 'Grey marker bands through black pen writing, then erased. Page 1 is the control, no erasers.',
 		note: 'The case that would catch the survival check\'s colour matching being too loose. The control matching the erased page is what shows erasing is not skewing the result.',
 	},
-	erase: {
+	'erase-n5-20260016-all-mechanisms': {
 		isolates: 'Every erase mechanism on one page, plus white-ink cover-ups.',
 		note: 'All ten dark strokes were erased, so only the four white cover-up strokes render — which is also all the device draws.',
 	},
-	'erase-no-white-pen': {
+	'erase-n5-20260016-no-white-pen': {
 		isolates: 'Four pens, every stroke erased, no white-ink cover-ups.',
 		note: 'Renders blank on purpose, and the device\'s export draws nothing either — so this page has no vector ink on either side.',
 	},
-	'headings-and-marker': {
+	'heading-n5-20260016-backgrounds-marker': {
 		isolates: 'The Heading feature — four background styles — separated from the marker tool.',
 		note: 'Heading fills and their auto-contrast label colours come from the note\'s own TITLE_ footer metadata, giving the exact design palette rather than the raster\'s quantised greys.',
 	},
-	sticker: {
+	'sticker-n5-20260016-plugin-artwork': {
 		isolates: 'The sticker plugin — artwork placed as ordinary stroke records, in a shape the centreline model cannot express.',
 		note: 'The one page whose ratio is wrong about it. Page 2\'s sticker is filled the way a person fills a shape with a pen, black strokes doubling back over themselves with white carved back over the top, so our 22 overlapping outlines get summed where the device\'s export merges its black into a single path counted once. Rasterised instead of summed, the ink we lay down covers 42,704 square pixels against the device\'s 42,800 — the picture agrees even where the number says 1.36×. The black marker line across it is also what settled draw order: sorting every marker under the pen ink drew the sticker over the line, where the device draws the line over the sticker.',
 	},
-	turkish: {
+	'turkish-a6x-20230015-handwriting-erase': {
 		isolates: 'Dense handwriting with erasures throughout, then rewritten in place.',
 		note: 'Long read as the case no cutoff could get right, because survival measured across its erased strokes runs smoothly from 0% to 95%. It was measuring the replacement: the device draws 152 paths for the 152 records reading m_trailStatus 0, and none of the 37 marked ones.',
 	},
-	'nomad-3.26.40-link-tag-3p': {
+	'link-n6-3.26.40-partial-erase-3p': {
 		isolates: 'Partial erasing — the one firmware that splits a stroke instead of removing it, and stores what it left behind.',
 		note: 'Page 2 settles what a partial erase looks like: each erased line is marked and the pieces the eraser left are written as separate records carrying only an outline. The device draws exactly those pieces — 5, 4, 4, 5, 5, 5, 5 of them across its seven lines, at the same positions to the pixel — and never the line they came from. Page 3 erases and rewrites in place, where a stroke\'s own ink and its replacement\'s sit on top of each other; the export draws 113 paths for its 113 live records.',
 	},
-	'nomad-3.15.27-blank-shapes-and-RTR': { isolates: 'Shapes, patterns, Headings and keyword highlighting.' },
-	'nomad-3.26.40-blank-2p': {
+	'blank-a6x-3.15.27-shapes-rtr': { isolates: 'Shapes, patterns, Headings and keyword highlighting.' },
+	'blank-a6x-3.26.40-two-pages': {
 		isolates: 'An export that draws nothing at all, on either of its pages.',
 		note: 'Blank on both sides is a result here, not a gap — the device\'s export carries no vector ink for either page, and neither do we. It reads as the weakest fixture and is closer to the opposite: nothing else in the corpus states outright that a page is empty.',
 	},
@@ -101,9 +101,9 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 
 /** Fixtures worth seeing first — the rest follow alphabetically. */
 const FEATURED = [
-	'straight-line', 'horizontal_1270', 'a5x-2.14.28', 'caligraphy',
-	'stroke-isolation', 'erase-pen', 'erase-colors', 'erase', 'erase-no-white-pen',
-	'headings-and-marker', 'sticker', 'turkish',
+	'line-n5-20260016-ruler-tool', 'erase-n6-20230015-horizontal-1270', 'ink-a5x-2.14.28-old-pen-width', 'caligraphy-n5-20260016-widths-erase',
+	'stroke-n5-20260016-isolation-tools-colors-widths', 'erase-n5-20260016-white-pen-cover', 'erase-n5-20260016-mixed-colors', 'erase-n5-20260016-all-mechanisms', 'erase-n5-20260016-no-white-pen',
+	'heading-n5-20260016-backgrounds-marker', 'sticker-n5-20260016-plugin-artwork', 'turkish-a6x-20230015-handwriting-erase',
 ];
 
 const escapeHtml = (s: string) =>

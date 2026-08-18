@@ -73,13 +73,13 @@ Only step 3–4 can run in parallel in Workers. PDF assembly (step 5 for PDF) mu
 
 Binary `.note` files and corresponding device-exported `.pdf` files live in `tests/input/`.
 
-- Adding a new fixture: drop `<name>.note` + `<name>.pdf` into `tests/input/`.
+- Adding a new fixture: follow the naming convention `{purpose}-{device}-{version}-{description}.note` (e.g. `erase-n5-20260016-mixed-colors.note`). Device is `APPLY_EQUIPMENT` in lowercase; version is `SN_FILE_VER` or firmware version. Pair with an identically-named `.pdf` if you have a device export.
 - Document the fixture in `tests/input/README.md` (catalogue of what each fixture isolates).
 - Add it to `FIXTURE_NOTES` in `scripts/build-fixture-site.ts` so the comparison site gets a page.
 
 ### Fixture comparison site
 
-`npm run build:site` renders `toSvg({ vectorInk: true })` side-by-side with the device PDF export, page by page. The per-page "ink ratio" is a coarse area-based metric (not unioned), so overlapping strokes from our side read artificially high against merged-device paths — look at the image, not just the number. `sticker` page 2 is the canonical example of this skew.
+`npm run build:site` renders `toSvg({ vectorInk: true })` side-by-side with the device PDF export, page by page. The per-page "ink ratio" is a coarse area-based metric (not unioned), so overlapping strokes from our side read artificially high against merged-device paths — look at the image, not just the number. `sticker-n5-20260016-plugin-artwork` page 2 is the canonical example of this skew.
 
 CI builds the site on PRs as a downloadable artifact; merges to `main` publish to GitHub Pages via `.github/workflows/pages.yml`.
 

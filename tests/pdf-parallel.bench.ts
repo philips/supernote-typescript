@@ -50,7 +50,7 @@ function createPool(size: number) {
 	return { render, terminate };
 }
 
-const file = "1to10.note";
+const file = "demo-a5x-20230015-1to10.note";
 const sn = new SupernoteX(readFileToUint8Array(file));
 const poolSize = Math.max(2, Math.min(4, os.cpus().length));
 const pool = createPool(poolSize);

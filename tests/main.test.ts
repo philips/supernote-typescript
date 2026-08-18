@@ -19,7 +19,7 @@ function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
 
 describe("smoke", () => {
   test("opens the test note", async () => {
-    const buf = await readFileToUint8Array("test.note")
+    const buf = await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note")
     expect(buf.byteLength).toEqual(263119)
   })
 
@@ -30,25 +30,25 @@ describe("smoke", () => {
   })
 
   test("should parse a Supernote X file", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"))
     expect(sn).not.toBeUndefined()
   })
 })
 
 describe("image", () => {
   test("convert a simple note to png pages", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await imagejs.writeSync(`tests/output/test.note-${index}.png`, image)
+      await imagejs.writeSync(`tests/output/test-a5x-20220011-old-pen-ids.note-${index}.png`, image)
     }
   })
 })
 
 describe("links", () => {
   test("appends #PageN anchor to same-file links via PAGEID; cross-file and no-page links have no anchor", async () => {
-    let sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    let sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"))
     const allLinks = Object.values(sn.links).flat()
     // Link to page 1 of the same file should include the page anchor.
     const sameFileLink = allLinks.find(l => l.text.startsWith("nomad-3.26.40-link-tag-3p"))
@@ -64,7 +64,7 @@ describe("links", () => {
   })
 
   test("the links Record key's first 4 characters are the 1-indexed source page, not OBJPAGE", async () => {
-    let sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    let sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"))
     // All 3 links in this fixture are physically drawn on the same page
     // (source page array-index 1, i.e. page 2), so every key shares that
     // page's 1-indexed prefix, "0002" -- see _parseLinks()'s doc comment.
@@ -85,53 +85,53 @@ describe("links", () => {
 
 describe("digest_image", () => {
   test("convert a mark file into a png image", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("digest_test.mark"))
+    const sn = new SupernoteX(await readFileToUint8Array("digest-n5-20230015-test.mark"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await imagejs.writeSync(`tests/output/digest_test.mark-${index}.png`, image)
+      await imagejs.writeSync(`tests/output/digest-n5-20230015-test.mark-${index}.png`, image)
     }
   })
 })
 
 describe("nomad", () => {
   test("convert a note from a nomad Chauvet 3.15.27 to png pages", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-2p.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("blank-a6x-3.15.27-two-pages.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await imagejs.writeSync(`tests/output/nomad-3.15.27-blank-2p.note-${index}.png`, image)
+      await imagejs.writeSync(`tests/output/blank-a6x-3.15.27-two-pages.note-${index}.png`, image)
     }
   })
 
   test("convert a note from a nomad Chauvet 3.15.27 with handwriting recognition to png pages", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("blank-a6x-3.15.27-shapes-rtr.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await imagejs.writeSync(`tests/output/nomad-3.15.27-blank-shapes-and-RTR.note-${index}.png`, image)
+      await imagejs.writeSync(`tests/output/blank-a6x-3.15.27-shapes-rtr.note-${index}.png`, image)
     }
   })
 })
 
 describe("A5X", () => {
   test("convert a note from a A5X with Chauvet 2.14.28 to png pages", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await imagejs.writeSync(`tests/output/a5x-2.14.28.note-${index}.png`, image)
+      await imagejs.writeSync(`tests/output/ink-a5x-2.14.28-old-pen-width.note-${index}.png`, image)
     }
   })
 })
 
 describe("manta", () => {
   test("convert a note from a A5X2 Manta with Chauvet ??? to png pages", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("manta.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("blank-n5-20230015-manta.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
-      await imagejs.writeSync(`tests/output/manta.note-${index}.png`, image)
+      await imagejs.writeSync(`tests/output/blank-n5-20230015-manta.note-${index}.png`, image)
     }
   })
 })
@@ -139,33 +139,33 @@ describe("manta", () => {
 describe("horizontal orientation value detection", () => {
   // Ensure horizontal orientation values (1090 and 1270) are read as horizontal
   test("convert a horizontal note from a A5X2 Manta w/ orientation value 1090", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("horizontal_1090.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("layout-n5-20230015-horizontal-1090.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
       expect(image.width).toBeGreaterThan(image.height); // expect a landscape image
-      await imagejs.writeSync(`tests/output/horizontal_1090.note-${index}.png`, image);
+      await imagejs.writeSync(`tests/output/layout-n5-20230015-horizontal-1090.note-${index}.png`, image);
     }
   })
 
 	test('convert a horizontal note from a A6X2 Nomad w/ orientation value 1270', { timeout: 30000 }, async () => {
-		const sn = new SupernoteX(await readFileToUint8Array('horizontal_1270.note'));
+		const sn = new SupernoteX(await readFileToUint8Array('erase-n6-20230015-horizontal-1270.note'));
 		const images = await toImage(sn);
 		expect(images).not.toBeUndefined();
 		for await (const [index, image] of images.entries()) {
 			expect(image.width).toBeGreaterThan(image.height); // expect a landscape image
-			await imagejs.writeSync(`tests/output/horizontal_1270.note-${index}.png`, image);
+			await imagejs.writeSync(`tests/output/erase-n6-20230015-horizontal-1270.note-${index}.png`, image);
 		}
 	});
 
   // Ensure vertical orientation values (1000, 1180) are still read as vertical
 	test('convert a vertical note w/ orientation value 1000', { timeout: 30000 }, async () => {
-		const sn = new SupernoteX(await readFileToUint8Array('vertical_1000.note'));
+		const sn = new SupernoteX(await readFileToUint8Array('layout-n5-20230015-vertical-1000.note'));
 		const images = await toImage(sn);
 		expect(images).not.toBeUndefined();
 		for await (const [index, image] of images.entries()) {
 			expect(image.height).toBeGreaterThan(image.width); // expect a portrait image
-			await imagejs.writeSync(`tests/output/vertical_1000.note-${index}.png`, image);
+			await imagejs.writeSync(`tests/output/layout-n5-20230015-vertical-1000.note-${index}.png`, image);
 		}
 	});
 
@@ -173,12 +173,12 @@ describe("horizontal orientation value detection", () => {
 		'convert a vertical note from a A6X2 Nomad w/ orientation value 1180',
 		{ timeout: 30000 },
 		async () => {
-			const sn = new SupernoteX(await readFileToUint8Array('vertical_1180.note'));
+			const sn = new SupernoteX(await readFileToUint8Array('layout-n6-20230015-vertical-1180.note'));
 			const images = await toImage(sn);
 			expect(images).not.toBeUndefined();
 			for await (const [index, image] of images.entries()) {
 				expect(image.height).toBeGreaterThan(image.width); // expect a portrait image
-				await imagejs.writeSync(`tests/output/vertical_1180.note-${index}.png`, image);
+				await imagejs.writeSync(`tests/output/layout-n6-20230015-vertical-1180.note-${index}.png`, image);
 			}
 		},
 	);
@@ -186,7 +186,7 @@ describe("horizontal orientation value detection", () => {
 
 describe("color", () => {
   test("test a note that has an unknown color", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("unknown-color.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("color-n6-20230015-unknown-palette.note"))
     const images = await toImage(sn)
     expect(images).not.toBeUndefined()
     for await (const [index, image] of images.entries()) {
@@ -197,7 +197,7 @@ describe("color", () => {
 
 describe("rtr", () => {
   test("test a note that has paragraphs", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("rtr-n5-20230015-recognition.note"))
 
     const ep = [
       'Real time recognition paragraph test',
@@ -300,7 +300,7 @@ describe('profile', () => {
   });
   describe("test ordering", () => {
     test("ensure that pages 1 to 10 are oredered correctly", async () => {
-      let sn = new SupernoteX(await readFileToUint8Array("1to10.note"))
+      let sn = new SupernoteX(await readFileToUint8Array("demo-a5x-20230015-1to10.note"))
       let images = await toImage(sn)
       expect(images).not.toBeUndefined()
       for await (const [index, image] of images.entries()) {
@@ -366,7 +366,7 @@ describe("mirror", () => {
 
 describe("keywords", () => {
   test("parses all keyword stars with correct text and page via key prefix", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"))
 
     const allKeywords = Object.entries(sn.keywords).flatMap(([key, kws]) =>
       kws.map(kw => ({ key, kw }))
@@ -394,7 +394,7 @@ describe("keywords", () => {
   })
 
   test("page 3 OCR text includes the # new tag line that maps to the keyword", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"))
     const page3Text = sn.pages[2].text
     expect(page3Text).toContain("# new tag")
     expect(page3Text).toContain("# TITLE")

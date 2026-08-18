@@ -112,11 +112,11 @@ export function boundsOverlap(a: StrokeBounds, b: StrokeBounds): boolean {
  * Confirmed on the device's own renders of three fixtures, in both
  * directions:
  *
- * - `nomad-3.15.27-blank-shapes-and-RTR.note` page 1's "TEXT HIGHLIGHT"
- *   bands and `nomad-3.26.40-link-tag-3p.note` page 1's grey marker rows --
+ * - `blank-a6x-3.15.27-shapes-rtr.note` page 1's "TEXT HIGHLIGHT"
+ *   bands and `link-n6-3.26.40-partial-erase-3p.note` page 1's grey marker rows --
  *   grey marker records written *after* the black pen strokes they cross,
  *   which the device still draws with the black ink fully legible on top.
- * - `sticker.note` page 2 -- a *black* marker line drawn across the sticker
+ * - `sticker-n5-20260016-plugin-artwork.note` page 2 -- a *black* marker line drawn across the sticker
  *   plugin's artwork, which the device draws over the top, hiding the
  *   sticker's own white detail strokes where the line crosses them (see
  *   https://github.com/philips/supernote-typescript/issues/82). Sorting
@@ -125,9 +125,9 @@ export function boundsOverlap(a: StrokeBounds, b: StrokeBounds): boolean {
  *
  * White is the exception the darkness rule can't express: a white marker is
  * never a highlight, it's a cover-up, and the device draws it over whatever
- * it crosses -- `erase.note` page 1 and `erase-pen.note` page 2 (white
- * marker over a black marker band) and `nomad-3.26.40-link-tag-3p.note`
- *   page 1's white marker row (over black pen lines), all of which the device
+ * it crosses -- `erase-n5-20260016-all-mechanisms.note` page 1 and `erase-n5-20260016-white-pen-cover.note` page 2 (white
+ * marker over a black marker band) and `link-n6-3.26.40-partial-erase-3p.note`
+ * page 1's white marker row (over black pen lines), all of which the device
  * renders as the white winning.
  *
  * Only ink recorded *before* this stroke is considered: anything recorded

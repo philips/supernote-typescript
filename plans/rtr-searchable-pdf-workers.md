@@ -43,7 +43,7 @@ Let an application render pages in parallel across Web Workers (browser) or `wor
 
 ## Step 1 profiling result (resolves the open question below)
 
-Measured on `tests/input/1to10.note` (10 pages), one-shot timing (not the noisier `vitest bench` warmup average) via `createPdfContext`/`addPdfPage`:
+Measured on `tests/input/demo-a5x-20230015-1to10.note` (10 pages), one-shot timing (not the noisier `vitest bench` warmup average) via `createPdfContext`/`addPdfPage`:
 
 | Phase | Time | Worker-eligible? |
 |---|---|---|

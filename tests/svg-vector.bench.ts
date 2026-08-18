@@ -14,7 +14,7 @@ function readFileToUint8Array(filePath: string): Uint8Array {
 // (see issue #56) -- i.e. where vectorInk actually replaces the rasterized
 // ink rather than silently falling back to it, so these numbers reflect the
 // real cost of the vector path, not a no-op.
-const files = ["a5x-2.14.28.note", "horizontal_1270.note", "test.note"];
+const files = ["ink-a5x-2.14.28-old-pen-width.note", "erase-n6-20230015-horizontal-1270.note", "test-a5x-20220011-old-pen-ids.note"];
 
 // Compares the existing raster-only export paths (toImage for PNG, toPdf)
 // against toSvg's vectorInk option, to quantify what switching a page's ink

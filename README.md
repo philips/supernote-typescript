@@ -179,7 +179,7 @@ fixtures in more depth.
 The per-page ink ratio is a blunt measure by design, and blunt in one
 direction worth knowing: it sums each path's area instead of unioning them,
 so a page we draw as many overlapping strokes reads high against an export
-that merged its ink into a single path. `sticker` page 2 is the standing
+that merged its ink into a single path. `sticker-n5-20260016-plugin-artwork` page 2 is the standing
 example. Read the ratio next to the picture, not instead of it.
 
 The scripts behind it are TypeScript like the rest of the repo, built by

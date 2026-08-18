@@ -32,9 +32,9 @@ function getPageContentString(pdf: PDFDocument, pageIndex: number): string {
 
 describe("pdf", () => {
   test("generates a searchable PDF with an RTR text layer", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("rtr-n5-20230015-recognition.note"))
     const pdfBytes = await toPdf(sn)
-    await fs.writeFile("tests/output/rtr.note.pdf", pdfBytes)
+    await fs.writeFile("tests/output/rtr-n5-20230015-recognition.note.pdf", pdfBytes)
 
     const parser = new PDFParse({ data: pdfBytes })
     const result = await parser.getText()
@@ -46,7 +46,7 @@ describe("pdf", () => {
   })
 
   test("handles a note with recognition data from a nomad device", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("blank-a6x-3.15.27-shapes-rtr.note"))
     const pdfBytes = await toPdf(sn)
     expect(pdfBytes.byteLength).toBeGreaterThan(0)
 
@@ -57,7 +57,7 @@ describe("pdf", () => {
   })
 
   test("handles a note with no recognition data without throwing", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"))
     const pdfBytes = await toPdf(sn)
     expect(pdfBytes.byteLength).toBeGreaterThan(0)
   })
@@ -69,7 +69,7 @@ describe("pdf", () => {
     //     (it requires 8-bit RGBA); and
     // (2) recognized handwriting containing characters (e.g. "→") the default
     //     Helvetica font can't encode, which previously aborted the whole PDF.
-    const sn = new SupernoteX(await readFileToUint8Array("moonchild-user-bg-and-bad-glyph.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("render-n6-20230015-moonchild-user-bg.note"))
     const pdfBytes = await toPdf(sn)
     expect(pdfBytes.byteLength).toBeGreaterThan(0)
 
@@ -83,7 +83,7 @@ describe("pdf", () => {
   })
 
   test("toPdf() produces text equivalent to manual createPdfContext + addPdfPage composition", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("rtr-n5-20230015-recognition.note"))
 
     const viaToPdf = await toPdf(sn)
 
@@ -106,7 +106,7 @@ describe("pdf", () => {
   })
 
   test("addPdfPage accepts either an Image or pre-encoded PNG bytes with equivalent output", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("rtr-n5-20230015-recognition.note"))
     const [image] = await toImage(sn, [1])
 
     const ctxWithImage = await createPdfContext()
@@ -129,7 +129,7 @@ describe("pdf", () => {
   })
 
   test("addTextOnlyPdfPage produces the same searchable text as addPdfPage, without embedding an image", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("rtr-n5-20230015-recognition.note"))
     const images = await toImage(sn)
 
     const ctxWithImage = await createPdfContext()
@@ -174,7 +174,7 @@ describe("pdf", () => {
   })
 
   test("toPdf({ vectorInk: true }) renders the searchable text layer unchanged", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("rtr-n5-20230015-recognition.note"))
     const pdfBytes = await toPdf(sn, { vectorInk: true })
     expect(pdfBytes.byteLength).toBeGreaterThan(0)
 
@@ -188,7 +188,7 @@ describe("pdf", () => {
   })
 
   test("toPdf({ vectorInk: true }) draws ink as vector paths instead of embedding it in the page image", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"))
     const pdfBytes = await toPdf(sn, { vectorInk: true })
     const pdf = await PDFDocument.load(pdfBytes)
     const content = getPageContentString(pdf, 0)
@@ -199,7 +199,7 @@ describe("pdf", () => {
   })
 
   test("vectorInk PDF and SVG use the same vector-ink pipeline", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"))
     const [svg] = await toSvg(sn, { vectorInk: true, includeText: false })
     const pdfBytes = await toPdf(sn, { vectorInk: true })
     const pdf = await PDFDocument.load(pdfBytes)
@@ -215,7 +215,7 @@ describe("pdf", () => {
   })
 
   test("handles a note from a non-Manta device (pageWidth 1404, e.g. A5X) without throwing", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"))
     expect(sn.pageWidth).toBe(1404)
 
     const pdfBytes = await toPdf(sn)
@@ -228,7 +228,7 @@ describe("pdf", () => {
   })
 
   test("toPdf({ vectorInk: true, upscale: 2 }) renders without throwing", { timeout: 60000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"))
+    const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"))
     const pdfBytes = await toPdf(sn, { vectorInk: true, upscale: 2 })
     expect(pdfBytes.byteLength).toBeGreaterThan(0)
   })

@@ -16,7 +16,7 @@ function readFileToUint8Array(filePath: string): Uint8Array {
 // the README's documented pattern) vs. the main-thread-only assembly step
 // (createPdfContext + addPdfPage given already-encoded PNG bytes), to decide
 // whether parallelizing render alone (Option A) captures most of the win.
-const file = "1to10.note";
+const file = "demo-a5x-20230015-1to10.note";
 const buf = readFileToUint8Array(file);
 const sn = new SupernoteX(buf);
 const images = await toImage(sn);

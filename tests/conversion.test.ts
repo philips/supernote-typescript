@@ -49,7 +49,7 @@ describe("RattaRLEDecoder.decodeAtScale", () => {
   })
 
   test("factor 1 matches decode() exactly, byte-for-byte, on a real layer's buffer", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
     const layer = sn.pages[0].MAINLAYER;
     expect(layer.bitmapBuffer).not.toBeNull();
 
@@ -68,7 +68,7 @@ describe("RattaRLEDecoder.decodeAtScale", () => {
   })
 
   test("factor N matches a naive nearest-neighbor downsample of decode()'s full output, on a real layer's buffer", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
     const layer = sn.pages[0].MAINLAYER;
     expect(layer.bitmapBuffer).not.toBeNull();
 
@@ -147,7 +147,7 @@ describe("flattenToWhite", () => {
 
 describe("toImage scale option", () => {
   test("renders a downscaled page directly, without decoding at full resolution first", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("blank-a6x-3.15.27-shapes-rtr.note"));
     const scale = 10;
     const images = await toImage(sn, [1], { scale });
     expect(images.length).toBe(1);
@@ -157,7 +157,7 @@ describe("toImage scale option", () => {
   })
 
   test("scale: 1 (default) still matches the previous full-resolution output size", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
     const [withoutOptions] = await toImage(sn, [1]);
     const [withScale1] = await toImage(sn, [1], { scale: 1 });
     expect(withoutOptions.width).toBe(sn.pageWidth);
@@ -167,7 +167,7 @@ describe("toImage scale option", () => {
   })
 
   test("rejects a non-positive-integer scale", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
     // toImage validates scale synchronously (before ever returning a
     // promise), so this throws immediately rather than rejecting.
     expect(() => toImage(sn, [1], { scale: 0 })).toThrow(RangeError);
@@ -176,7 +176,7 @@ describe("toImage scale option", () => {
 
 describe("toImage upscale option", () => {
   test("renders a page bicubic-upscaled by a non-integer factor", { timeout: 60000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("rtr-n5-20230015-recognition.note"));
     const upscale = 1.5;
     const images = await toImage(sn, [1], { upscale });
     expect(images.length).toBe(1);
@@ -186,7 +186,7 @@ describe("toImage upscale option", () => {
   })
 
   test("upscale: 1 (default) still matches the previous full-resolution output size", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
     const [withoutOptions] = await toImage(sn, [1]);
     const [withUpscale1] = await toImage(sn, [1], { upscale: 1 });
     expect(withUpscale1.width).toBe(withoutOptions.width);
@@ -194,7 +194,7 @@ describe("toImage upscale option", () => {
   })
 
   test("combines with scale: downsamples at decode time, then upscales the result", { timeout: 30000 }, async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("rtr.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("rtr-n5-20230015-recognition.note"));
     const scale = 4;
     const upscale = 2;
     const images = await toImage(sn, [1], { scale, upscale });
@@ -205,7 +205,7 @@ describe("toImage upscale option", () => {
   })
 
   test("rejects an upscale factor below 1", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
     expect(() => toImage(sn, [1], { upscale: 0.5 })).toThrow(RangeError);
     expect(() => toImage(sn, [1], { upscale: NaN })).toThrow(RangeError);
   })

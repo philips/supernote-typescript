@@ -12,10 +12,10 @@ function readFileToUint8Array(filePath: string): Uint8Array {
 // Representative fixtures: a small simple note and a couple of larger,
 // multi-page / multi-layer notes to reflect real-world usage.
 const files = [
-	"test.note",
-	"manta.note",
-	"nomad-3.15.27-blank-shapes-and-RTR.note",
-	"a5x-2.14.28.note",
+	"test-a5x-20220011-old-pen-ids.note",
+	"blank-n5-20230015-manta.note",
+	"blank-a6x-3.15.27-shapes-rtr.note",
+	"ink-a5x-2.14.28-old-pen-width.note",
 ];
 
 describe("toImage end-to-end", () => {

@@ -179,6 +179,7 @@ interface PageComparison {
 	deviceSvg: string;
 	oursSvg: string;
 	libraryPdfPath: string;
+	libraryPdf: Uint8Array;
 	deviceInk: number;
 	oursInk: number;
 }
@@ -186,7 +187,6 @@ interface PageComparison {
 interface FixtureComparison {
 	name: string;
 	pages: PageComparison[];
-	libraryPdf: Uint8Array;
 	isolates?: string;
 	note?: string;
 }
@@ -204,7 +204,6 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 
 	const note = new SupernoteX(new Uint8Array(await fs.readFile(path.join(INPUT_DIR, noteFile))));
 	const ours = await toSvg(note, { vectorInk: true, includeText: false });
-	const libraryPdf = await toPdf(note, { vectorInk: true });
 
 	// Page n is page n on both sides now, so a count that disagrees is a real
 	// finding about the fixture rather than something to quietly paper over.
@@ -212,15 +211,23 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 		console.warn(`${name}: export has ${forms.length} pages, note has ${ours.length}; comparing the overlap`);
 	}
 
+	// One single-page PDF per page, embedded directly. Earlier the pane pointed
+	// at the full multi-page PDF via `#page=N`, but embedded PDF viewers (pdf.js
+	// especially) ignore that fragment and render every page, which made the
+	// side-by-side unreadable. A dedicated one-page file leaves each pane
+	// showing only the page it is being compared against.
 	const pages: PageComparison[] = [];
 	for (let i = 0; i < Math.min(forms.length, ours.length); i++) {
+		const pageNumber = i + 1;
 		const device = pdfPageToSvg(forms[i], note.pageHeight);
 		const oursSvg = inkOnly(ours[i]);
+		const libraryPdf = await toPdf(note, { vectorInk: true, pageNumbers: [pageNumber] });
 		pages.push({
-			pageNumber: i + 1,
+			pageNumber,
 			deviceSvg: devicePageToSvgDocument(device, note.pageWidth, note.pageHeight),
 			oursSvg,
-			libraryPdfPath: `${slug(name)}.pdf`,
+			libraryPdfPath: `${slug(name)}-p${pageNumber}.pdf`,
+			libraryPdf,
 			deviceInk: device.inkArea,
 			oursInk: svgInkArea(oursSvg),
 		});
@@ -234,7 +241,7 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 	// ("the device agrees this page is blank") and worth showing as such.
 	if (forms.every((f) => f.length === 0) && pages.some((p) => p.oursInk > 0)) return null;
 	const meta = FIXTURE_NOTES[name] ?? {};
-	return { name, pages, libraryPdf, isolates: meta.isolates, note: meta.note };
+	return { name, pages, isolates: meta.isolates, note: meta.note };
 }
 
 function ratioLabel(ours: number, device: number): { text: string; tone: 'match' | 'near' | 'off' | 'none' } {
@@ -361,7 +368,7 @@ function fixturePage(fx: FixtureComparison): string {
 <div class="stage">
 <div class="pane" data-which="device"><span class="tag">Device</span><div class="art">${p.deviceSvg}</div></div>
 <div class="pane" data-which="ours"><span class="tag tag-ours">Library SVG</span><div class="art">${p.oursSvg}</div></div>
-<div class="pane" data-which="pdf"><span class="tag tag-pdf">Library PDF</span><div class="art"><object data="${escapeHtml(p.libraryPdfPath)}#page=${p.pageNumber}" type="application/pdf" width="100%" height="600"></object></div></div>
+<div class="pane" data-which="pdf"><span class="tag tag-pdf">Library PDF</span><div class="art"><object data="${escapeHtml(p.libraryPdfPath)}" type="application/pdf" width="100%" height="600"></object></div></div>
 </div>
 <button type="button" class="flip" hidden>Cycle through the three</button>
 </figure>`;
@@ -438,7 +445,9 @@ async function main() {
 	await fs.writeFile(path.join(OUT_DIR, '.nojekyll'), '');
 	for (const fixture of built) {
 		await fs.writeFile(path.join(OUT_DIR, `${slug(fixture.name)}.html`), fixturePage(fixture));
-		await fs.writeFile(path.join(OUT_DIR, `${slug(fixture.name)}.pdf`), fixture.libraryPdf);
+		for (const page of fixture.pages) {
+			await fs.writeFile(path.join(OUT_DIR, page.libraryPdfPath), page.libraryPdf);
+		}
 	}
 
 	const pages = built.reduce((n, f) => n + f.pages.length, 0);

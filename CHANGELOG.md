@@ -12,6 +12,14 @@
   library's vector-ink PDF export alongside the device-exported SVG ink and
   the library's vector-ink SVG.
 
+### Fixed
+
+- The fixture comparison site's "Library PDF" pane now embeds a dedicated
+  single-page PDF per page instead of pointing the whole multi-page PDF at
+  an embedded viewer with a `#page=N` fragment (which viewers, pdf.js
+  especially, ignore and render every page). See
+  https://github.com/philips/supernote-typescript/issues/103.
+
 ## [2022-08-11] - 0.1.0
 
 ### Changed

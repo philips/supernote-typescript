@@ -53,6 +53,44 @@ const pdfBytes = await ctx.pdfDoc.save();
 
 Note that only page rendering (`toImage`/`encodePng`) is parallelizable this way — PDF assembly, including the final `pdfDoc.save()`, is a single main-thread operation regardless of how many Workers rendered pages.
 
+#### Vector ink from the parallel/Worker path
+
+`toPdf({ vectorInk: true })` redraws each page's pen strokes as crisp vector paths instead of baking them into the raster image. To reach the same from the parallel/Worker path above, prepare the per-page vector ink on the main thread and hand the resulting strokes/styles through to `addPdfPage`:
+
+```ts
+import {
+  SupernoteX, extractPdfPageData, prepareVectorInkPages, buildRenderNoteForVectorInk, createPdfContext, addPdfPage,
+} from 'supernote-typescript';
+
+const note = new SupernoteX(buffer);
+const pageNumbers = note.pages.map((_, i) => i + 1);
+const vectorInkPages = prepareVectorInkPages(note, pageNumbers, 1); // upscale 1: native resolution
+
+// buildRenderNoteForVectorInk() gives a copy of `note` with the bitmap ink
+// layers stripped from every page whose ink was replaced by vectors, so
+// the worker rasterizes only the background (BGLAYER) for those pages.
+const renderNote = buildRenderNoteForVectorInk(note, vectorInkPages);
+
+// Each page still goes through extractPdfPageData (or extractPageRenderData)
+// for the structured-clone-safe worker slice, but pulled from renderNote so
+// the ink layers are already gone where vectors replaced them.
+const pngBuffers = await Promise.all(
+  pageNumbers.map((n) => renderInWorker(extractPdfPageData(renderNote, n))),
+);
+
+const ctx = await createPdfContext();
+for (let i = 0; i < pageNumbers.length; i++) {
+  const vip = vectorInkPages[i];
+  await addPdfPage(ctx, note.pages[i], pngBuffers[i], {
+    strokes: vip.useVectorInk ? vip.strokes : undefined,
+    strokeStyles: vip.useVectorInk ? vip.styles : undefined,
+  });
+}
+const pdfBytes = await ctx.pdfDoc.save();
+```
+
+`prepareVectorInkPages` decides, per page, whether the decoded strokes are trustworthy enough to replace the rasterized ink (it falls back to the raster for any page whose ink doesn't decode or decodes to nothing), so the only thing the caller does is pass the `strokes`/`strokeStyles` it produced through to `addPdfPage` for the pages where `useVectorInk` is true. Coordinates are in the same native page-pixel space as `toImage`'s raster at `upscale: 1`.
+
 ### Generating searchable SVGs
 
 `toSvg` renders each page to a standalone SVG document: the rasterized page image embedded as a base64 PNG, with the recognized handwriting (RTR) text overlaid invisibly at the position it was written, same as `toPdf`. SVG has no native multi-page container, so `toSvg` returns one SVG string per page.

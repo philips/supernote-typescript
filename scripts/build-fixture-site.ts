@@ -1,12 +1,12 @@
 /**
  * Builds the fixture comparison site: for every fixture that ships with
- * Supernote's own PDF export, each page's device-drawn vector ink next to
- * what `toSvg({ vectorInk: true })` produces.
+ * Supernote's own PDF export, each page shown three ways: the device export,
+ * the library's vector-ink SVG, and the library's vector-ink PDF.
  *
- * Both sides are real SVG and both are ink only -- the device's ink lives in
- * a Form XObject separate from the page's background image, so ours has its
- * background raster stripped to match. What's left on each side is exactly
- * the vector ink, which is the thing being judged.
+ * The device and SVG panes are ink only -- the device's ink lives in a Form
+ * XObject separate from the page's background image, so the SVG has its
+ * background raster stripped to match. The library PDF pane shows the full
+ * page (background + vector ink) as a real PDF export.
  *
  * Run with `npm run build:site`; output lands in `site/`.
  */
@@ -15,6 +15,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { SupernoteX } from '../src/parsing.js';
 import { toSvg } from '../src/svg.js';
+import { toPdf } from '../src/pdf.js';
 import { extractPageForms, pdfPageToSvg, devicePageToSvgDocument } from './pdf-vector.js';
 
 const INPUT_DIR = 'tests/input';
@@ -177,6 +178,7 @@ interface PageComparison {
 	pageNumber: number;
 	deviceSvg: string;
 	oursSvg: string;
+	libraryPdfPath: string;
 	deviceInk: number;
 	oursInk: number;
 }
@@ -184,6 +186,7 @@ interface PageComparison {
 interface FixtureComparison {
 	name: string;
 	pages: PageComparison[];
+	libraryPdf: Uint8Array;
 	isolates?: string;
 	note?: string;
 }
@@ -201,6 +204,7 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 
 	const note = new SupernoteX(new Uint8Array(await fs.readFile(path.join(INPUT_DIR, noteFile))));
 	const ours = await toSvg(note, { vectorInk: true, includeText: false });
+	const libraryPdf = await toPdf(note, { vectorInk: true });
 
 	// Page n is page n on both sides now, so a count that disagrees is a real
 	// finding about the fixture rather than something to quietly paper over.
@@ -216,6 +220,7 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 			pageNumber: i + 1,
 			deviceSvg: devicePageToSvgDocument(device, note.pageWidth, note.pageHeight),
 			oursSvg,
+			libraryPdfPath: `${slug(name)}.pdf`,
 			deviceInk: device.inkArea,
 			oursInk: svgInkArea(oursSvg),
 		});
@@ -229,7 +234,7 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 	// ("the device agrees this page is blank") and worth showing as such.
 	if (forms.every((f) => f.length === 0) && pages.some((p) => p.oursInk > 0)) return null;
 	const meta = FIXTURE_NOTES[name] ?? {};
-	return { name, pages, isolates: meta.isolates, note: meta.note };
+	return { name, pages, libraryPdf, isolates: meta.isolates, note: meta.note };
 }
 
 function ratioLabel(ours: number, device: number): { text: string; tone: 'match' | 'near' | 'off' | 'none' } {
@@ -297,34 +302,44 @@ button{font:inherit;cursor:pointer}
 .mode{font-family:var(--mono);font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--rule);background:var(--ground);color:var(--muted)}
 .mode[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
 .mode:focus-visible,.flip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.stage{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--rule)}
+.stage{display:grid;gap:1px;background:var(--rule)}
+.pair[data-mode="split"] .stage{grid-template-columns:1fr 1fr 1fr}
 .pane{background:var(--surface);padding:12px;min-width:0;position:relative}
 .tag{position:absolute;top:14px;left:14px;z-index:2;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
   text-transform:uppercase;color:var(--muted);background:var(--surface);border:1px solid var(--rule);border-radius:5px;padding:2px 7px}
 .tag-ours{color:var(--accent);border-color:var(--accent)}
+.tag-pdf{color:var(--warn);border-color:var(--warn)}
 .art{background:#fff;border-radius:6px;overflow:hidden;display:block}
 .art svg{display:block;width:100%;height:auto}
+.art object{display:block;width:100%;min-height:600px;border:0}
 .pair[data-mode="blink"] .stage{grid-template-columns:1fr}
 .pair[data-mode="blink"] .pane{grid-area:1/1}
-.pair[data-mode="blink"][data-show="device"] .pane[data-which="ours"]{visibility:hidden}
-.pair[data-mode="blink"][data-show="ours"] .pane[data-which="device"]{visibility:hidden}
+.pair[data-mode="blink"] .pane{visibility:hidden}
+.pair[data-mode="blink"][data-show="device"] .pane[data-which="device"]{visibility:visible}
+.pair[data-mode="blink"][data-show="ours"] .pane[data-which="ours"]{visibility:visible}
+.pair[data-mode="blink"][data-show="pdf"] .pane[data-which="pdf"]{visibility:visible}
 .flip{display:block;width:100%;border:0;border-top:1px solid var(--rule);background:var(--ground);color:var(--muted);
   font-family:var(--mono);font-size:12px;padding:9px}
 .flip:hover{color:var(--ink)}
 footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--rule);color:var(--muted);font-size:13.5px;max-width:74ch}
-@media (max-width:760px){.stage{grid-template-columns:1fr}.wrap{padding:34px 16px 72px}}
+@media (max-width:760px){.pair[data-mode="split"] .stage{grid-template-columns:1fr}.wrap{padding:34px 16px 72px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}`;
 
-const BLINK_SCRIPT = `for (const pair of document.querySelectorAll('.pair')) {
+const BLINK_SCRIPT = `const PANELS = ['device', 'ours', 'pdf'];
+for (const pair of document.querySelectorAll('.pair')) {
   const flip = pair.querySelector('.flip');
   for (const b of pair.querySelectorAll('.mode')) {
     b.addEventListener('click', () => {
       pair.dataset.mode = b.dataset.act;
       for (const o of pair.querySelectorAll('.mode')) o.setAttribute('aria-pressed', String(o.dataset.act === b.dataset.act));
       flip.hidden = b.dataset.act !== 'blink';
+      if (b.dataset.act === 'blink') pair.dataset.show = 'device';
     });
   }
-  flip.addEventListener('click', () => { pair.dataset.show = pair.dataset.show === 'device' ? 'ours' : 'device'; });
+  flip.addEventListener('click', () => {
+    const idx = PANELS.indexOf(pair.dataset.show || 'device');
+    pair.dataset.show = PANELS[(idx + 1) % PANELS.length];
+  });
 }`;
 
 function page(title: string, body: string): string {
@@ -345,15 +360,16 @@ function fixturePage(fx: FixtureComparison): string {
 <button type="button" class="mode" data-act="split" aria-pressed="true">Side by side</button><button type="button" class="mode" data-act="blink" aria-pressed="false">Blink</button></span></figcaption>
 <div class="stage">
 <div class="pane" data-which="device"><span class="tag">Device</span><div class="art">${p.deviceSvg}</div></div>
-<div class="pane" data-which="ours"><span class="tag tag-ours">vectorInk</span><div class="art">${p.oursSvg}</div></div>
+<div class="pane" data-which="ours"><span class="tag tag-ours">Library SVG</span><div class="art">${p.oursSvg}</div></div>
+<div class="pane" data-which="pdf"><span class="tag tag-pdf">Library PDF</span><div class="art"><object data="${escapeHtml(p.libraryPdfPath)}#page=${p.pageNumber}" type="application/pdf" width="100%" height="600"></object></div></div>
 </div>
-<button type="button" class="flip" hidden>Flip between the two</button>
+<button type="button" class="flip" hidden>Cycle through the three</button>
 </figure>`;
 		})
 		.join('\n');
 
 	return page(
-		`${fx.name} — device vs vectorInk`,
+		`${fx.name} — device vs library SVG vs library PDF`,
 		`<a class="back" href="index.html">&larr; all fixtures</a>
 <header class="top" style="margin-top:18px">
 <p class="eyebrow">fixture</p>
@@ -362,7 +378,7 @@ ${fx.isolates ? `<p class="isolates">${escapeHtml(fx.isolates)}</p>` : ''}
 ${fx.note ? `<p class="note">${escapeHtml(fx.note)}</p>` : ''}
 </header>
 ${pairs}
-<footer><p>Both sides are vector ink only. The device's ink comes from the Form XObjects in its own PDF export; ours is <code>toSvg({ vectorInk: true })</code> with the background raster removed, since the device keeps its background in a separate image.</p>
+<footer><p>The <strong>Device</strong> and <strong>Library SVG</strong> panes show vector ink only, with the background raster removed so the comparison is like-for-like. The <strong>Library PDF</strong> pane shows the full page (background + vector ink) as a real PDF export from <code>toPdf({ vectorInk: true })</code>.</p>
 ${COLOPHON}</footer>`,
 	);
 }
@@ -389,13 +405,13 @@ ${f.isolates ? `<p>${escapeHtml(f.isolates)}</p>` : '<p>Regression coverage.</p>
 		`<header class="top">
 <p class="eyebrow">supernote-typescript</p>
 <h1>What the device drew, and what we drew</h1>
-<p class="lede">Every fixture that ships with Supernote's own PDF export, page by page: the device's vector ink beside the vector ink this library produces. Both sides are real SVG, so differences hold up when you zoom in.</p>
+<p class="lede">Every fixture that ships with Supernote's own PDF export, page by page: the device's vector ink, the library's vector-ink SVG, and the library's vector-ink PDF. The first two panes are ink only (background removed) so they compare like-for-like; the PDF pane shows the full page as a real export.</p>
 <div class="meta"><span class="chip">${fixtures.length} fixtures</span><span class="chip">${totalPages} pages</span><span class="chip">built from tests/input</span></div>
 <nav class="toplinks"><a href="${REPO_URL}">supernote-typescript on GitHub</a><a href="${SPEC_URL}">Vector format spec</a></nav>
 </header>
 <div class="grid">${cards}</div>
-<footer><p>Each page is labelled with the ink it draws as a fraction of the device's — total stroke length times width, plus filled area. It is a blunt measure and only meaningful next to the picture, but it catches a whole stroke going missing, and a tool being drawn at the wrong width. Pages where the device draws no vector ink at all (an entirely erased page) are marked as such rather than scored.</p>
-<p>Rebuild with <code>npm run build:site</code>. The <a href="${SPEC_URL}">vector format spec</a> covers how the strokes behind the right-hand panels are decoded.</p>
+<footer><p>Each page is labelled with the ink it draws as a fraction of the device's — total stroke length times width, plus filled area. It is a blunt measure and only meaningful next to the picture, but it catches a whole stroke going missing, and a tool being drawn at the wrong width. The SVG panes are ink only; the PDF pane is the full page from <code>toPdf({ vectorInk: true })</code>.</p>
+<p>Rebuild with <code>npm run build:site</code>. The <a href="${SPEC_URL}">vector format spec</a> covers how the strokes behind the panels are decoded.</p>
 ${COLOPHON}</footer>`,
 	);
 }
@@ -422,6 +438,7 @@ async function main() {
 	await fs.writeFile(path.join(OUT_DIR, '.nojekyll'), '');
 	for (const fixture of built) {
 		await fs.writeFile(path.join(OUT_DIR, `${slug(fixture.name)}.html`), fixturePage(fixture));
+		await fs.writeFile(path.join(OUT_DIR, `${slug(fixture.name)}.pdf`), fixture.libraryPdf);
 	}
 
 	const pages = built.reduce((n, f) => n + f.pages.length, 0);

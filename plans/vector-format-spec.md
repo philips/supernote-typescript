@@ -72,9 +72,9 @@ skipped by jumping straight to `strokeStart + strokeLen`, not by parsing it.
 
 ### `StrokeConfig` (the 208-byte header)
 
-Byte offsets, confirmed against real fixtures (`stroke-isolation.note`'s
-tool/color/width-isolated pages, `headings-and-marker.note`,
-`nomad-3.15.27-blank-shapes-and-RTR.note`):
+Byte offsets, confirmed against real fixtures (`stroke-n5-20260016-isolation-tools-colors-widths.note`'s
+tool/color/width-isolated pages, `heading-n5-20260016-backgrounds-marker.note`,
+`blank-a6x-3.15.27-shapes-rtr.note`):
 
 | Offset | Field | Status |
 |---|---|---|
@@ -89,7 +89,7 @@ tool/color/width-isolated pages, `headings-and-marker.note`,
 | 32 | `unk_3` | reads `0` everywhere |
 | 36 | `unk_4` | reads `0` everywhere |
 | 40 | `record_class` (i32) | **decoded** — not the constant `5000` snlib documents. It states what the record *is*: `5000` ink, `0` two-point-derived geometry, `-1`/`-2`/`-4` eraser gesture, `-5` lasso path. See below. |
-| 44 | `stroke_layer` (u32) | **confirmed** — `test.note` has real `LAYER1` content; its strokes read `1` here, `MAINLAYER` strokes read `0` (0-indexed ignoring background, exactly as snlib says) |
+| 44 | `stroke_layer` (u32) | **confirmed** — `test-a5x-20220011-old-pen-ids.note` has real `LAYER1` content; its strokes read `1` here, `MAINLAYER` strokes read `0` (0-indexed ignoring background, exactly as snlib says) |
 | 48 | `stroke_kind` (52-byte C string) | **confirmed** — see below; Ratta's own name is `predictName` (Part 1.4) |
 | 100 | `bounding_tl` (i32 x, i32 y) | **decoded** — see below; Ratta's name `upLeftPoint` |
 | 108 | `bounding_mid` (i32 x, i32 y) | **decoded** — exactly `(tl + br) / 2`; Ratta's name `keyPoint` |
@@ -125,9 +125,9 @@ firmware-dependent, don't key on it.
 |---|---|
 | `"others"` | every freehand ink stroke, all pens, all fixtures (600+ strokes) — matches snlib |
 | `"0001"` | every 2-point rect record |
-| `"0000"` | a 5-point closed-rectangle record for the "link tag" feature's own indicator box (`pen=0`, like `"0001"`) — never real ink, confirmed against `nomad-3.26.40-link-tag-3p.note`: every one of its `"0000"` records' bounding box matches one of the note's own footer `LINK_*` entries' `LINKRECT` pixel-exact, and none of them appear in the page's own rendered ink. `src/strokes.ts`'s `parseStrokes` excludes these unconditionally now (they used to render as a phantom stroked-outline box in `vectorInk` output, since nothing distinguished them from ordinary ink before this field was decoded). |
-| `"straightLine"` | the ruler/straight-line tool — also **exactly two points**, being the line's endpoints (`straight-line.note`; those records read `pen=10, thickness=400`, i.e. an ordinary needle pen, and `doc_kind: "name is not set"` like a rect) |
-| `"fiveStarsSignal"` | the Stars feature's star mark (`nomad-3.15.27-blank-shapes-and-RTR.note`, drawn with the circled-star gesture; that stroke also reads `pen=5, thickness=100`). Those two values are **written by the engine, not by the tool**: on save it walks every trail and stores `penType = 5`, `m_thickness = 100` into any record whose `predictName` is this string (Part 1.4). The record's real tool is therefore unrecoverable, which is why `parseStrokes` reports `pen: 'unknown'` plus `isStarMark: true` for it rather than the `'marker'` that `pen=5` otherwise means. |
+| `"0000"` | a 5-point closed-rectangle record for the "link tag" feature's own indicator box (`pen=0`, like `"0001"`) — never real ink, confirmed against `link-n6-3.26.40-partial-erase-3p.note`: every one of its `"0000"` records' bounding box matches one of the note's own footer `LINK_*` entries' `LINKRECT` pixel-exact, and none of them appear in the page's own rendered ink. `src/strokes.ts`'s `parseStrokes` excludes these unconditionally now (they used to render as a phantom stroked-outline box in `vectorInk` output, since nothing distinguished them from ordinary ink before this field was decoded). |
+| `"straightLine"` | the ruler/straight-line tool — also **exactly two points**, being the line's endpoints (`line-n5-20260016-ruler-tool.note`; those records read `pen=10, thickness=400`, i.e. an ordinary needle pen, and `doc_kind: "name is not set"` like a rect) |
+| `"fiveStarsSignal"` | the Stars feature's star mark (`blank-a6x-3.15.27-shapes-rtr.note`, drawn with the circled-star gesture; that stroke also reads `pen=5, thickness=100`). Those two values are **written by the engine, not by the tool**: on save it walks every trail and stores `penType = 5`, `m_thickness = 100` into any record whose `predictName` is this string (Part 1.4). The record's real tool is therefore unrecoverable, which is why `parseStrokes` reports `pen: 'unknown'` plus `isStarMark: true` for it rather than the `'marker'` that `pen=5` otherwise means. |
 
 **`stroke_kind` is the only sound way to tell a filled rectangle from a
 two-point *line*.** Three unrelated things store exactly two points, and
@@ -139,14 +139,14 @@ counting points cannot separate them:
 | `"straightLine"` | the two ends of a line | 8 |
 | `"others"` | an ordinary ink stroke that happens to be a dot/tap | 2 |
 
-They never overlap. Before `straight-line.note` existed, `src/svg.ts`
+They never overlap. Before `line-n5-20260016-ruler-tool.note` existed, `src/svg.ts`
 treated any two-point record as a rectangle and used a raster fill-fraction
 test to reject the ones that "weren't real" — which turned each of that
 fixture's ruler lines into either a degenerate invisible box or nothing at
 all (page 1's six lines rendered as three invisible rects and zero lines).
 `IStroke.isFilledRect` now carries the record's own answer.
 
-The same correction retires an old misreading: `test.note`'s two-point
+The same correction retires an old misreading: `test-a5x-20220011-old-pen-ids.note`'s two-point
 `"others"` record was assumed to be non-ink noise sitting "over blank
 raster". The page's own render has ink at exactly that pixel and no other
 stroke passes within 12px of it, so it is a real pen tap — it was only ever
@@ -171,14 +171,14 @@ reflects which axis needs negating).
 
 | Value | Meaning | Source |
 |---|---|---|
-| 1 | Ink pen (older firmware) | snlib's `Pen::InkPen = 1`; every ordinary stroke in the Nomad 3.15.27 fixtures and `test.note` reads 1 |
+| 1 | Ink pen (older firmware) | snlib's `Pen::InkPen = 1`; every ordinary stroke in the Nomad 3.15.27 fixtures and `test-a5x-20220011-old-pen-ids.note` reads 1 |
 | 3 | Eraser — `TRAIL_ERASE_AREA` | the engine's trail dispatcher branches on `penType == 3` and forces `penColor = 255`, `preNum = -2` (Part 1.4); all 12 records in the fixtures read `color=255, record_class=-2`, no exceptions |
 | 4 | Region selection (lasso) | dispatcher branch → `preNum = -5`; see the record-class section |
 | 5 | **Marker (older firmware)** — also stamped onto the `fiveStarsSignal` star mark | see below |
 | 9 | Eraser — `ERASER select` | dispatcher branch → `preNum = -4`; all 12 records read `color=255, record_class=-4` |
 | 10 | Needle-point pen | matches snlib's `Pen::NeedlePoint` exactly |
 | 11 | Marker | matches snlib's `Pen::Marker` exactly |
-| 15 | Calligraphy pen — **one id, not several** | `stroke-isolation.note` page 2's calligraphy stroke (declared width 0.7 → `thickness=900`) reads 15, and so does every one of `caligraphy.note`'s 59 strokes — the fixture named for the tool and drawn entirely with it |
+| 15 | Calligraphy pen — **one id, not several** | `stroke-n5-20260016-isolation-tools-colors-widths.note` page 2's calligraphy stroke (declared width 0.7 → `thickness=900`) reads 15, and so does every one of `caligraphy-n5-20260016-widths-erase.note`'s 59 strokes — the fixture named for the tool and drawn entirely with it |
 | 16 | Ink pen (newer firmware) | this repo's own finding on Manta fixtures; same tool as 1, different id by device/firmware generation |
 | 0 | (seen on 2-point rect records only) | not a real tool; rects use this consistently, see below |
 | −3 | reserved, never rendered | the engine's render filters skip it alongside 3 and 4; not seen in any fixture |
@@ -200,7 +200,7 @@ two places, and both group `5` with `11`:
   marker ids. Highlighter passes are not handwriting.
 
 The fixtures agree, and say *which* marker id belongs to which era.
-`test.note` is the only `SN_FILE_VER_20220011` (A5X) file here; its ink pen
+`test-a5x-20220011-old-pen-ids.note` is the only `SN_FILE_VER_20220011` (A5X) file here; its ink pen
 is `1`, not `16`; and its three `pen=5` strokes carry `color=81` — the
 marker form of `80` — at `thickness=1500`, which the page's own raster
 renders as wide grey highlighter bands over the black handwriting. No
@@ -240,8 +240,8 @@ Cross-referenced exactly against
 | 255 | Eraser (reserved — not real ink) | see below |
 
 The 157 vs. 158 (and 201 vs. 202) variance is real, not measurement noise —
-`stroke-isolation.note` page 3 (needle pen, one stroke per color) measured
-157/201; `headings-and-marker.note` page 3 (marker highlights) measured
+`stroke-n5-20260016-isolation-tools-colors-widths.note` page 3 (needle pen, one stroke per color) measured
+157/201; `heading-n5-20260016-backgrounds-marker.note` page 3 (marker highlights) measured
 158/202, matching the enum exactly. Two adjacent, deliberately close shades,
 not a decode error.
 
@@ -262,7 +262,7 @@ naming only `1` as `MarkerBlack` while calling 158/202 plain
 `DarkGrey`/`LightGrey` is an incomplete reading of the same pattern.
 
 **157/201 is the canonical design palette.** Supernote's own PDF export
-(`headings-and-marker.pdf`) draws its vector fills at exactly
+(`heading-n5-20260016-backgrounds-marker.pdf`) draws its vector fills at exactly
 `0.6156863 rg` = 157/255 and `0.7882353 rg` = 201/255, and the
 `TITLESTYLE` metadata (see the Titles section below) encodes the same
 157/201 as literal decimal digits — the base, non-marker forms.
@@ -270,9 +270,9 @@ naming only `1` as `MarkerBlack` while calling 158/202 plain
 **48 and 80 are not colors "beyond greyscale" — they are the older
 firmware's grey *ids*.** On that encoding the field names a palette entry;
 on the current one it is the rendered grey itself (0/157/201/254 render as
-exactly that). `test.note` (`SN_FILE_VER_20220011`, A5X) is the only
+exactly that). `test-a5x-20220011-old-pen-ids.note` (`SN_FILE_VER_20220011`, A5X) is the only
 fixture old enough to use it, and Supernote's own vector export of that
-page — `test.pdf` — says which grey each id means:
+page — `test-a5x-20220011-old-pen-ids.pdf` — says which grey each id means:
 
 | stored `color` | strokes | device draws | extents agree to | our points inside it |
 |---|---|---|---|---|
@@ -324,8 +324,8 @@ left a different, subtler bug: the real ink an eraser stroke was dragged
 over stays in TOTALPATH completely unmarked (the erase is its own later,
 separate record, not an edit to the covered ink), so simply dropping the
 eraser stroke left that now-erased ink fully, incorrectly visible —
-confirmed directly on `horizontal_1270.note` (corrected text left as a
-faint ghost underneath the correction) and `nomad-3.26.40-link-tag-3p.note`
+confirmed directly on `erase-n6-20230015-horizontal-1270.note` (corrected text left as a
+faint ghost underneath the correction) and `link-n6-3.26.40-partial-erase-3p.note`
 (a "eraser on marker"/"eraser on pen lines" test page, whose erased gaps
 didn't render at all). `parseStrokes`' `includeErasers` option keeps these
 strokes instead, as ordinary opaque white ink (`ERASER_COLOR`'s value of
@@ -340,9 +340,9 @@ leaving the erased ink fully legible.
 
 ### Erase and selection records — the 2026-08 erase-fixture investigation
 
-`erase.note`/`erase.pdf` (one page exercising every erase mechanism, with
+`erase-n5-20260016-all-mechanisms.note`/`erase-n5-20260016-all-mechanisms.pdf` (one page exercising every erase mechanism, with
 Supernote's own vector export as ground truth) plus
-`horizontal_1270.pdf` and `nomad-3.26.40-link-tag-3p.note` pages 2/3
+`erase-n6-20230015-horizontal-1270.pdf` and `link-n6-3.26.40-partial-erase-3p.note` pages 2/3
 mapped out the non-ink record types and, more importantly, established
 what can and cannot be recovered from the stroke log:
 
@@ -361,14 +361,14 @@ Findings, each confirmed against device ground truth:
    `m_trailStatus` — finding 3. This finding still stands as a warning
    against the geometric approach, and against reading meaning into an
    eraser record's own shape.) Three independent proofs:
-   - `erase.note`'s row-3 line extends well past every recorded eraser
+   - `erase-n5-20260016-all-mechanisms.note`'s row-3 line extends well past every recorded eraser
      path's geometry (the covering `pen=9` record's own points stop ~350px
      short of the line's right end), yet the whole line is erased.
-   - `horizontal_1270.note`'s eraser #9 is a *closed loop* whose interior
+   - `erase-n6-20230015-horizontal-1270.note`'s eraser #9 is a *closed loop* whose interior
      strokes (up to ~120px from the path itself) are all erased — a
      region-select erase — while geometrically similar records elsewhere
      are plain drags with only the swept band erased.
-   - `nomad-3.26.40-link-tag-3p.note` page 3 has `pen=9 color=255` records
+   - `link-n6-3.26.40-partial-erase-3p.note` page 3 has `pen=9 color=255` records
      and `pen=4` loops sitting exactly on top of fully-visible keyword
      text: the identical record types there were *selections* (Keyword
      creation, lasso-move), not erases. A geometric replay model tuned to
@@ -383,7 +383,7 @@ Findings, each confirmed against device ground truth:
    Bézier outlines). It is now decoded (see the section below) and the
    hypothesis is disproved: **a fully erased stroke stores a full-area
    outline, indistinguishable from a visible stroke's.** Measured on
-   `erase-no-white-pen.note`, whose page is blank on-device and empty in
+   `erase-n5-20260016-no-white-pen.note`, whose page is blank on-device and empty in
    Supernote's own export, yet whose five strokes all carry outlines
    enclosing their full nominal area. `flag_draw` (the per-point byte
    array) was decoded and ruled out the same way earlier — all-`1` even on
@@ -405,8 +405,8 @@ Findings, each confirmed against device ground truth:
    rather than disappearance, and only trusted one way (a `0` is certainly
    still there). It is stronger than that: **the codes are a removal
    taxonomy, and the device's own PDF exports draw exactly the records
-   reading `0`** — 152 of 189 on `turkish.note`, 61 of 82 on
-   `horizontal_1270.note`, both counts exact. See Part 1.4 for the code
+   reading `0`** — 152 of 189 on `turkish-a6x-20230015-handwriting-erase.note`, 61 of 82 on
+   `erase-n6-20230015-horizontal-1270.note`, both counts exact. See Part 1.4 for the code
    table and the evidence per code, including `-4`, which stores each
    surviving fragment of a partially erased stroke as its own contour-only
    record.
@@ -421,7 +421,7 @@ Findings, each confirmed against device ground truth:
    device's own decision rather than a measurement of one, and it settles
    the case a measurement cannot: an erased stroke sitting under its own
    replacement still finds ink under most of its points, which is what left
-   a second `0` visible in `horizontal_1270.note`'s "1270" before the mark
+   a second `0` visible in `erase-n6-20230015-horizontal-1270.note`'s "1270" before the mark
    was read at all.
 
    Until the codes were decoded, this ran as a two-threshold rule — measure
@@ -430,7 +430,7 @@ Findings, each confirmed against device ground truth:
    partial survival everywhere else. The status field removes the guess.
 
    A near-zero threshold is still applied to *unmarked* strokes, because
-   they can be invisible without ever being erased: `erase.note`'s rows
+   they can be invisible without ever being erased: `erase-n5-20260016-all-mechanisms.note`'s rows
    were covered over with **white ink**, and Supernote's own export of that
    page draws only the white. Those have to be dropped rather than
    drawn-then-covered, because `buildStrokePathElements` sorts strokes into
@@ -447,13 +447,13 @@ Findings, each confirmed against device ground truth:
 
    A page whose ink layers are empty is the same statement at page scale —
    everything on it was erased — so nothing renders at all, including the
-   white eraser overlays, which is exactly `erase-no-white-pen.note`.
+   white eraser overlays, which is exactly `erase-n5-20260016-no-white-pen.note`.
 
    **What's still approximate.** On firmware that splits a partially
    erased stroke (the `m_copy = 602` eraser, `-4` in Part 1.4), nothing is:
    the surviving fragments are their own records and get drawn as such.
    Elsewhere a partial erase has not been observed to leave a partly-drawn
-   stroke — `turkish.note` looked like the clearest counterexample, its
+   stroke — `turkish-a6x-20230015-handwriting-erase.note` looked like the clearest counterexample, its
    marked strokes' measured survival running smoothly from `0.00` to `0.95`
    with no gap, but its device PDF draws none of them: that gradient is
    replacement ink written over the erased words, not survival.
@@ -481,7 +481,7 @@ caused real bugs when mistaken for ordinary strokes — the `"straightLine"`
 ruler-line case in particular.
 
 The `pen === 4` test is still applied alongside it, for exactly one record:
-`sticker.note` page 1's last record is not a stroke at all. Its
+`sticker-n5-20260016-plugin-artwork.note` page 1's last record is not a stroke at all. Its
 `StrokeConfig` reads `screenHeight: 120` on a 2560-tall page,
 `thickness: 0`, zero points, and a `color` of 2012028940 — sticker bytes
 being read through the wrong struct (issue #68). It lands `4` in the `pen`
@@ -492,9 +492,9 @@ record really is a stroke record**, and `.note` files contain at least one
 thing that isn't.
 
 **What it does not do is tell you whether an erase actually erased
-anything**, which is what it was investigated for. `erase.note`, which
+anything**, which is what it was investigated for. `erase-n5-20260016-all-mechanisms.note`, which
 exercises every erase mechanism, carries genuine erasers at `-4`; and
-`nomad-3.26.40-link-tag-3p.note` page 3's `-4` records sit on top of fully
+`link-n6-3.26.40-partial-erase-3p.note` page 3's `-4` records sit on top of fully
 visible keyword text having erased nothing. Same class, opposite outcome.
 The field identifies the *tool*, never the *result*.
 
@@ -533,14 +533,14 @@ one loop:
 | `604` (no companion) | 2 | 27 | **0 (0%)** | 11 |
 
 Clean separation. `14` is delete — every fixture carrying it is a
-documented select-then-delete (`erase.note`, `erase-no-white-pen.note`,
-`unknown-color.note`, `caligraphy.note` p4), and every stroke it encloses
+documented select-then-delete (`erase-n5-20260016-all-mechanisms.note`, `erase-n5-20260016-no-white-pen.note`,
+`color-n6-20230015-unknown-palette.note`, `caligraphy-n5-20260016-widths-erase.note` p4), and every stroke it encloses
 carries `m_trailStatus = -16`, the code for exactly that operation. `2` and
-`4` appear only on `erase-colors.note`, a colour-change fixture, so they
+`4` appear only on `erase-n5-20260016-mixed-colors.note`, a colour-change fixture, so they
 are non-deleting edits that rewrite their selection in place — their
 sources read `-3`, the moved-away code, and the ink itself lives on in a
 later record. `604` alone means the selection was made and nothing
-destructive followed; on `nomad-3.26.40-link-tag-3p.note` page 3 those are
+destructive followed; on `link-n6-3.26.40-partial-erase-3p.note` page 3 those are
 Keyword/Tag creations.
 
 **This settles the failure this document carried for a while.** The
@@ -569,8 +569,8 @@ per-stroke field answers.
 
 **The ordering hypothesis is disproved.** An earlier open question guessed
 the erase-vs-select distinction was positional — that a lasso immediately
-before an eraser marks a select-then-delete. It isn't: `erase.note`'s `-4`
-erasers are preceded by ordinary ink and did erase, `erase-colors.note`'s
+before an eraser marks a select-then-delete. It isn't: `erase-n5-20260016-all-mechanisms.note`'s `-4`
+erasers are preceded by ordinary ink and did erase, `erase-n5-20260016-mixed-colors.note`'s
 are preceded by a lasso, and link-tag page 3's are preceded by ink.
 Adjacency predicts nothing. The operation is written down in the lasso
 record itself.
@@ -610,7 +610,7 @@ The two fixed spans are the load-bearing part: snlib's declared field
 lists for `Section1`/`Section2` add up to different totals, so they were
 solved directly instead — 52 and 10 are the only pair that makes *every*
 record on a page parse byte-exactly, jointly across two device families
-(N5/Manta `erase-no-white-pen.note` and the older `horizontal_1270.note`).
+(N5/Manta `erase-n5-20260016-no-white-pen.note` and the older `erase-n6-20230015-horizontal-1270.note`).
 
 Two independent checks confirm the result is real geometry rather than a
 coincidental alignment, across 2,387 decoded strokes in 19 fixtures
@@ -657,10 +657,10 @@ only geometry they have.
 Measured against each page's own render across 15 fixtures, filling the
 outline moves the total disagreeing-pixel count from 570,759 to 462,961
 (-19%), the largest single gains being
-`nomad-3.15.27-blank-shapes-and-RTR.note` (127,911 → 37,771),
-`caligraphy.note` (19,978 → 8,930) and `sticker.note` (6,892 → 1,874).
-Several fixtures move slightly the other way (`vertical_1180.note` 5,079
-→ 6,050, `horizontal_1270.note` 5,591 → 6,615) because a filled outline
+`blank-a6x-3.15.27-shapes-rtr.note` (127,911 → 37,771),
+`caligraphy-n5-20260016-widths-erase.note` (19,978 → 8,930) and `sticker-n5-20260016-plugin-artwork.note` (6,892 → 1,874).
+Several fixtures move slightly the other way (`layout-n6-20230015-vertical-1180.note` 5,079
+→ 6,050, `erase-n6-20230015-horizontal-1270.note` 5,591 → 6,615) because a filled outline
 renders a touch bolder than the device's own low-resolution RLE raster —
 which is the expected direction, since that raster is already known to
 under-represent width against the device's own PDF export (see the
@@ -671,7 +671,7 @@ under-represent width against the device's own PDF export (see the
 `thickness / 100` is the rendered stroke width in page pixels. Two
 independent confirmations:
 
-1. **Supernote's own PDF export.** `headings-and-marker.pdf`'s content
+1. **Supernote's own PDF export.** `heading-n5-20260016-backgrounds-marker.pdf`'s content
    streams use the page's pixel space directly (`MediaBox 0 0 1920 2560`,
    identity CTM apart from a y-flip), and draw every `thickness=400`
    needle-pen stroke with exactly `4 w`. Every slider position maps to a
@@ -706,7 +706,7 @@ its nominal width, across every fixture, splits the pens in two:
 
 `pen=1` is what every A5X and Nomad fixture writes with, so drawing at
 nominal width made `vectorInk` output visibly thinner than the same page's
-raster. Confirmed end-to-end against `a5x-2.14.28.pdf` (Supernote's own
+raster. Confirmed end-to-end against `ink-a5x-2.14.28-old-pen-width.pdf` (Supernote's own
 export of one of those pages, and a rare 1:1 case — 146 filled outlines for
 exactly 146 decoded strokes): drawing at nominal laid down **40%** of the
 ink the device does; measuring each stroke's own outline instead brings
@@ -727,16 +727,16 @@ the correction is large either way:
 
 | Fixture (device PDF as truth) | ink drawn at nominal | measured from contour |
 |---|---|---|
-| `a5x-2.14.28` (ink pen, `pen=1`) | 0.40× | 0.84× |
-| `caligraphy` p1–p3 (`pen=15`) | 1.82–1.97× | 0.67–0.81× |
-| `caligraphy` p4 (mostly erased) | — | 0.84× |
+| `ink-a5x-2.14.28-old-pen-width` (ink pen, `pen=1`) | 0.40× | 0.84× |
+| `caligraphy-n5-20260016-widths-erase` p1–p3 (`pen=15`) | 1.82–1.97× | 0.67–0.81× |
+| `caligraphy-n5-20260016-widths-erase` p4 (mostly erased) | — | 0.84× |
 
 **Calibrated exactly against widths the device states as numbers.**
 Supernote's exporter uses *two* styles, sometimes within one file: filled
 outlines (`f`) for some strokes, and stroked polylines carrying an explicit
 `w` for others. The second kind is far better ground truth, because the
 width is a number the device wrote down rather than a shape to measure —
-and `stroke-isolation.pdf`'s page 4 is exactly that, one needle-pen stroke
+and `stroke-n5-20260016-isolation-tools-colors-widths.pdf`'s page 4 is exactly that, one needle-pen stroke
 per width setting:
 
 | setting | `thickness` | device `w` | `strokeRenderWidth` |
@@ -800,7 +800,7 @@ corners into page pixels reproduces its `TITLERECT` x,y,w,h within 1px.
 
 Every single field in the entire ~700-byte stroke record structure above —
 not just `pen`/`color`/`thickness` — was decoded and compared across all
-four differently-colored headings on `headings-and-marker.note` page 2.
+four differently-colored headings on `heading-n5-20260016-backgrounds-marker.note` page 2.
 Nothing varies with color:
 
 - `stroke_kind`/`doc_kind`: identical (`"0001"` / `"name is not set"`) across all four.
@@ -857,12 +857,12 @@ tool that decides this, it's the darkness:
 
 | Fixture | Marker | Crosses | Device draws |
 |---|---|---|---|
-| `nomad-3.15.27-blank-shapes-and-RTR.note` p1 | grey 202/158 | black pen text | text on top of the band |
-| `nomad-3.26.40-link-tag-3p.note` p1 | grey 202/158 | black pen lines | lines on top of the bands |
-| `sticker.note` p2 | black 1 | the sticker plugin's artwork | the marker line on top, hiding the sticker's white detail |
-| `nomad-3.26.40-link-tag-3p.note` p1 | white 254 | black pen lines | the white, wiping the lines out |
-| `headings-and-marker.note` p3 | white 254 | the black word "White" | the white, leaving only flecks of black |
-| `erase.note` p1, `erase-pen.note` p2 | white 254 | a black marker band | the white, cutting the band |
+| `blank-a6x-3.15.27-shapes-rtr.note` p1 | grey 202/158 | black pen text | text on top of the band |
+| `link-n6-3.26.40-partial-erase-3p.note` p1 | grey 202/158 | black pen lines | lines on top of the bands |
+| `sticker-n5-20260016-plugin-artwork.note` p2 | black 1 | the sticker plugin's artwork | the marker line on top, hiding the sticker's white detail |
+| `link-n6-3.26.40-partial-erase-3p.note` p1 | white 254 | black pen lines | the white, wiping the lines out |
+| `heading-n5-20260016-backgrounds-marker.note` p3 | white 254 | the black word "White" | the white, leaving only flecks of black |
+| `erase-n5-20260016-all-mechanisms.note` p1, `erase-n5-20260016-white-pen-cover.note` p2 | white 254 | a black marker band | the white, cutting the band |
 
 Read together: **the darker of the two wins, and white always wins.** White
 is not a shade in this scheme — it is the palette's cover-up color, the same
@@ -997,7 +997,7 @@ against fixtures (1,134 fully-walked strokes):
 
 | Offset | Field | Observed |
 |---|---|---|
-| +0 | `m_trailStatus` (i32) | **decoded — the per-stroke visibility field**, see below. `0` (2703), `-99` (122), `-16` (36), `-4` (20), `-3` (9), `-2` (1) across 2,948 records, every `.note` plus `digest_test.mark` |
+| +0 | `m_trailStatus` (i32) | **decoded — the per-stroke visibility field**, see below. `0` (2703), `-99` (122), `-16` (36), `-4` (20), `-3` (9), `-2` (1) across 2,948 records, every `.note` plus `digest-n5-20230015-test.mark` |
 | +4 | `m_copy` (i32) | small stable ids identifying the operation that produced the record, see below |
 | +8 | `m_trailNumInPage` (i32) | the per-page stroke uid, sequential from 1 |
 | +12 | `m_beforeShiftAngle` (i32) | `0` everywhere seen |
@@ -1016,9 +1016,9 @@ from different firmware eras and in the two different export styles:
 
 | Fixture | Ink records | `m_trailStatus == 0` | Paths in the device's PDF |
 |---|---|---|---|
-| `turkish.note` p1 | 189 | **152** | **152** |
-| `horizontal_1270.note` p1 | 82 | **61** | **61** |
-| `nomad-3.26.40-link-tag-3p.note` p3 | 143 | **113** | **113** |
+| `turkish-a6x-20230015-handwriting-erase.note` p1 | 189 | **152** | **152** |
+| `erase-n6-20230015-horizontal-1270.note` p1 | 82 | **61** | **61** |
+| `link-n6-3.26.40-partial-erase-3p.note` p3 | 143 | **113** | **113** |
 
 This overturns the conclusion recorded further up this document — that no
 per-stroke visibility field exists and the raster is the only thing that
@@ -1033,23 +1033,23 @@ device:
 
 | Code | Meaning | Evidence |
 |---|---|---|
-| `-99` | erased with the eraser tool, or otherwise removed whole | the bulk of every erase fixture; 21/21 on `horizontal_1270.note` and 37/37 on `turkish.note` match what the device PDFs omit |
-| `-16` | deleted via lasso-select-and-delete | exactly one stroke each on `erase.note` (row 6, the README's lasso-delete row), `erase-no-white-pen.note` and `caligraphy.note` p4 — the three fixtures documented as using all three erase mechanisms — plus all 33 strokes of `unknown-color.note` p1, which carries one lasso pair and no eraser records |
-| `-4` | **partially erased** — the surviving pieces follow as separate contour-only records | `nomad-3.15.27-blank-2p.note` / `nomad-3.26.40-link-tag-3p.note` p2, whose export draws the pieces and never the stroke — see below |
-| `-3` | moved away by a lasso drag; the ink now lives in a later record at the new position | `erase-colors.note` p2 uids 1–9, each with an identical-point-count twin at a shifted bbox (uids 15–23) carrying `m_copy = 97` |
-| `-2` | unconfirmed — consistent with the binary's `CLEAN SCREEN` trail category | seen once: `straight-line.note` p3's only stroke, on a page that renders blank with no eraser and no lasso record present |
+| `-99` | erased with the eraser tool, or otherwise removed whole | the bulk of every erase fixture; 21/21 on `erase-n6-20230015-horizontal-1270.note` and 37/37 on `turkish-a6x-20230015-handwriting-erase.note` match what the device PDFs omit |
+| `-16` | deleted via lasso-select-and-delete | exactly one stroke each on `erase-n5-20260016-all-mechanisms.note` (row 6, the README's lasso-delete row), `erase-n5-20260016-no-white-pen.note` and `caligraphy-n5-20260016-widths-erase.note` p4 — the three fixtures documented as using all three erase mechanisms — plus all 33 strokes of `color-n6-20230015-unknown-palette.note` p1, which carries one lasso pair and no eraser records |
+| `-4` | **partially erased** — the surviving pieces follow as separate contour-only records | `blank-a6x-3.15.27-two-pages.note` / `link-n6-3.26.40-partial-erase-3p.note` p2, whose export draws the pieces and never the stroke — see below |
+| `-3` | moved away by a lasso drag; the ink now lives in a later record at the new position | `erase-n5-20260016-mixed-colors.note` p2 uids 1–9, each with an identical-point-count twin at a shifted bbox (uids 15–23) carrying `m_copy = 97` |
+| `-2` | unconfirmed — consistent with the binary's `CLEAN SCREEN` trail category | seen once: `line-n5-20260016-ruler-tool.note` p3's only stroke, on a page that renders blank with no eraser and no lasso record present |
 
 Measured against the pages' own renders, `-16` scores 0.000 ink presence on
 all 35 records and `-3` averages 0.019 — gone, as claimed. `-99` averages
 0.213 rather than 0, and every one of the 24 records that still finds ink
 under half its points is a case where a *different, live* record sits on
 top of it: the erased word was rewritten in the same place. That is the
-same false positive that once left a doubled `0` in `horizontal_1270.note`'s
+same false positive that once left a doubled `0` in `erase-n6-20230015-horizontal-1270.note`'s
 "1270", and it is why the raster can't be the primary record even though it
 usually agrees.
 
 **Attributing the ink is what settles those cases**, and
-`nomad-3.26.40-link-tag-3p.note` page 3 is where it matters most: a naive
+`link-n6-3.26.40-partial-erase-3p.note` page 3 is where it matters most: a naive
 measurement makes its marked strokes look alive — 15 of the 30 find ink
 under half their points, several under every point — because that page
 erases and rewrites in the same place. Its export (added later, and now the
@@ -1077,7 +1077,7 @@ the piece. The five surviving fragments of line 1 tile the original with
 four gaps in exactly the four places the eraser crossed it.
 
 **Supernote's own export draws exactly those fragments.** On
-`nomad-3.26.40-link-tag-3p.pdf` page 2, each of the seven erased pen lines
+`link-n6-3.26.40-partial-erase-3p.pdf` page 2, each of the seven erased pen lines
 comes out as its own fragment records and nothing else — 5, 4, 4, 5, 5, 5
 and 5 subpaths, matching each fragment record's own extent to within a
 pixel — and no subpath anywhere spans the line they came from. That is
@@ -1105,14 +1105,14 @@ kind of record rather than any notion of generation:
 | `14` / `4` / `2` | the *second* record of a lasso pair: `14` on all four pages where the selection was deleted, `4`/`2` where it was moved or copied |
 | `400` | Heading / badge filled rect (`pen=0`, `stroke_kind` `"0001"`) |
 | `500` | link-tag box (`pen=0`, `stroke_kind` `"0000"`) |
-| `97` / `99` | ordinary ink; common enough to cover whole pages (every stroke of `sticker.note`) so **not** a "this stroke was pasted" marker |
+| `97` / `99` | ordinary ink; common enough to cover whole pages (every stroke of `sticker-n5-20260016-plugin-artwork.note`) so **not** a "this stroke was pasted" marker |
 
 The "produced by copy/paste" reading this document previously recorded is
 therefore wrong for `601`–`604`, which are tool ids. It also gives issue
 [#70](https://github.com/philips/supernote-typescript/issues/70) its
 discriminator from a different direction: with per-stroke visibility
 available directly, a geometric replay of the eraser records — the thing
-that mis-erased visible text on `nomad-3.26.40-link-tag-3p.note` page 3 —
+that mis-erased visible text on `link-n6-3.26.40-partial-erase-3p.note` page 3 —
 isn't needed at all.
 
 `section_2`'s 10 bytes are likewise `m_groupNum`, `m_groupNest`,
@@ -1147,7 +1147,7 @@ right is narrower — replaying the trails is how the device produces the
 bitmap, so the bitmap can never disagree with the trail list.
 
 It also bears on the question that was open here: a geometric replay
-mis-erases visible text on `nomad-3.26.40-link-tag-3p.note` page 3, because
+mis-erases visible text on `link-n6-3.26.40-partial-erase-3p.note` page 3, because
 identical-looking records were selections rather than erases, so a
 discriminator had to exist somewhere in the record. It does, in two places
 — `m_trailStatus` on the affected ink (which simply is the answer, without
@@ -1217,7 +1217,7 @@ a plain metadata block:
 - `TITLESTYLE` encodes the style as decimal digits `1BBBFFF`:
   `BBB` = background grey level, `FFF` = displayed label-text grey level.
   Confirmed against all four heading variants, on two different devices
-  (`headings-and-marker.note` Manta, `nomad-3.15.27-blank-shapes-and-RTR.note`
+  (`heading-n5-20260016-backgrounds-marker.note` Manta, `blank-a6x-3.15.27-shapes-rtr.note`
   Nomad — identical four codes on both):
 
 | `TITLESTYLE` | Background | Label text |
@@ -1248,8 +1248,8 @@ in `src/svg.ts` (`sampleRect` fill sampling and
 
 `page.RECOGNFILE` is an address, resolved the same way as `TOTALPATH`
 (`getContentAtAddress`). It's `"0"`/absent on pages with no recognition data
-(e.g. `horizontal_1270.note`); present on pages that had RTR or post-hoc
-recognition run (e.g. `rtr.note`, `headings-and-marker.note`). Where
+(e.g. `erase-n6-20230015-horizontal-1270.note`); present on pages that had RTR or post-hoc
+recognition run (e.g. `rtr-n5-20230015-recognition.note`, `heading-n5-20260016-backgrounds-marker.note`). Where
 present, it's a real ZIP archive — MyScript's "iink" handwriting-recognition
 engine's own working files for that page:
 
@@ -1408,8 +1408,8 @@ scanning page content at render time.
 
 `"BINK"` magic, then a header, then per-stroke captured ink, then a typed
 element table (the recognition tree). Parses byte-exact end-to-end on every
-fixture tried (`headings-and-marker`, `stroke-isolation`, `rtr`,
-`nomad-3.15.27-blank-shapes-and-RTR`), all little-endian:
+fixture tried (`heading-n5-20260016-backgrounds-marker`, `stroke-n5-20260016-isolation-tools-colors-widths`, `rtr-n5-20230015-recognition`,
+`blank-a6x-3.15.27-shapes-rtr`), all little-endian:
 
 ```
 "BINK"                                  # magic
@@ -1506,7 +1506,7 @@ pass; the findings are folded into the sections above. In brief:
 
 1. ~~Act on the thickness fix~~ — done: `THICKNESS_TO_PIXEL_SCALE` is now
    100, not 150. Confirmed exact (not just closer) against
-   `headings-and-marker.pdf`: every one of page 1's 32 needle-pen subpaths
+   `heading-n5-20260016-backgrounds-marker.pdf`: every one of page 1's 32 needle-pen subpaths
    draws with a literal `4 w`, and `400 / 100 = 4` matches precisely.
 2. ~~Replace the two remaining raster dependencies in `src/svg.ts`~~ —
    done: `deriveStrokeStyle`/`applyHeadingContrastOverrides` now look up a
@@ -1514,7 +1514,7 @@ pass; the findings are folded into the sections above. In brief:
    matched by position against `buildTitleIndex`), and fall back to
    `sampleRect`/raster sampling only when a 2-point rect has no match (a
    badge/highlight box, not a Heading — those still have no known metadata
-   source). Confirmed exact against `headings-and-marker.pdf`'s own fill
+   source). Confirmed exact against `heading-n5-20260016-backgrounds-marker.pdf`'s own fill
    colors (`0/157/201`, not the raster's quantized `0/128/169`) and the
    label-text contrast colors. This also surfaced and fixed a real bug along
    the way: `_parseFooter` (`src/parsing.ts`) dropped journaled/append-only
@@ -1529,12 +1529,12 @@ pass; the findings are folded into the sections above. In brief:
    same place: `3`/`9` are the two eraser modes, `4` the lasso, and `15`
    the calligraphy pen with a single id.
 
-   It turned up one more thing, since **resolved** by adding `test.pdf`:
+   It turned up one more thing, since **resolved** by adding `test-a5x-20220011-old-pen-ids.pdf`:
    the older format's `color` ids (48/80) are ids rather than greys, and
    the device's own export names them dark grey and light grey. See the
    `color` section. Reading them literally had been costing that page 16 of
    its 58 strokes.
-4. ~~`"straightLine"`~~ — observed, via `straight-line.note`. It turned out
+4. ~~`"straightLine"`~~ — observed, via `line-n5-20260016-ruler-tool.note`. It turned out
    to matter rather than being a loose end: those records store two points,
    which `vectorInk` was reading as a filled rectangle, so every ruler line
    rendered as an invisible box or not at all. See the `stroke_kind` table.
@@ -1544,7 +1544,7 @@ pass; the findings are folded into the sections above. In brief:
 6. **`TITLESTYLE` beyond the 4-slot palette** — newer devices with more
    heading styles (or color devices) may use other codes; the `1BBBFFF`
    digit reading is confirmed only for these four values on two greyscale
-   devices. (`test.note`'s stroke colors 48/81 turned out to be older grey
+   devices. (`test-a5x-20220011-old-pen-ids.note`'s stroke colors 48/81 turned out to be older grey
    *ids*, not a color-device palette — see the `color` section — so
    extending the Color table still needs a real color-device fixture.)
 7. ~~Decode `point_contour`~~ — done, see its section above: it is the
@@ -1585,8 +1585,8 @@ pass; the findings are folded into the sections above. In brief:
    `point_contour`, `flag_draw` and `record_class` are each ruled out, the
    last of them naming the *tool* and never the outcome — and that it lives
    in record *ordering*, where adjacency turns out to predict nothing
-   (`erase.note`'s erasers follow ordinary ink and did erase,
-   `erase-colors.note`'s follow a lasso, and link-tag page 3's follow ink).
+   (`erase-n5-20260016-all-mechanisms.note`'s erasers follow ordinary ink and did erase,
+   `erase-n5-20260016-mixed-colors.note`'s follow a lasso, and link-tag page 3's follow ink).
    What remains open is only the mapping from `m_copy`'s ids to the app's
    own trail categories (`TRAIL_ERASE_AREA`, `ERASE_LINE_COLOR_VALUE`,
    `CLEAN SCREEN`, `ERASER select`), which nothing needs.
@@ -1604,4 +1604,4 @@ pass; the findings are folded into the sections above. In brief:
 - Issue [#55](https://github.com/philips/supernote-typescript/issues/55) — original `TOTALPATH` geometry investigation.
 - Issue [#56](https://github.com/philips/supernote-typescript/issues/56) — coverage/phantom-stroke follow-up, now resolved by this format's discovery.
 - Issue [#60](https://github.com/philips/supernote-typescript/issues/60) — scoped plan for the remaining `page.bdom` work.
-- `tests/input/README.md` — what each relevant fixture isolates (`stroke-isolation.note`, `headings-and-marker.note` + `.pdf`).
+- `tests/input/README.md` — what each relevant fixture isolates (`stroke-n5-20260016-isolation-tools-colors-widths.note`, `heading-n5-20260016-backgrounds-marker.note` + `.pdf`).

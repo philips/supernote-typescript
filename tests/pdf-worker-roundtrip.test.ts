@@ -37,7 +37,7 @@ describe("worker-parallel page rendering", () => {
 	});
 
 	test("extractPageRenderData survives structured clone and round-trips through a worker", { timeout: 30000 }, async () => {
-		const sn = new SupernoteX(readFileToUint8Array("1to10.note"));
+		const sn = new SupernoteX(readFileToUint8Array("demo-a5x-20230015-1to10.note"));
 		const renderData = extractPageRenderData(sn, 1);
 
 		// structuredClone is what postMessage uses internally; assert it

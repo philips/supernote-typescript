@@ -78,7 +78,7 @@ describe("parseStrokes", () => {
   });
 
   test("decodes a simple horizontal stroke to a wide, flat point cloud", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("20260809_162804.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("stroke-n5-20260016-20260809.note"));
     const page = sn.pages[0];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
     expect(strokes.length).toBeGreaterThan(0);
@@ -103,7 +103,7 @@ describe("parseStrokes", () => {
   });
 
   test("decodes a simple vertical stroke to a tall, narrow point cloud", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("20260809_162804.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("stroke-n5-20260016-20260809.note"));
     const page = sn.pages[1];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
     expect(strokes.length).toBeGreaterThan(0);
@@ -116,7 +116,7 @@ describe("parseStrokes", () => {
   });
 
   test("decodes both diagonal strokes with a roughly 1:1 aspect ratio", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("20260809_162804.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("stroke-n5-20260016-20260809.note"));
     for (const pageIndex of [2, 3]) {
       const page = sn.pages[pageIndex];
       const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
@@ -133,7 +133,7 @@ describe("parseStrokes", () => {
   });
 
   test("decodes a full paragraph of dense real handwriting with every point inside rendered ink", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"));
     const page = sn.pages[0];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
 
@@ -160,7 +160,7 @@ describe("parseStrokes", () => {
   });
 
   test("decodes quickly even on a dense page (no per-stroke search)", async () => {
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"));
     const page = sn.pages[0];
     const start = Date.now();
     parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
@@ -179,7 +179,7 @@ describe("parseStrokes", () => {
     // exercised. The deterministic walk can't do that -- every stroke's own
     // byte range is exact -- so this now guards general decode correctness
     // rather than one specific old failure mode.
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"));
     const page = sn.pages[0];
     const bbox = inkBoundingBox(page.MAINLAYER.bitmapBuffer as Uint8Array, sn.pageWidth, sn.pageHeight);
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
@@ -200,7 +200,7 @@ describe("parseStrokes", () => {
     // uses (parseStrokes' doc comment) has no such gap: it reads the
     // page's own declared stroke count and each stroke's own byte length
     // directly, so it can't skip a real record the way a scan could.
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
     const page = sn.pages[0];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
     const totalPoints = strokes.reduce((sum, s) => sum + s.points.length, 0);
@@ -217,7 +217,7 @@ describe("parseStrokes", () => {
     // authoritative -- see parseStrokes' doc comment), so this now just
     // confirms real odd-point-count strokes (roughly half of this
     // fixture's) decode with the same reliability as even ones.
-    const sn = new SupernoteX(await readFileToUint8Array("a5x-2.14.28.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"));
     const page = sn.pages[0];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
     const oddCountStrokes = strokes.filter((s) => s.points.length % 2 === 1);
@@ -232,7 +232,7 @@ describe("parseStrokes", () => {
     // can't produce a false stroke this way at all (every stroke comes from
     // TOTALPATH's own declared, exact byte ranges -- see parseStrokes' doc
     // comment), so this now just confirms that symptom stays gone.
-    const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
     const page = sn.pages[1];
     const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
     const phantomCornerStrokes = strokes.filter(
@@ -242,7 +242,7 @@ describe("parseStrokes", () => {
   });
 
   test("excludes eraser strokes by default, includes them as white isEraser strokes with includeErasers (issue #56 follow-up)", async () => {
-    // horizontal_1270.note's page 1 is exactly the fixture that used to
+    // erase-n6-20230015-horizontal-1270.note's page 1 is exactly the fixture that used to
     // decode eraser motions as smooth-but-nonexistent phantom ink (issue
     // #56) -- it has four real eraser-tool strokes (color 255) covering
     // earlier, now-visually-erased real ink ("writing" corrected to
@@ -250,7 +250,7 @@ describe("parseStrokes", () => {
     // other test in this file, and the exact stroke-count regression test
     // in svg.test.ts, assumes it); includeErasers must add exactly those
     // strokes back, each real-ink-white and flagged.
-    const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("erase-n6-20230015-horizontal-1270.note"));
     const page = sn.pages[0];
 
     const inkOnly = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
@@ -270,14 +270,14 @@ describe("parseStrokes", () => {
   });
 
   test("excludes link-tag indicator boxes unconditionally, ink or not (stroke_kind '0000')", async () => {
-    // nomad-3.26.40-link-tag-3p.note's page 2 has three 5-point "link tag"
+    // link-n6-3.26.40-partial-erase-3p.note's page 2 has three 5-point "link tag"
     // boxes (drawn around linked-note source regions) -- confirmed real via
     // the note's own footer LINK_* metadata: each box's TOTALPATH bounding
     // box matches one LINKRECT pixel-exact. Supernote's own rendered page
     // never shows these (they're a UI affordance, not ink the user drew),
     // so parseStrokes must drop them the same way -- with no opt-in, unlike
     // eraser strokes, since there's no legitimate reason to want them back.
-    const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"));
     const page = sn.pages[1];
     const linkRects = Object.values(sn.links)
       .flat()
@@ -303,20 +303,20 @@ describe("parseStrokes", () => {
   });
 
   test("excludes lasso selection paths unconditionally (pen=4)", async () => {
-    // erase.note ends with a lasso-select-then-delete: the selection loop
+    // erase-n5-20260016-all-mechanisms.note ends with a lasso-select-then-delete: the selection loop
     // is recorded as two byte-identical pen=4 records (color 0,
     // thickness 200) that the device never renders -- absent from both the
-    // device raster and erase.pdf (Supernote's own vector export). The same
+    // device raster and erase-n5-20260016-all-mechanisms.pdf (Supernote's own vector export). The same
     // record type also appears where a lasso selection did NOT delete
-    // anything (nomad-3.26.40-link-tag-3p.note page 3's keyword-creation
+    // anything (link-n6-3.26.40-partial-erase-3p.note page 3's keyword-creation
     // selections around fully-visible words), so the loop itself must be
     // dropped regardless of what the selection did -- rendering it drew a
     // phantom black circle either way.
     //
-    // erase.note page 1 holds exactly 20 TOTALPATH records: 10 dark ink
+    // erase-n5-20260016-all-mechanisms.note page 1 holds exactly 20 TOTALPATH records: 10 dark ink
     // strokes, 4 white-ink (color 254) cover-up strokes, 4 eraser (color
     // 255) strokes, and the 2 lasso records.
-    const sn = new SupernoteX(await readFileToUint8Array("erase.note"));
+    const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-all-mechanisms.note"));
     const inkOnly = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
     expect(inkOnly.length).toBe(14); // 10 dark + 4 white, no lasso records
     const withErasers = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
@@ -326,7 +326,7 @@ describe("parseStrokes", () => {
 
     // and on the page where lasso selections deleted nothing: same
     // exclusion, none of the 4 selection loops decode as ink.
-    const sn2 = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+    const sn2 = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"));
     const p3 = parseStrokes(sn2.pages[2].totalPathBuffer, sn2.pageWidth, sn2.pageHeight, { includeErasers: true });
     // a pen=4 loop's known first point (from the raw record) must not
     // appear as any decoded stroke's own first point
@@ -359,7 +359,7 @@ describe("parseStrokes", () => {
     }
 
     test("is omitted unless includeContours is set", async () => {
-      const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("stroke-n5-20260016-isolation-tools-colors-widths.note"));
       const withoutContours = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight);
       expect(withoutContours.length).toBeGreaterThan(0);
       expect(withoutContours.every((s) => s.contour === undefined)).toBe(true);
@@ -373,7 +373,7 @@ describe("parseStrokes", () => {
     });
 
     test("decodes the device's real rendered outline, in the same page-pixel space as points", async () => {
-      // stroke-isolation.note page 2 (1-indexed) is one stroke per pen tool
+      // stroke-n5-20260016-isolation-tools-colors-widths.note page 2 (1-indexed) is one stroke per pen tool
       // at a known width. The contour is the filled region the device
       // renders, so for each stroke it must (a) sit on that stroke's own
       // transformed extents, centered, and (b) enclose an area on the order
@@ -392,7 +392,7 @@ describe("parseStrokes", () => {
       // at a uniform `thickness` (what vectorInk does today) can only ever
       // draw the nominal figure, so the area is asserted per-tool rather
       // than as one global ratio.
-      const sn = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("stroke-n5-20260016-isolation-tools-colors-widths.note"));
       const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
       expect(strokes.length).toBe(4);
 
@@ -423,11 +423,11 @@ describe("parseStrokes", () => {
     });
 
     test("is present even on fully erased strokes -- it is not a visibility record", async () => {
-      // erase-no-white-pen.note is one page of 4 lines (4 different pens),
+      // erase-n5-20260016-no-white-pen.note is one page of 4 lines (4 different pens),
       // every one of them erased -- by the stroke eraser, the lasso eraser,
       // and select-and-delete respectively, with no white-ink cover-ups
       // involved. Its rendered page is blank and Supernote's own export
-      // (erase.pdf/erase-no-white-pen.pdf) draws nothing.
+      // (erase-n5-20260016-all-mechanisms.pdf/erase-n5-20260016-no-white-pen.pdf) draws nothing.
       //
       // Yet every one of those strokes still carries a full-area contour,
       // indistinguishable from a visible stroke's. That is the negative
@@ -435,7 +435,7 @@ describe("parseStrokes", () => {
       // the stroke was *drawn* with, not what survived erasing, so it
       // cannot drive erase-exact export. See plans/vector-format-spec.md's
       // erase-records section.
-      const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-no-white-pen.note"));
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
       const ink = strokes.filter((s) => !s.isEraser);
       expect(ink.length).toBe(5);
@@ -482,7 +482,7 @@ describe("parseStrokes", () => {
       // `pen === 4`, because firmware reuses pen ids across tools. This pins
       // the containment that makes the swap safe -- every lasso the field
       // names is also a pen=4 record, so nothing new is dropped -- and pins
-      // the single disagreement in the other direction: sticker.note page
+      // the single disagreement in the other direction: sticker-n5-20260016-plugin-artwork.note page
       // 1's last record reads pen=4 without being a lasso, because its
       // StrokeConfig is sticker bytes read through the wrong struct. Both
       // conditions are therefore still tested in parseStrokes.
@@ -522,7 +522,7 @@ describe("parseStrokes", () => {
       expect(classOnly).toEqual([]);
       expect(lassoByClass).toBeGreaterThan(0);
       expect(lassoByPen).toBe(lassoByClass + 1);
-      expect(penOnly).toEqual(["sticker.note p1 #5"]);
+      expect(penOnly).toEqual(["sticker-n5-20260016-plugin-artwork.note p1 #5"]);
       // The field is not the constant 5000 snlib documents it as, but it is
       // 5000 for the overwhelming majority -- real ink.
       expect(ink).toBeGreaterThan(2000);
@@ -534,27 +534,27 @@ describe("parseStrokes", () => {
       // a delete-loop encloses, drop it. That is not needed -- the strokes
       // themselves carry it. Both halves matter:
       //
-      // erase.note ends with a select-then-delete, and exactly the stroke
+      // erase-n5-20260016-all-mechanisms.note ends with a select-then-delete, and exactly the stroke
       // inside that loop reads -16, the code for that operation. The loop
       // is not consulted at all.
-      const deleted = new SupernoteX(await readFileToUint8Array("erase.note"));
+      const deleted = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-all-mechanisms.note"));
       const strokes = parseStrokes(deleted.pages[0].totalPathBuffer, deleted.pageWidth, deleted.pageHeight);
       expect(strokes.filter((stroke) => stroke.trailStatus === -16).length).toBe(1);
 
-      // nomad-3.26.40-link-tag-3p page 3's loops are Keyword/Tag creations
+      // link-n6-3.26.40-partial-erase-3p page 3's loops are Keyword/Tag creations
       // carrying the plain-selection op (604), and their contents are
       // fully visible.
       // Treating those loops as deletions is the mistake that made a
       // geometric erase replay unsafe here; going by the record instead,
       // nothing they enclose is marked as deleted.
-      const kept = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const kept = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"));
       const p3 = parseStrokes(kept.pages[2].totalPathBuffer, kept.pageWidth, kept.pageHeight);
       expect(p3.length).toBe(143);
       expect(p3.filter((stroke) => stroke.trailStatus === -16).length).toBe(0);
     });
 
     test("no stroke is emitted with an out-of-range colour", async () => {
-      // sticker.note page 1 #5 would decode to rgb(2012028940,...) if it
+      // sticker-n5-20260016-plugin-artwork.note page 1 #5 would decode to rgb(2012028940,...) if it
       // reached the output. Guards the whole fixture set, not just that one.
       const fixtures = fs.readdirSync("tests/input").filter((name) => name.endsWith(".note")).sort();
       for (const fixture of fixtures) {
@@ -583,18 +583,18 @@ describe("parseStrokes", () => {
       return Math.abs(total) / 2;
     }
 
-    test("marks exactly the strokes Supernote's own export leaves out (turkish.note)", async () => {
+    test("marks exactly the strokes Supernote's own export leaves out (turkish-a6x-20230015-handwriting-erase.note)", async () => {
       // The claim this pins down is the strong one: a non-zero status means
-      // the device does not draw the record. turkish.pdf is Supernote's own
+      // the device does not draw the record. turkish-a6x-20230015-handwriting-erase.pdf is Supernote's own
       // vector export of this page in the filled-outline style, so each
       // drawn stroke is one `f` fill operator -- 152 of them, against 152
       // records reading 0 out of 189. Nothing here consults the raster.
-      const sn = new SupernoteX(await readFileToUint8Array("turkish.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("turkish-a6x-20230015-handwriting-erase.note"));
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
       expect(strokes.length).toBe(189);
       expect(strokes.filter((stroke) => stroke.trailStatus === undefined).length).toBe(152);
 
-      const pdf = (await fs.readFile("tests/input/turkish.pdf")).toString("latin1");
+      const pdf = (await fs.readFile("tests/input/turkish-a6x-20230015-handwriting-erase.pdf")).toString("latin1");
       const form = /\d+ 0 obj\r?\n?([\s\S]*?)endobj/g;
       let streamText = "";
       for (let match = form.exec(pdf); match; match = form.exec(pdf)) {
@@ -605,18 +605,18 @@ describe("parseStrokes", () => {
       expect((streamText.match(/(?:^|\s)f(?:\s|$)/g) ?? []).length).toBe(152);
     });
 
-    test("the code says which mechanism removed the stroke (erase-no-white-pen.note)", async () => {
+    test("the code says which mechanism removed the stroke (erase-n5-20260016-no-white-pen.note)", async () => {
       // This fixture's README records exactly what was done to each of its
       // five lines: three erase mechanisms, one of them lasso-select-and-
       // delete. Exactly one stroke reads -16 (the lasso delete, its own
       // pen=4 selection pair still in the file) and the rest read -99.
-      const sn = new SupernoteX(await readFileToUint8Array("erase-no-white-pen.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-no-white-pen.note"));
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
       expect(strokes.map((stroke) => stroke.trailStatus).sort((a, b) => a! - b!)).toEqual([-99, -99, -99, -99, -16]);
 
       // Same shape on the two other fixtures documented as exercising all
       // three mechanisms: one lasso delete each, everything else the eraser.
-      for (const [fixture, page] of [["erase.note", 0], ["caligraphy.note", 3]] as const) {
+      for (const [fixture, page] of [["erase-n5-20260016-all-mechanisms.note", 0], ["caligraphy-n5-20260016-widths-erase.note", 3]] as const) {
         const other = new SupernoteX(await readFileToUint8Array(fixture));
         const codes = parseStrokes(other.pages[page].totalPathBuffer, other.pageWidth, other.pageHeight)
           .map((stroke) => stroke.trailStatus)
@@ -632,7 +632,7 @@ describe("parseStrokes", () => {
       // and a contour, stored right after the stroke it came from, so the
       // erased stroke must be skipped and the fragments drawn instead --
       // drawing both would paint the erased part back in.
-      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"));
       const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
         includeContours: true,
       });
@@ -657,16 +657,16 @@ describe("parseStrokes", () => {
       }
     });
 
-    test("the device draws only the surviving fragments of a partially erased stroke (nomad-3.26.40-link-tag-3p.pdf)", async () => {
+    test("the device draws only the surviving fragments of a partially erased stroke (link-n6-3.26.40-partial-erase-3p.pdf)", async () => {
       // The direct ground truth for -4, and the tightest in the corpus:
       // this page's export names, per stroke, which *pieces* of it survived.
       // Each of the seven erased pen lines must come out as its own
       // fragment records and nothing else -- a path spanning the whole line
       // would be the erased part painted back in.
-      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"));
       const strokes = parseStrokes(sn.pages[1].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
 
-      const devicePaths = devicePageSubpaths(await fs.readFile("tests/input/nomad-3.26.40-link-tag-3p.pdf"), 1);
+      const devicePaths = devicePageSubpaths(await fs.readFile("tests/input/link-n6-3.26.40-partial-erase-3p.pdf"), 1);
       const lines = strokes.filter((stroke) => stroke.trailStatus === -4 && stroke.points.length > 60 && stroke.thickness <= 1300);
       expect(lines.length).toBe(7);
 
@@ -704,18 +704,18 @@ describe("parseStrokes", () => {
       }
     });
 
-    test("the device omits every marked stroke on a page that erases and rewrites in place (nomad-3.26.40-link-tag-3p.pdf)", async () => {
+    test("the device omits every marked stroke on a page that erases and rewrites in place (link-n6-3.26.40-partial-erase-3p.pdf)", async () => {
       // Page 3's export is the stroked-polyline style, one `S` per stroke,
       // so it states its count exactly: 113 for the 113 records reading 0,
       // none of the 30 marked. This is the page where a raster measurement
       // gets it wrong -- the erased words were rewritten in the same place,
       // so 15 of the 30 marked strokes find ink under half their points.
-      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"));
       const strokes = parseStrokes(sn.pages[2].totalPathBuffer, sn.pageWidth, sn.pageHeight);
       const live = strokes.filter((stroke) => stroke.trailStatus === undefined);
       expect(strokes.length - live.length).toBe(30);
 
-      const pdf = (await fs.readFile("tests/input/nomad-3.26.40-link-tag-3p.pdf")).toString("latin1");
+      const pdf = (await fs.readFile("tests/input/link-n6-3.26.40-partial-erase-3p.pdf")).toString("latin1");
       const streams = [...pdf.matchAll(/\d+ 0 obj\r?\n?([\s\S]*?)endobj/g)]
         .filter(([, body]) => body.includes("/Subtype/Form"))
         .map(([, body]) => {
@@ -725,7 +725,7 @@ describe("parseStrokes", () => {
       expect((streams[2].match(/(?:^|\s)S(?:\s|$)/g) ?? []).length).toBe(live.length);
     });
 
-    test("a marked stroke's remaining ink always belongs to a live record (nomad-3.26.40-link-tag-3p.note p3)", async () => {
+    test("a marked stroke's remaining ink always belongs to a live record (link-n6-3.26.40-partial-erase-3p.note p3)", async () => {
       // Why that page's export is worth trusting over a measurement of the
       // render: measured naively the marked strokes look alive, because
       // they were erased and then *rewritten in the same place*, so what
@@ -737,7 +737,7 @@ describe("parseStrokes", () => {
       // marked stroke survives that subtraction, while every live stroke is
       // present -- so no ink on this page needs a marked stroke to explain
       // it.
-      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.26.40-link-tag-3p.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"));
       const page = sn.pages[2];
       const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeContours: true });
       const width = sn.pageWidth, height = sn.pageHeight;
@@ -818,7 +818,7 @@ describe("parseStrokes", () => {
       // The field is absent rather than 0 on a live stroke, so `in` and a
       // plain truthiness check agree with each other, and the 21 marked
       // strokes of this page are exactly the ones its PDF export omits.
-      const sn = new SupernoteX(await readFileToUint8Array("horizontal_1270.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n6-20230015-horizontal-1270.note"));
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
       expect(strokes.filter((stroke) => stroke.trailStatus !== undefined).length).toBe(21);
       for (const stroke of strokes) {
@@ -838,14 +838,14 @@ describe("parseStrokes", () => {
       return new TextDecoder().decode(bytes.subarray(0, end < 0 ? 52 : end));
     }
 
-    test("pen=5 is the marker under the id older firmware used for it (test.note)", async () => {
-      // test.note is the only SN_FILE_VER_20220011 (A5X) fixture here, and
+    test("pen=5 is the marker under the id older firmware used for it (test-a5x-20220011-old-pen-ids.note)", async () => {
+      // test-a5x-20220011-old-pen-ids.note is the only SN_FILE_VER_20220011 (A5X) fixture here, and
       // the only file with pen=5 ordinary ink. Its three pen=5 strokes are
       // a highlighter pass over the first line of handwriting: far wider
       // than the pen ink they cover, and covering it. Both are asserted
       // because either alone is weak -- a wide stroke needn't be a marker,
       // and an overlapping one needn't be either.
-      const sn = new SupernoteX(await readFileToUint8Array("test.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"));
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
       const markers = strokes.filter((stroke) => stroke.pen === "marker");
       expect(markers.length).toBe(3);
@@ -936,10 +936,10 @@ describe("parseStrokes", () => {
     });
 
     test("pen=15 is the calligraphy pen, and it is the tool's only id", async () => {
-      // caligraphy.note is named for the tool and drawn entirely with it.
+      // caligraphy-n5-20260016-widths-erase.note is named for the tool and drawn entirely with it.
       // Every ink record on every page reads 15, which is what rules out
       // the tool having several ids (e.g. one per nib angle).
-      const sn = new SupernoteX(await readFileToUint8Array("caligraphy.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("caligraphy-n5-20260016-widths-erase.note"));
       let calligraphy = 0;
       for (const page of sn.pages) {
         const strokes = parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight);
@@ -949,18 +949,18 @@ describe("parseStrokes", () => {
       expect(calligraphy).toBeGreaterThan(50);
 
       // ...and the isolated one-stroke-per-tool page agrees.
-      const isolation = new SupernoteX(await readFileToUint8Array("stroke-isolation.note"));
+      const isolation = new SupernoteX(await readFileToUint8Array("stroke-n5-20260016-isolation-tools-colors-widths.note"));
       const tools = parseStrokes(isolation.pages[1].totalPathBuffer, isolation.pageWidth, isolation.pageHeight);
       expect(tools.map((stroke) => stroke.pen).sort()).toEqual(["calligraphy", "inkPen", "marker", "needlePoint"]);
     });
 
     test("the older format's grey ids decode to the greys the device itself draws", async () => {
-      // test.note stores 48 and 81 where current firmware stores a grey
+      // test-a5x-20220011-old-pen-ids.note stores 48 and 81 where current firmware stores a grey
       // level directly, so reading them literally makes dark grey nearly
       // black. Supernote's own vector export of the same page says which
       // grey each id means -- the ground truth the 157/201 palette already
       // comes from -- and its page 1 uses exactly three ink colours.
-      const pdf = await fs.promises.readFile("tests/input/test.pdf");
+      const pdf = await fs.promises.readFile("tests/input/test-a5x-20220011-old-pen-ids.pdf");
       const text = pdf.toString("latin1");
       const form = [...text.matchAll(/\d+ 0 obj\r?\n?([\s\S]*?)endobj/g)]
         .filter(([, body]) => body.includes("/Subtype/Form"))
@@ -994,7 +994,7 @@ describe("parseStrokes", () => {
       }
       flush()
 
-      const sn = new SupernoteX(await readFileToUint8Array("test.note"))
+      const sn = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"))
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
       const greyOf = (stroke: (typeof strokes)[number]) => Number(/rgb\((\d+)/.exec(stroke.color)![1])
 
@@ -1041,7 +1041,7 @@ describe("parseStrokes", () => {
       // over whatever the user actually drew with, so 'marker' would be a
       // false reading of a real id. The flag says the tool is gone rather
       // than merely unrecognized -- the ink itself is kept and rendered.
-      const sn = new SupernoteX(await readFileToUint8Array("nomad-3.15.27-blank-shapes-and-RTR.note"));
+      const sn = new SupernoteX(await readFileToUint8Array("blank-a6x-3.15.27-shapes-rtr.note"));
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight);
       const stars = strokes.filter((stroke) => stroke.isStarMark);
       expect(stars.length).toBe(1);

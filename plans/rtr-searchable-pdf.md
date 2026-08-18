@@ -6,11 +6,11 @@ This is `supernote-typescript`, a parser/renderer for Ratta Supernote `.note` fi
 
 - **Exports** (`src/index.ts`): `SupernoteX` (parser), `toImage` (rasterizes pages to `image-js` `Image` objects, see `src/conversion.ts`), `fetchMirrorFrame`.
 - **No PDF code exists anywhere in the repo.** `package.json` dependencies are just `color`, `fs-extra`, `image-js` — no PDF library.
-- **RTR** = "Real Time Recognition" (Supernote's on-device handwriting recognition). Confirmed by test fixture `tests/input/rtr.note` and its expected text `'Real time recognition paragraph test'`.
+- **RTR** = "Real Time Recognition" (Supernote's on-device handwriting recognition). Confirmed by test fixture `tests/input/rtr-n5-20230015-recognition.note` and its expected text `'Real time recognition paragraph test'`.
 - **Data model** (`src/format.ts:132`): `IRecognitionElement { label, type, words: [{ label, "bounding-box"?: { x, y, width, height } }] }`. Populated per-page at `page.recognitionElements` (`src/format.ts:181`) by `SupernoteX._parseRecognition` (`src/parsing.ts:357`).
 - Existing helpers `_extractText` (`src/parsing.ts:377`) and `_extractParagraphs` (`src/parsing.ts:385`) already show the pattern for walking `type === 'Text'` elements and reading `e.words[0]['bounding-box']`, but they discard position info once flattened to a string — the new code needs to keep per-word boxes.
 - Page pixel size is `note.pageWidth` / `note.pageHeight` (`src/format.ts:3-6`), the same dimensions `toImage()` rasterizes to (`src/conversion.ts:94-97`).
-- Useful test fixtures already in the repo: `tests/input/rtr.note` (has paragraph/text expectations in `tests/main.test.ts:149-174`) and `tests/input/nomad-3.15.27-blank-shapes-and-RTR.note`.
+- Useful test fixtures already in the repo: `tests/input/rtr-n5-20230015-recognition.note` (has paragraph/text expectations in `tests/main.test.ts:149-174`) and `tests/input/blank-a6x-3.15.27-shapes-rtr.note`.
 
 ## Goal
 
@@ -20,7 +20,7 @@ Add a public API, e.g. `toPdf(note: SupernoteX, options?): Promise<Uint8Array>`,
 
 ## Step-by-step plan
 
-1. **Spike: verify the coordinate space before writing real code.** This is the biggest risk in the task. Write a throwaway script that loads `tests/input/rtr.note`, calls `toImage`, and dumps `page.recognitionElements[*].words[*]['bounding-box']` alongside `note.pageWidth`/`pageHeight` and the actual rendered image dimensions. Confirm bounding boxes are already in page-pixel space (same origin/scale as the raster image) with no separate DPI/scale factor. If they're not 1:1, work out the correct scale/offset here before proceeding — don't guess in the main implementation.
+1. **Spike: verify the coordinate space before writing real code.** This is the biggest risk in the task. Write a throwaway script that loads `tests/input/rtr-n5-20230015-recognition.note`, calls `toImage`, and dumps `page.recognitionElements[*].words[*]['bounding-box']` alongside `note.pageWidth`/`pageHeight` and the actual rendered image dimensions. Confirm bounding boxes are already in page-pixel space (same origin/scale as the raster image) with no separate DPI/scale factor. If they're not 1:1, work out the correct scale/offset here before proceeding — don't guess in the main implementation.
 
 2. **Add dependencies.** Add `pdf-lib` for PDF construction, and `@pdf-lib/fontkit` for embedding a Unicode-capable TTF (the standard 14 PDF fonts don't cover most recognized text, and Supernote recognition may include non-Latin scripts). Pick and vendor/bundle a permissively-licensed Unicode font (e.g. Noto Sans) or accept a font path via options.
 
@@ -34,10 +34,10 @@ Add a public API, e.g. `toPdf(note: SupernoteX, options?): Promise<Uint8Array>`,
 4. **Export from `src/index.ts`**: `export { toPdf } from './pdf';`
 
 5. **Tests** (`tests/main.test.ts` or a new `tests/pdf.test.ts`):
-   - Generate a PDF from `tests/input/rtr.note`, write it to `tests/output/` like the existing image tests do.
-   - Use a PDF text-extraction library (e.g. `pdf-parse` or `pdfjs-dist`, dev dependency only) to assert the extracted text matches (or is a superset of) the known-good text from the existing `rtr.note` test (`tests/main.test.ts:152-174`).
+   - Generate a PDF from `tests/input/rtr-n5-20230015-recognition.note`, write it to `tests/output/` like the existing image tests do.
+   - Use a PDF text-extraction library (e.g. `pdf-parse` or `pdfjs-dist`, dev dependency only) to assert the extracted text matches (or is a superset of) the known-good text from the existing `rtr-n5-20230015-recognition.note` test (`tests/main.test.ts:152-174`).
    - Optionally assert extracted text *item positions* (if the chosen extraction library exposes them) fall within the page bounds and in roughly the expected reading order, as a sanity check on the coordinate mapping from step 1.
-   - Also run against `nomad-3.15.27-blank-shapes-and-RTR.note` and a note with no recognition data, to confirm the no-text-layer path doesn't throw.
+   - Also run against `blank-a6x-3.15.27-shapes-rtr.note` and a note with no recognition data, to confirm the no-text-layer path doesn't throw.
 
 6. **Docs**: add a short usage example to `README.md` alongside the existing `toImage` example (check `README.md` for the existing example format and match its style).
 

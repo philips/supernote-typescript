@@ -45,9 +45,9 @@ export interface IStroke {
 	 * this is the per-stroke visibility answer, read straight out of the
 	 * file rather than inferred from the page's raster. Confirmed against
 	 * Supernote's own vector PDF exports, which draw exactly the records
-	 * reading `0` and omit every marked one: `turkish.note` (152 of 189 ink
-	 * records live, 152 paths exported), `horizontal_1270.note` (61 of 82
-	 * live, 61 exported) and `nomad-3.26.40-link-tag-3p.note` page 3 (113
+	 * reading `0` and omit every marked one: `turkish-a6x-20230015-handwriting-erase.note` (152 of 189 ink
+	 * records live, 152 paths exported), `erase-n6-20230015-horizontal-1270.note` (61 of 82
+	 * live, 61 exported) and `link-n6-3.26.40-partial-erase-3p.note` page 3 (113
 	 * of 143, 113 exported).
 	 *
 	 * The value says *how* the record stopped being drawn. Codes seen
@@ -69,7 +69,7 @@ export interface IStroke {
 	 * stored immediately after this one. Drawing this record *and* those
 	 * would paint the erased part back in, so a renderer should skip every
 	 * record carrying a status and draw the fragments instead. That is what
-	 * the device itself does: its export of `nomad-3.26.40-link-tag-3p`
+	 * the device itself does: its export of `link-n6-3.26.40-partial-erase-3p`
 	 * page 2 draws each erased line as exactly its own fragments, matching
 	 * their extents to the pixel, and never the line. */
 	trailStatus?: number;
@@ -84,7 +84,7 @@ export interface IStroke {
 	 * two-sample ink stroke (`"others"`). Across every fixture `stroke_kind`
 	 * separates all three cleanly -- 10 rectangles, 8 straight lines and 2
 	 * short ink strokes, with no overlap -- where counting points alone
-	 * turned each of `straight-line.note`'s lines into either a filled box
+	 * turned each of `line-n5-20260016-ruler-tool.note`'s lines into either a filled box
 	 * or nothing at all. */
 	isFilledRect?: boolean;
 	/** True for the Stars feature's star mark, read from the record's own
@@ -131,7 +131,7 @@ export interface IStroke {
 }
 
 /** Raw pen tool ids observed in `TOTALPATH`'s `pen` field -- reverse
- * engineered against `stroke-isolation.note` (which isolates one tool per
+ * engineered against `stroke-n5-20260016-isolation-tools-colors-widths.note` (which isolates one tool per
  * stroke) and cross-referenced against
  * https://github.com/Walnut356/snlib/blob/main/src/pen.rs, an independent
  * Rust implementation with a matching (if only partially enumerated) `Pen`
@@ -140,9 +140,9 @@ export interface IStroke {
  * value for `InkPen`), consistently seen wherever a stroke's tool is known
  * to be the ink pen. Any other id maps to `'unknown'` rather than a guess.
  *
- * `15` is the calligraphy pen: `caligraphy.note` (named for the tool)
+ * `15` is the calligraphy pen: `caligraphy-n5-20260016-widths-erase.note` (named for the tool)
  * carries 59 ink strokes and every one of them reads 15 -- its only other
- * records are eraser and lasso gestures -- as does `stroke-isolation.note`
+ * records are eraser and lasso gestures -- as does `stroke-n5-20260016-isolation-tools-colors-widths.note`
  * page 2's calligraphy stroke. One id, not several.
  *
  * `5` is the marker again, under the id older firmware used for it -- see
@@ -154,7 +154,7 @@ export interface IStroke {
  * `80 -> 81`) runs for `penType == 5 || penType == 11` and nothing else,
  * and `getRecognDataPointerEventWithFile`, which feeds handwriting
  * recognition, skips `penType` `4`, `5` and `11` -- the lasso and both
- * marker ids. The fixtures agree: `test.note` is the only
+ * marker ids. The fixtures agree: `test-a5x-20220011-old-pen-ids.note` is the only
  * `SN_FILE_VER_20220011` (A5X) file here, its ink pen is `1` rather than
  * `16`, and its three `pen=5` strokes carry color `81` -- the marker form
  * of `80` -- at thickness 1500, rendering in the page's own raster as wide
@@ -172,11 +172,11 @@ const PEN_IDS: Record<number, StrokePen> = {
 /** Grey `color` values that older firmware stored as *ids* rather than as
  * the grey level they render at, mapped to the levels current firmware
  * stores directly. Only `.note` files old enough to predate the change use
- * them -- here, only `test.note` (`SN_FILE_VER_20220011`, A5X).
+ * them -- here, only `test-a5x-20220011-old-pen-ids.note` (`SN_FILE_VER_20220011`, A5X).
  *
  * Without this a stroke's color is simply wrong: `48` is dark grey, not the
  * near-black `rgb(48,48,48)` reads as. Supernote's own vector export of
- * that fixture (`test.pdf`) settles which grey each id means, the same
+ * that fixture (`test-a5x-20220011-old-pen-ids.pdf`) settles which grey each id means, the same
  * ground truth the canonical 157/201 palette comes from. Its page 1 draws
  * exactly three ink colors, and each one's paths land on one of our
  * decoded color groups with nothing left over:
@@ -212,7 +212,7 @@ const LEGACY_GREY_IDS: Record<number, number> = {
  * stroke" -- confirmed against https://github.com/Walnut356/snlib's `Color`
  * enum (`Eraser = 255`) and directly against real fixtures: the exact
  * strokes that used to decode as smooth-but-nonexistent phantom ink in
- * `horizontal_1270.note` (see issue #56) carry this color. By default,
+ * `erase-n6-20230015-horizontal-1270.note` (see issue #56) carry this color. By default,
  * `parseStrokes` filters these out entirely -- they're real,
  * correctly-decoded pen motions, just not strokes that were ever meant to
  * render as visible ink themselves (Supernote's eraser tool is itself a
@@ -231,8 +231,8 @@ const LEGACY_GREY_IDS: Record<number, number> = {
  * `ERASER_COLOR` already *is* a valid white grey level), so a caller that
  * draws every stroke in `TOTALPATH`'s own order paints over the erased ink
  * with white the same way the real device does, rather than leaving it
- * fully visible. Confirmed directly against `horizontal_1270.note` and
- * `nomad-3.26.40-link-tag-3p.note` (whose "ERASER on MARKER"/"ERASER on PEN
+ * fully visible. Confirmed directly against `erase-n6-20230015-horizontal-1270.note` and
+ * `link-n6-3.26.40-partial-erase-3p.note` (whose "ERASER on MARKER"/"ERASER on PEN
  * LINES" fixture rows exist specifically to exercise this): each eraser
  * stroke's own record sits immediately after, and closely traces the
  * shape/bounds of, the ink it was dragged over. */
@@ -240,7 +240,7 @@ const ERASER_COLOR = 255;
 
 /** Reserved `stroke_kind` value (see `STROKE_CONFIG.STROKE_KIND_OFFSET`)
  * meaning "this is a link-tag indicator box, not ink" -- confirmed directly
- * against `nomad-3.26.40-link-tag-3p.note` (named for exactly this
+ * against `link-n6-3.26.40-partial-erase-3p.note` (named for exactly this
  * feature): every 5-point `stroke_kind: "0000"` record's bounding box
  * matches one of the note's own footer `LINK_*` entries' `LINKRECT`
  * pixel-exact, the same way a `TITLE_*` entry's `TITLERECT` matches a
@@ -273,7 +273,7 @@ const FILLED_RECT_STROKE_KIND = '0001';
  * `penType` and `100` into `m_thickness`. Both stores are visible in
  * `flutter_note_lib.dll` at `0x180092f3c` and `0x1800bcc29`, and the one
  * star record in the fixtures
- * (`nomad-3.15.27-blank-shapes-and-RTR.note` page 1) reads exactly
+ * (`blank-a6x-3.15.27-shapes-rtr.note` page 1) reads exactly
  * `pen=5, thickness=100`. Whatever tool the user had selected is gone, so
  * `parseStrokes` reports `'unknown'` for a star rather than the `'marker'`
  * `5` would otherwise decode to -- the id is real, it just isn't this
@@ -285,7 +285,7 @@ const STAR_MARK_STROKE_KIND = 'fiveStarsSignal';
  * kind rather than inferring it from a pen id that firmware reuses across
  * tools (`pen === 1` is both the older ink pen and the Nomad-era eraser).
  *
- * It is still tested, for one specific record: `sticker.note` page 1's last
+ * It is still tested, for one specific record: `sticker-n5-20260016-plugin-artwork.note` page 1's last
  * record is not a stroke at all. Its `StrokeConfig` reads
  * `screenHeight: 120` on a 2560-tall page, `thickness: 0`, zero points, and
  * a `color` of 2012028940 -- the bytes are sticker data being read through
@@ -354,8 +354,8 @@ const STROKE_CONFIG = {
  * trails as `TRAIL_ERASE_AREA` / `ERASE_LINE_COLOR_VALUE` / `CLEAN SCREEN`
  * / `this is region selection trail` / `trail ERASER select:` as it
  * replays them, so some discriminator exists -- but it is not this one.
- * `erase.note`, which exercises every erase mechanism, carries genuine
- * erasers at `-4`, while `nomad-3.26.40-link-tag-3p.note` page 3's `-4`
+ * `erase-n5-20260016-all-mechanisms.note`, which exercises every erase mechanism, carries genuine
+ * erasers at `-4`, while `link-n6-3.26.40-partial-erase-3p.note` page 3's `-4`
  * records sit on top of fully visible keyword text and erased nothing. Same
  * class, opposite outcome. So this identifies the *tool*, never the
  * *result*, and a geometric erase replay still cannot be driven from it. */
@@ -371,12 +371,12 @@ const RECORD_CLASS = {
 	 * Holds exactly the records that previously matched `pen === 4` -- all
 	 * reading `color: 0`, `thickness: 200`, and frequently recorded as two
 	 * byte-identical consecutive records. That those are never rendered was
-	 * established against every fixture that has one: `erase.note` (a
+	 * established against every fixture that has one: `erase-n5-20260016-all-mechanisms.note` (a
 	 * lasso-select-then-delete; the loop is absent from both the device
-	 * raster and `erase.pdf`, Supernote's own export),
-	 * `nomad-3.26.40-link-tag-3p.note` page 3 (keyword/tag-creation
+	 * raster and `erase-n5-20260016-all-mechanisms.pdf`, Supernote's own export),
+	 * `link-n6-3.26.40-partial-erase-3p.note` page 3 (keyword/tag-creation
 	 * selections around fully-visible words -- rendering these drew phantom
-	 * black circles around the text), and `unknown-color.note` (a path with
+	 * black circles around the text), and `color-n6-20230015-unknown-palette.note` (a path with
 	 * ~0% presence in the page's own rendered ink).
 	 *
 	 * Holds every real lasso path, and `pen === 4` holds the same set plus
@@ -390,7 +390,7 @@ const RECORD_CLASS = {
  * to different totals than these. Solved directly instead: the only
  * `(Section1, Section2)` pair that makes *every* record on a page parse
  * byte-exactly, jointly across pages from two device families (N5/Manta
- * `erase-no-white-pen.note`, and the older `horizontal_1270.note`). The
+ * `erase-n5-20260016-no-white-pen.note`, and the older `erase-n6-20230015-horizontal-1270.note`). The
  * resulting contour geometry then independently validates -- see
  * `IStroke.contour`. Only the span sizes matter here; nothing in either
  * section is read. */
@@ -573,7 +573,7 @@ function tryParseStroke(
  * unlike the old byte-scanning approach, this can't drift into a stroke's
  * own inner arrays (e.g. its nested contour-point list) and misread real,
  * structured-but-unrelated bytes as an independent phantom stroke (the root
- * cause of `rtr.note`'s circular phantom stroke from the pre-fix
+ * cause of `rtr-n5-20230015-recognition.note`'s circular phantom stroke from the pre-fix
  * investigation in issue #56 -- there is no such stroke in the real
  * structure at all).
  *
@@ -592,7 +592,7 @@ function tryParseStroke(
  * Strokes whose `color` is `255` are excluded by default, not returned as
  * `IStroke`s -- see `ERASER_COLOR`'s doc comment: they're real pen motions
  * (Supernote's eraser is a physical gesture like any other tool), just never
- * meant to render as ink *themselves*. This is what `horizontal_1270.note`'s
+ * meant to render as ink *themselves*. This is what `erase-n6-20230015-horizontal-1270.note`'s
  * phantom scribbles actually were: real eraser strokes, exactly identifiable
  * by this one field, not a decode bug and not something raster
  * cross-checking ever needed to guess at. Pass `includeErasers: true` (see
@@ -603,7 +603,7 @@ function tryParseStroke(
  * Strokes whose `stroke_kind` is `"0000"` are excluded unconditionally (no
  * `includeErasers`-style opt-in) -- see `LINK_TAG_STROKE_KIND`'s doc
  * comment: a link-tag indicator box, not ink, confirmed against
- * `nomad-3.26.40-link-tag-3p.note`'s own footer `LINK_*` metadata.
+ * `link-n6-3.26.40-partial-erase-3p.note`'s own footer `LINK_*` metadata.
  *
  * Select gestures are excluded unconditionally too -- the loop drawn to
  * lasso-select content (for deletion, moving, or Keyword/Tag creation),
@@ -660,7 +660,7 @@ export function parseStrokes(
 		// kind, rather than inferring it from a pen id firmware reuses across
 		// tools. The `pen` check is kept alongside it, and deliberately: see
 		// `LASSO_PEN_ID`, which is no longer really "the lasso test" so much
-		// as a guard against one record in `sticker.note` whose StrokeConfig
+		// as a guard against one record in `sticker-n5-20260016-plugin-artwork.note` whose StrokeConfig
 		// isn't a StrokeConfig at all.
 		const isLassoPath = raw?.recordClass === RECORD_CLASS.LASSO || raw?.pen === LASSO_PEN_ID;
 		const isStarMark = raw?.strokeKind === STAR_MARK_STROKE_KIND;

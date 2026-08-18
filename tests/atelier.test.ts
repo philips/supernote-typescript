@@ -17,7 +17,7 @@ function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
 
 describe("atelier", () => {
   test("parses config and surfaces from a .spd file", async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("sample.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-sample-synthetic.spd"));
     expect(note.fmtVer).toEqual(2);
     expect(note.viewport).toEqual({ x: 249984, y: 249984, scale: 1 });
     expect(note.canvasSize).toEqual({ width: 1536, height: 2048 });
@@ -43,7 +43,7 @@ describe("atelier", () => {
   })
 
   test("stitches a surface's tiles into a composite image aligned to the file's shared tile grid", { timeout: 30000 }, async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("sample.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-sample-synthetic.spd"));
 
     // surface_9999 covers every tile in the file, so it defines the shared
     // grid bounds; every surface's image should come out that same size.
@@ -51,7 +51,7 @@ describe("atelier", () => {
     expect(background).not.toBeNull();
     expect(background!.width).toEqual(1536);
     expect(background!.height).toEqual(2048);
-    await imagejs.writeSync(`tests/output/sample.spd-surface_9999.png`, background!);
+    await imagejs.writeSync(`tests/output/atelier-sample-synthetic.spd-surface_9999.png`, background!);
 
     // surface_1/surface_2 only have sparse tiles (rows 2-8/cols 1-5 and rows
     // 6-13/cols 5-10 respectively), but since toImage sizes against every
@@ -60,32 +60,32 @@ describe("atelier", () => {
     const layer1 = await note.toImage("surface_1");
     expect(layer1!.width).toEqual(background!.width);
     expect(layer1!.height).toEqual(background!.height);
-    await imagejs.writeSync(`tests/output/sample.spd-surface_1.png`, layer1!);
+    await imagejs.writeSync(`tests/output/atelier-sample-synthetic.spd-surface_1.png`, layer1!);
 
     const layer2 = await note.toImage("surface_2");
     expect(layer2!.width).toEqual(background!.width);
     expect(layer2!.height).toEqual(background!.height);
-    await imagejs.writeSync(`tests/output/sample.spd-surface_2.png`, layer2!);
+    await imagejs.writeSync(`tests/output/atelier-sample-synthetic.spd-surface_2.png`, layer2!);
   })
 
   test("returns null for a surface with no tiles", async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("sample.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-sample-synthetic.spd"));
     expect(await note.toImage("surface_3")).toBeNull();
   })
 
   test("returns null for a nonexistent surface", async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("sample.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-sample-synthetic.spd"));
     expect(await note.toImage("surface_42")).toBeNull();
   })
 
   test("composites every surface into one flattened image", { timeout: 30000 }, async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("sample.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-sample-synthetic.spd"));
     const composite = await note.toCompositeImage();
     const background = await note.toImage("surface_9999");
     expect(composite).not.toBeNull();
     expect(composite!.width).toEqual(1536);
     expect(composite!.height).toEqual(2048);
-    await imagejs.writeSync(`tests/output/sample.spd-composite.png`, composite!);
+    await imagejs.writeSync(`tests/output/atelier-sample-synthetic.spd-composite.png`, composite!);
 
     // Outside every foreground layer's own tiles, the composite must match
     // the background exactly -- catches compositing that blanks/overwrites
@@ -123,7 +123,7 @@ function arraysEqual(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
 
 describe("atelier real device file", () => {
   test("parses config and surfaces from a real device-generated .spd file", async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-device-real-audubon.spd"));
     expect(note.fmtVer).toEqual(2);
     expect(note.viewport).toEqual({ x: 249984, y: 249984, scale: 1 });
     expect(note.canvasSize).toEqual({ width: 1920, height: 2560 });
@@ -156,7 +156,7 @@ describe("atelier real device file", () => {
   })
 
   test("stitches every surface of a real device-generated .spd file to the same aligned size", { timeout: 30000 }, async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-device-real-audubon.spd"));
 
     // surface_1/surface_2 only have sparse tiles where the user actually
     // drew, but toImage sizes against the shared tile grid across every
@@ -173,24 +173,24 @@ describe("atelier real device file", () => {
     expect([layer1!.width, layer1!.height]).toEqual([background!.width, background!.height]);
     expect([layer2!.width, layer2!.height]).toEqual([background!.width, background!.height]);
 
-    await imagejs.writeSync(`tests/output/real-device.spd-surface_9999.png`, background!);
-    await imagejs.writeSync(`tests/output/real-device.spd-surface_1.png`, layer1!);
-    await imagejs.writeSync(`tests/output/real-device.spd-surface_2.png`, layer2!);
+    await imagejs.writeSync(`tests/output/atelier-device-real-audubon.spd-surface_9999.png`, background!);
+    await imagejs.writeSync(`tests/output/atelier-device-real-audubon.spd-surface_1.png`, layer1!);
+    await imagejs.writeSync(`tests/output/atelier-device-real-audubon.spd-surface_2.png`, layer2!);
 
     expect(await note.toImage("surface_3")).toBeNull();
   })
 
   test("composites every surface of a real device-generated .spd file into one flattened image", { timeout: 30000 }, async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-device-real-audubon.spd"));
     const composite = await note.toCompositeImage();
     expect(composite).not.toBeNull();
     expect(composite!.width).toEqual(2048);
     expect(composite!.height).toEqual(2560);
-    await imagejs.writeSync(`tests/output/real-device.spd-composite.png`, composite!);
+    await imagejs.writeSync(`tests/output/atelier-device-real-audubon.spd-composite.png`, composite!);
   })
 
   test("toCompositeImage can composite a subset of surfaces, e.g. hiding the reference layer", { timeout: 30000 }, async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-device-real-audubon.spd"));
     const full = await note.toCompositeImage();
     const withoutBackground = await note.toCompositeImage(["surface_1", "surface_2"]);
     expect(withoutBackground).not.toBeNull();
@@ -198,7 +198,7 @@ describe("atelier real device file", () => {
     // ones included -- same coordinate space as toImage()/the full composite.
     expect(withoutBackground!.width).toEqual(full!.width);
     expect(withoutBackground!.height).toEqual(full!.height);
-    await imagejs.writeSync(`tests/output/real-device.spd-composite-no-background.png`, withoutBackground!);
+    await imagejs.writeSync(`tests/output/atelier-device-real-audubon.spd-composite-no-background.png`, withoutBackground!);
 
     // (70, 0) is outside surface_1/surface_2's own tiles but inside
     // surface_9999's (the "Reference Layer" background) -- so excluding
@@ -209,14 +209,14 @@ describe("atelier real device file", () => {
   })
 
   test("toCompositeImage returns null when the requested subset has no content", async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-device-real-audubon.spd"));
     expect(await note.toCompositeImage([])).toBeNull();
     // surface_3 exists (it's a real layer) but has no tiles of its own.
     expect(await note.toCompositeImage(["surface_3"])).toBeNull();
   })
 
   test("toCompositeImage ignores requested surface names the file doesn't have", { timeout: 30000 }, async () => {
-    const note = await SupernoteAtelier.open(await readFileToUint8Array("real-device.spd"));
+    const note = await SupernoteAtelier.open(await readFileToUint8Array("atelier-device-real-audubon.spd"));
     const background = await note.toImage("surface_9999");
     const composite = await note.toCompositeImage(["surface_9999", "surface_no_such_layer"]);
     expect(composite).not.toBeNull();

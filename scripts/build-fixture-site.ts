@@ -320,21 +320,29 @@ button{font:inherit;cursor:pointer}
 .art svg{display:block;width:100%;height:auto}
 .art object{display:block;width:100%;min-height:600px;border:0}
 .pair[data-mode="blink"] .stage{grid-template-columns:1fr}
-.pair[data-mode="blink"] .pane{grid-area:1/1}
+.pair[data-mode="blink"] .pane{grid-area:1/1;justify-self:center;width:100%;max-width:33.3333%}
 .pair[data-mode="blink"] .pane{visibility:hidden}
-.pair[data-mode="blink"][data-show="device"] .pane[data-which="device"]{visibility:visible}
-.pair[data-mode="blink"][data-show="ours"] .pane[data-which="ours"]{visibility:visible}
-.pair[data-mode="blink"][data-show="pdf"] .pane[data-which="pdf"]{visibility:visible}
+.pair[data-mode="blink"][data-show="device"] .pane[data-which="device"]{visibility:visible;cursor:pointer}
+.pair[data-mode="blink"][data-show="ours"] .pane[data-which="ours"]{visibility:visible;cursor:pointer}
+/* The PDF pane is an embedded <object> running the browser's pdf.js, which
+   carries its own toolbar and padding, so it can never overlay the SVGs to
+   blink. It also shows the full page (background + ink) while the other two
+   panes are ink only, so it is not a like-for-like blink target anyway. */
+.pair[data-mode="blink"] .pane[data-which="pdf"]{display:none}
 .flip{display:block;width:100%;border:0;border-top:1px solid var(--rule);background:var(--ground);color:var(--muted);
   font-family:var(--mono);font-size:12px;padding:9px}
 .flip:hover{color:var(--ink)}
 footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--rule);color:var(--muted);font-size:13.5px;max-width:74ch}
-@media (max-width:760px){.pair[data-mode="split"] .stage{grid-template-columns:1fr}.wrap{padding:34px 16px 72px}}
+@media (max-width:760px){.pair[data-mode="split"] .stage{grid-template-columns:1fr}.pair[data-mode="blink"] .pane{max-width:100%}.wrap{padding:34px 16px 72px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}`;
 
-const BLINK_SCRIPT = `const PANELS = ['device', 'ours', 'pdf'];
+const BLINK_SCRIPT = `const PANELS = ['device', 'ours'];
 for (const pair of document.querySelectorAll('.pair')) {
   const flip = pair.querySelector('.flip');
+  const cycle = () => {
+    const idx = PANELS.indexOf(pair.dataset.show || 'device');
+    pair.dataset.show = PANELS[(idx + 1) % PANELS.length];
+  };
   for (const b of pair.querySelectorAll('.mode')) {
     b.addEventListener('click', () => {
       pair.dataset.mode = b.dataset.act;
@@ -343,9 +351,12 @@ for (const pair of document.querySelectorAll('.pair')) {
       if (b.dataset.act === 'blink') pair.dataset.show = 'device';
     });
   }
-  flip.addEventListener('click', () => {
-    const idx = PANELS.indexOf(pair.dataset.show || 'device');
-    pair.dataset.show = PANELS[(idx + 1) % PANELS.length];
+  flip.addEventListener('click', cycle);
+  // In blink mode, clicking the visible image flips to the other pane -- the
+  // PDF pane is display:none here so it never swallows the click.
+  pair.querySelector('.stage').addEventListener('click', () => {
+    if (pair.dataset.mode !== 'blink') return;
+    cycle();
   });
 }`;
 
@@ -370,7 +381,7 @@ function fixturePage(fx: FixtureComparison): string {
 <div class="pane" data-which="ours"><span class="tag tag-ours">Library SVG</span><div class="art">${p.oursSvg}</div></div>
 <div class="pane" data-which="pdf"><span class="tag tag-pdf">Library PDF</span><div class="art"><object data="${escapeHtml(p.libraryPdfPath)}" type="application/pdf" width="100%" height="600"></object></div></div>
 </div>
-<button type="button" class="flip" hidden>Cycle through the three</button>
+<button type="button" class="flip" hidden>Flip between the two</button>
 </figure>`;
 		})
 		.join('\n');

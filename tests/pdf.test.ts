@@ -163,14 +163,41 @@ describe("pdf", () => {
     }
   })
 
-  test("recognitionCoordinateScale scales proportionally to pageWidth, not a fixed 11.9, for non-Manta devices", () => {
-    // 11.9 only holds at the 1920px-wide reference page (Manta-family
-    // devices); every narrower page (e.g. A5X's default 1404) needs it
-    // scaled down proportionally, or recognized-word positions drift
-    // further from the actual ink the further down the page a word sits.
-    // See https://github.com/philips/supernote-obsidian-plugin/pull/206.
-    expect(recognitionCoordinateScale(1920)).toBeCloseTo(11.9)
+  test("recognitionCoordinateScale is device-family-aware: A5X uses the 1920 reference canvas, every other family uses its own native pageWidth", () => {
+    // The recognition canvas is a FIXED per-device constant (it does NOT
+    // scale with an upscaled render): 1920 for Manta (N5) AND A5X, and the
+    // device's own native pageWidth for N6/A6X (1404). So the scale is
+    // renderWidth * 11.9 / canvasWidth.
+    //
+    // - A5X (native 1404) is the only known device whose canvas (1920)
+    //   differs from its pageWidth: scale = render * 11.9 / 1920, so at
+    //   native resolution 1404*11.9/1920 ≈ 8.70 (philips/supernote-obsidian-plugin#204
+    //   - a fixed 11.9 landed highlights a full page below the ink).
+    // - N6/A6X (native 1404) render recognition natively at 1404, so the
+    //   correct scale at native resolution is the raw 11.9, NOT shrunk by
+    //   1404/1920 (philips/supernote-obsidian-plugin#219 - the old shrink pulled
+    //   their boxes to ~8.70 when they line up at 11.9).
+    // - N5/Manta (native 1920): 11.9 at native resolution.
+    //
+    // nativePageWidth (3rd arg) only matters when renderWidth differs from
+    // the native pageWidth (i.e. upscale > 1): then it's needed to recover
+    // the canvas for non-A5X devices, since renderWidth alone can't.
+    expect(recognitionCoordinateScale(1920, 'N5', 1920)).toBeCloseTo(11.9)
+    expect(recognitionCoordinateScale(1404, 'A5X', 1404)).toBeCloseTo((1404 * 11.9) / 1920)
+    // N6 and A6X: canvas == native pageWidth, so the raw 11.9 at native res:
+    expect(recognitionCoordinateScale(1404, 'N6', 1404)).toBeCloseTo(11.9)
+    expect(recognitionCoordinateScale(1404, 'A6X', 1404)).toBeCloseTo(11.9)
+    // Upscale grows the scale (canvas is fixed, renderWidth doubles):
+    expect(recognitionCoordinateScale(1920 * 2, 'N5', 1920)).toBeCloseTo(11.9 * 2)
+    expect(recognitionCoordinateScale(1404 * 2, 'N6', 1404)).toBeCloseTo(11.9 * 2)
+    expect(recognitionCoordinateScale(1404 * 2, 'A5X', 1404)).toBeCloseTo((1404 * 2 * 11.9) / 1920)
+    // nativePageWidth defaults to renderWidth (i.e. no upscale) when omitted:
+    expect(recognitionCoordinateScale(1404, 'N6')).toBeCloseTo(11.9)
+    // Omitting equipment keeps the legacy 1920-reference-canvas behavior so
+    // direct addPdfPage()/addSvgPage() callers that don't pass it get
+    // unchanged pre-#219 output (correct only for A5X/Manta):
     expect(recognitionCoordinateScale(1404)).toBeCloseTo((1404 * 11.9) / 1920)
+    expect(recognitionCoordinateScale(1920)).toBeCloseTo(11.9)
   })
 
   test("toPdf({ vectorInk: true }) renders the searchable text layer unchanged", { timeout: 30000 }, async () => {

@@ -54,8 +54,8 @@ function escapeXml(text: string): string {
  * own `textLength`/`lengthAdjust` attributes do the stretch-to-fit-the-box
  * scaling natively instead of needing a manually computed horizontal-scale
  * percentage. */
-function buildRecognitionTextElements(page: IPdfPage, pageWidth: number): string {
-	const scale = recognitionCoordinateScale(pageWidth);
+function buildRecognitionTextElements(page: IPdfPage, renderWidth: number, equipment?: string, nativePageWidth?: number): string {
+	const scale = recognitionCoordinateScale(renderWidth, equipment, nativePageWidth);
 	const elements: string[] = [];
 	for (const element of page.recognitionElements) {
 		if (element.type !== 'Text') continue;
@@ -166,6 +166,20 @@ export interface AddSvgPageOptions {
 	 * straight from its stroke's own already-upscaled points, so it needs no
 	 * separate scaling). */
 	strokeStyles?: StrokeStyle[];
+	/** Device family this page's note was produced by
+	 * (`header.APPLY_EQUIPMENT`, e.g. 'A5X', 'N5', 'N6', 'A6X'), used to pick
+	 * the correct recognition-coordinate scale - see
+	 * `recognitionCoordinateScale`. Omitting it (with `nativePageWidth`)
+	 * keeps the legacy 1920-reference-canvas behavior (correct only for A5X
+	 * and Manta, wrong for N6/A6X); `toSvg()` always passes the note's real
+	 * equipment. */
+	equipment?: string;
+	/** The note's own `pageWidth` (the device's native, pre-upscale page
+	 * width) - needed to pick the recognition canvas for non-A5X devices
+	 * when the embedded `image` is upscaled beyond it. Defaults to `pageWidth`
+	 * (i.e. no upscale), which is correct for non-upscaled renders.
+	 * `toSvg()` always passes `note.pageWidth`. */
+	nativePageWidth?: number;
 }
 
 /**
@@ -189,7 +203,7 @@ export function addSvgPage(
 	pageHeight: number,
 	options: AddSvgPageOptions = {},
 ): string {
-	const { dpi, includeText = true, strokes, strokeStyles } = options;
+	const { dpi, includeText = true, strokes, strokeStyles, equipment, nativePageWidth } = options;
 
 	const pngBytes = image instanceof Uint8Array ? image : encodePng(image);
 	const base64 = encodeBase64(pngBytes);
@@ -197,7 +211,7 @@ export function addSvgPage(
 	const widthAttr = dpi ? `${pageWidth / dpi}in` : `${pageWidth}`;
 	const heightAttr = dpi ? `${pageHeight / dpi}in` : `${pageHeight}`;
 
-	const textElements = includeText ? buildRecognitionTextElements(page, pageWidth) : '';
+	const textElements = includeText ? buildRecognitionTextElements(page, pageWidth, equipment, nativePageWidth ?? pageWidth) : '';
 	const { defs, elements: strokeElements } =
 		strokes && strokes.length ? buildSvgElements(buildVectorInkPrimitives(strokes, strokeStyles)) : { defs: '', elements: '' };
 
@@ -286,6 +300,8 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 			includeText,
 			strokes,
 			strokeStyles,
+			equipment: note.header.APPLY_EQUIPMENT,
+			nativePageWidth: note.pageWidth,
 		});
 	});
 }

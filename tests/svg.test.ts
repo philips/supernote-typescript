@@ -286,14 +286,21 @@ describe("svg", () => {
     expect(svgs.join("")).not.toContain("<text ")
   })
 
-  // One fixture per device family whose native `pageWidth` differs (Manta's
-  // reference 1920 vs. every other family's 1404 default - see
-  // recognitionCoordinateScale()'s own comment in pdf.ts), each with a known
-  // word's raw bounding-box pulled directly from the note's own
-  // recognitionElements, so the expected SVG position is derived from that
-  // note's real data rather than a value copied out of the implementation.
+  // One fixture per device family, each with a known word's raw bounding-box
+  // pulled directly from the note's own recognitionElements, so the expected
+  // SVG position is derived from that note's real data rather than a value
+  // copied out of the implementation. Covers the three recognition-canvas
+  // regimes (see recognitionCoordinateScale()'s own comment in pdf.ts):
+  //   - Manta (N5): canvas == pageWidth == 1920 → raw 11.9
+  //   - A5X:        canvas 1920, pageWidth 1404  → 11.9 * 1404/1920 ≈ 8.70
+  //   - N6/A6X:     canvas == pageWidth == 1404 → raw 11.9 (NOT shrunk)
+  // The N6/A6X case is the fix for philips/supernote-obsidian-plugin#219:
+  // the old code shrunk every non-Manta family by pageWidth/1920, which is
+  // correct for A5X but wrong for N6/A6X (it pulled their boxes to ~8.70
+  // when they line up at the raw 11.9).
   const deviceFixtures: {
     device: string;
+    equipment: string;
     file: string;
     pageWidth: number;
     word: string;
@@ -301,6 +308,7 @@ describe("svg", () => {
   }[] = [
     {
       device: "Manta",
+      equipment: "N5",
       file: "rtr-n5-20230015-recognition.note",
       pageWidth: 1920,
       word: "Real",
@@ -308,13 +316,23 @@ describe("svg", () => {
     },
     {
       device: "A5X",
+      equipment: "A5X",
       file: "ink-a5x-2.14.28-old-pen-width.note",
       pageWidth: 1404,
       word: "Subject",
       box: { x: 12.776001, y: 13.224001, width: 25.072002, height: 9.84 },
     },
     {
-      device: "Nomad",
+      device: "Nomad (N6)",
+      equipment: "N6",
+      file: "link-n6-3.26.40-partial-erase-3p.note",
+      pageWidth: 1404,
+      word: "INK",
+      box: { x: 4.6615, y: 12.097501, width: 22.956001, height: 7.0700006 },
+    },
+    {
+      device: "A6X",
+      equipment: "A6X",
       file: "blank-a6x-3.15.27-shapes-rtr.note",
       pageWidth: 1404,
       word: "Square",
@@ -323,11 +341,12 @@ describe("svg", () => {
   ]
 
   test.each(deviceFixtures)(
-    "$device (pageWidth $pageWidth): positions recognized text via recognitionCoordinateScale(pageWidth), not a fixed 11.9",
+    "$device (pageWidth $pageWidth, equipment $equipment): positions recognized text via the device-correct recognitionCoordinateScale",
     { timeout: 30000 },
-    async ({ file, pageWidth, word, box }) => {
+    async ({ equipment, file, pageWidth, word, box }) => {
       const sn = new SupernoteX(await readFileToUint8Array(file))
       expect(sn.pageWidth).toBe(pageWidth)
+      expect(sn.header.APPLY_EQUIPMENT).toBe(equipment)
 
       const [svg] = await toSvg(sn, { pageNumbers: [1] })
       await fs.writeFile(`tests/output/${file}.0.svg`, svg)
@@ -336,14 +355,25 @@ describe("svg", () => {
       expect(match).not.toBeNull()
       const actualY = Number(match![1])
 
-      // addSvgPage positions the baseline at (box.y + box.height) * scale.
-      const scale = recognitionCoordinateScale(pageWidth)
+      // addSvgPage positions the baseline at (box.y + box.height) * scale,
+      // where scale is the device-correct recognitionCoordinateScale at the
+      // render width (native here, since toSvg's default upscale is 1).
+      const scale = recognitionCoordinateScale(pageWidth, equipment, pageWidth)
       const expectedY = (box.y + box.height) * scale
-      const wrongY = (box.y + box.height) * 11.9 // what the old fixed-11.9 bug (philips/supernote-obsidian-plugin#206) would have produced
+      // What the pre-#219 bug would have produced for the N6/A6X fixtures:
+      // the legacy 1920-reference-canvas shrink (correct only for A5X).
+      const legacyY = (box.y + box.height) * recognitionCoordinateScale(pageWidth)
 
       expect(actualY).toBeCloseTo(expectedY, 1)
-      if (pageWidth !== 1920) {
-        expect(Math.abs(actualY - wrongY)).toBeGreaterThan(20)
+      if (equipment === 'N6' || equipment === 'A6X') {
+        // The fix moves N6/A6X from the legacy ~8.70 scale to the raw 11.9 -
+        // a difference of >20px on a word this far down the page.
+        expect(Math.abs(actualY - legacyY)).toBeGreaterThan(20)
+      }
+      if (equipment === 'A5X') {
+        // A5X is the family the legacy 1920-reference-canvas behavior was
+        // made for, so the fix must not move it.
+        expect(Math.abs(actualY - legacyY)).toBeLessThan(0.5)
       }
     },
   )

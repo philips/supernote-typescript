@@ -30,27 +30,77 @@ import {
 } from './vector-ink.js';
 
 // Recognized word bounding boxes are stored in raster-pixel units divided by
-// a scale factor that is *not* a universal constant: 11.9 (confirmed per
-// plans/rtr-searchable-pdf.md) only holds at the 1920px-wide reference page
-// Manta-family devices (SupernoteX's `header.APPLY_EQUIPMENT === 'N5'`
-// check) render at. Every other device family - including the far more
-// common A5X, whose default pageWidth is 1404 - needs that reference scale
-// shrunk proportionally to its own actual page width, or recognized-word
-// positions drift further from the real ink the further down the page a
-// word sits (the error is multiplicative, so it's barely visible on the
-// first line and lands on blank paper several lines down). Confirmed
-// against a real A5X note fixture in
-// https://github.com/philips/supernote-obsidian-plugin/pull/206.
+// a scale factor that is *not* a universal constant - it depends on which
+// device family produced the note.
+//
+// The recognition engine renders each page to a fixed-width "reference
+// canvas" before recognizing, and stores bounding boxes in that canvas's
+// pixel space divided by 11.9 (confirmed per plans/rtr-searchable-pdf.md).
+// So the universal part is: canvas_pixel = recognition_unit * 11.9. What is
+// *not* universal is the reference canvas width, which is a FIXED
+// per-device constant (it does NOT scale with an upscaled render):
+//
+//   - Manta (N5, pageWidth 1920): canvas 1920  → scale = render * 11.9 / 1920
+//   - A5X       (pageWidth 1404): canvas 1920  → scale = render * 11.9 / 1920
+//     (A5X is the only known device whose recognition canvas, 1920,
+//      differs from its own pageWidth, 1404 - it upsamples recognition to
+//      the same 1920 canvas Manta uses. philips/supernote-obsidian-plugin#204:
+//      a fixed 11.9 landed A5X highlights a full page-height below the ink.)
+//   - Nomad (N6, pageWidth 1404): canvas 1404  → scale = render * 11.9 / 1404
+//   - A6X   (pageWidth 1404):      canvas 1404  → scale = render * 11.9 / 1404
+//     (N6/A6X render recognition natively at their own pageWidth, so the
+//      correct scale at native resolution is the raw 11.9, NOT shrunk by
+//      1404/1920. philips/supernote-obsidian-plugin#219: the old code applied
+//      that 1920-reference shrink to every non-Manta family, which is right
+//      for A5X but wrong for N6/A6X - it pulled their boxes to ~8.70 when they
+//      line up at the raw 11.9.)
+//
+// I.e. #204's "recognition coordinates are defined against a fixed 1920-unit
+// canvas" model was over-generalized from a single A5X fixture: 1920 is the
+// canvas for Manta AND A5X, but N6/A6X use their own pageWidth (1404) as the
+// canvas. (A pre-X A5, if one exists, may also upsample to 1920 the way A5X
+// does - we have no fixture to confirm; only A5X is special-cased here,
+// deliberately, because it's the only one the data covers.)
+//
+// `renderWidth` is the width of the raster being rendered into (the image's
+// pixel width - `upscale` grows it beyond `note.pageWidth`). `equipment` is
+// `header.APPLY_EQUIPMENT` (e.g. 'A5X', 'N5', 'N6', 'A6X'). `nativePageWidth`
+// is the note's own `pageWidth` (the device's native, pre-upscale page width) -
+// needed to pick the canvas for non-A5X devices, since `renderWidth` alone
+// can't recover it when `upscale > 1`.
+//
+// When `equipment` is omitted (undefined), the legacy 1920-reference-canvas
+// behavior is preserved so existing direct callers of addPdfPage()/addSvgPage()
+// that don't pass it keep their pre-#219 output unchanged; the high-level
+// toPdf()/toSvg() always pass the note's real equipment and nativePageWidth.
 const RECOGNITION_REFERENCE_PAGE_WIDTH = 1920;
 const RECOGNITION_REFERENCE_SCALE = 11.9;
 
-/** Scale factor to convert a recognized word's native bounding-box units
- * into raster-pixel units, for a page whose actual pixel width is
- * `pageWidth`. Exported so other exporters positioning an invisible text
- * overlay over the same recognition data (e.g. svg.ts) share this instead
- * of re-deriving it. */
-export function recognitionCoordinateScale(pageWidth: number): number {
-	return (pageWidth * RECOGNITION_REFERENCE_SCALE) / RECOGNITION_REFERENCE_PAGE_WIDTH;
+/** Scale factor to convert a recognized word's native bounding-box units into
+ * raster-pixel units at the given `renderWidth`, for a note produced by
+ * `equipment` (`header.APPLY_EQUIPMENT`, e.g. 'A5X', 'N5', 'N6', 'A6X') whose
+ * native page width is `nativePageWidth` (the note's `pageWidth`, NOT the
+ * possibly-upscaled render width). Pass the real equipment + nativePageWidth
+ * for correct results on every device family and at every upscale factor;
+ * omitting both keeps the legacy 1920-reference-canvas behavior (correct only
+ * for A5X and Manta, wrong for N6/A6X - see the comment above).
+ *
+ * Exported so other exporters positioning an invisible text overlay over
+ * the same recognition data (e.g. svg.ts, and the obsidian plugin's own
+ * wordOverlay.ts) share this instead of re-deriving it. */
+export function recognitionCoordinateScale(
+	renderWidth: number,
+	equipment?: string,
+	nativePageWidth?: number,
+): number {
+	// A5X is the only known device whose recognition canvas (1920) differs
+	// from its own pageWidth. For every other device the canvas equals its
+	// native pageWidth. Omitting equipment keeps the legacy 1920 canvas so
+	// direct callers that don't pass it get unchanged pre-#219 output.
+	const canvasWidth = equipment === undefined || equipment === 'A5X'
+		? RECOGNITION_REFERENCE_PAGE_WIDTH
+		: (nativePageWidth ?? renderWidth);
+	return (renderWidth * RECOGNITION_REFERENCE_SCALE) / canvasWidth;
 }
 
 export interface ToPdfOptions {
@@ -113,6 +163,20 @@ export interface AddPdfPageOptions {
 	strokes?: IStroke[];
 	/** How to render each of `strokes`, aligned by index -- see `StrokeStyle`. */
 	strokeStyles?: StrokeStyle[];
+	/** Device family this page's note was produced by
+	 * (`header.APPLY_EQUIPMENT`, e.g. 'A5X', 'N5', 'N6', 'A6X'), used to pick
+	 * the correct recognition-coordinate scale - see
+	 * `recognitionCoordinateScale`. Omitting it (with `nativePageWidth`)
+	 * keeps the legacy 1920-reference-canvas behavior (correct only for A5X
+	 * and Manta, wrong for N6/A6X); `toPdf()` always passes the note's real
+	 * equipment. */
+	equipment?: string;
+	/** The note's own `pageWidth` (the device's native, pre-upscale page
+	 * width) - needed to pick the recognition canvas for non-A5X devices
+	 * when `image` is upscaled beyond it. Defaults to `image`'s width (i.e.
+	 * no upscale), which is correct for non-upscaled renders.
+	 * `toPdf()` always passes `note.pageWidth`. */
+	nativePageWidth?: number;
 }
 
 // Draws the recognized handwriting (RTR) text invisibly onto `pdfPage` at
@@ -125,11 +189,13 @@ function drawRecognitionText(
 	fontKey: PDFName,
 	font: PDFFont,
 	page: IPdfPage,
-	pageWidth: number,
+	renderWidth: number,
 	pointsPerPixel: number,
 	heightPts: number,
+	equipment?: string,
+	nativePageWidth?: number,
 ): void {
-	const scale = recognitionCoordinateScale(pageWidth);
+	const scale = recognitionCoordinateScale(renderWidth, equipment, nativePageWidth);
 	for (const element of page.recognitionElements) {
 		if (element.type !== 'Text') continue;
 
@@ -331,7 +397,7 @@ export async function addPdfPage(
 	image: Image | Uint8Array,
 	options: AddPdfPageOptions = {},
 ): Promise<void> {
-	const { dpi = 300, strokes, strokeStyles } = options;
+	const { dpi = 300, strokes, strokeStyles, equipment, nativePageWidth } = options;
 	const { pdfDoc, font } = ctx;
 	const pointsPerPixel = 72 / dpi;
 
@@ -350,7 +416,7 @@ export async function addPdfPage(
 		drawVectorInkPrimitives(pdfPage, buildVectorInkPrimitives(strokes, strokeStyles), heightPts, pointsPerPixel);
 	}
 
-	drawRecognitionText(pdfPage, fontKey, font, page, pngImage.width, pointsPerPixel, heightPts);
+	drawRecognitionText(pdfPage, fontKey, font, page, pngImage.width, pointsPerPixel, heightPts, equipment, nativePageWidth);
 }
 
 /**
@@ -373,7 +439,7 @@ export async function addTextOnlyPdfPage(
 	pageHeight: number,
 	options: AddPdfPageOptions = {},
 ): Promise<void> {
-	const { dpi = 300 } = options;
+	const { dpi = 300, equipment, nativePageWidth } = options;
 	const { pdfDoc, font } = ctx;
 	const pointsPerPixel = 72 / dpi;
 
@@ -383,7 +449,7 @@ export async function addTextOnlyPdfPage(
 	const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
 	const fontKey = pdfPage.node.newFontDictionary(font.name, font.ref);
 
-	drawRecognitionText(pdfPage, fontKey, font, page, pageWidth, pointsPerPixel, heightPts);
+	drawRecognitionText(pdfPage, fontKey, font, page, pageWidth, pointsPerPixel, heightPts, equipment, nativePageWidth ?? pageWidth);
 }
 
 /**
@@ -421,6 +487,8 @@ export async function toPdf(note: ISupernote, options: ToPdfOptions = {}): Promi
 			dpi,
 			strokes: vip?.useVectorInk ? vip.strokes : undefined,
 			strokeStyles: vip?.useVectorInk ? vip.styles : undefined,
+			equipment: note.header.APPLY_EQUIPMENT,
+			nativePageWidth: note.pageWidth,
 		});
 	}
 

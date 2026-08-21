@@ -321,7 +321,16 @@ const STROKE_CONFIG = {
 	 * this is the field the previous version of this module already relied
 	 * on for the same purpose, under the name `nativeHeightBound`, before
 	 * this byte layout was known (found back then via a
-	 * `superNoteNote`-relative offset instead of `StrokeConfig`'s own). */
+	 * `superNoteNote`-relative offset instead of `StrokeConfig`'s own).
+	 *
+	 * Cross-validated against Ratta's published EMR docs
+	 * (https://docs.supernote.com/en/plugin-base/coordinate-system, issue
+	 * #111): this is the page's EMR max range, and reads exactly the values
+	 * the doc's page-size -> EMR table lists for every current Nomad/Manta
+	 * fixture (~8.45 units/px). Older A5X firmware reads a larger, different
+	 * range not in that table, so the per-stroke field stays authoritative.
+	 * See plans/vector-format-spec.md "Cross-check against Supernote's
+	 * published EMR docs". */
 	SCREEN_HEIGHT_OFFSET: 128,
 	DOC_KIND_OFFSET: 136,
 	/** See `RECORD_CLASS`. Documented as a constant `5000` by
@@ -588,6 +597,12 @@ function tryParseStroke(
  * pixelX = -rawX / scale + pageWidth
  * pixelY =  rawY / scale
  * ```
+ *
+ * `screenHeight` is the page's EMR (digitizer hardware) max range, not a
+ * pixel count -- independently confirmed against Ratta's published EMR
+ * docs (https://docs.supernote.com/en/plugin-base/coordinate-system,
+ * issue #111); see plans/vector-format-spec.md's "Cross-check against
+ * Supernote's published EMR docs".
  *
  * Strokes whose `color` is `255` are excluded by default, not returned as
  * `IStroke`s -- see `ERASER_COLOR`'s doc comment: they're real pen motions

@@ -8,8 +8,9 @@ turned out to be where per-heading color lives), and `RECOGNFILE` (per-page
 MyScript recognition-engine data — `ink.bink` now decoded, `page.bdom`
 partially). See issues
 [#55](https://github.com/philips/supernote-typescript/issues/55),
-[#56](https://github.com/philips/supernote-typescript/issues/56), and
-[#60](https://github.com/philips/supernote-typescript/issues/60) for the
+[#56](https://github.com/philips/supernote-typescript/issues/56),
+[#60](https://github.com/philips/supernote-typescript/issues/60), and
+[#111](https://github.com/philips/supernote-typescript/issues/111) for the
 investigation history behind this.
 
 ## Part 1 — `TOTALPATH`: solved
@@ -166,6 +167,61 @@ where `rawX`/`rawY` are read from each point's `(y, x)`-ordered pair as
 `rawY = point[0]`, `rawX = point[1]` (i.e. the field literally called `y` in
 `ScreenCoord` maps to this repo's `rawY`, and `x` to `rawX` — the naming just
 reflects which axis needs negating).
+
+#### Cross-check against Supernote's published EMR docs
+
+Ratta's plugin docs describe the two coordinate systems this transform
+bridges --
+[Coordinate System](https://docs.supernote.com/en/plugin-base/coordinate-system)
+(issue [#111](https://github.com/philips/supernote-typescript/issues/111)):
+the **EMR coordinate system** (digitizer / handwriting hardware units,
+higher precision than pixels, used for stroke storage) and the **pixel
+coordinate system** (screen px, used for rendering). Its `PointUtils`
+infers the EMR max range from page pixel size and "applies axis
+transforms" -- the doc itself warns that "axes and origin may differ from
+screen coordinates (varies by device and orientation)". The published
+page-size -> EMR max-range table is:
+
+| Page pixel size (W x H)        | EMR max (maxX, maxY) |
+|--------------------------------|----------------------|
+| 1404 x 1872 (Nomad portrait)   | 15819 x 11864        |
+| 1872 x 1404 (Nomad landscape)  | 11864 x 15819        |
+| 1920 x 2560 (Manta portrait)  | 21632 x 16224        |
+| 2560 x 1920 (Manta landscape) | 16224 x 21632        |
+
+(The doc labels the 1404x1872 row "A5X"; in this repo's fixtures that page
+size is the Nomad family A6X/N6, and the doc's "A5X" is generic.)
+
+This independently confirms the `screen_height` / `screen_width` field
+decode above: across every current Nomad and Manta fixture, offset 128
+and 132 read exactly these two numbers per page. The axis labels come out
+**swapped** relative to the doc's column header -- fixtures read
+`(maxX, maxY) = (11864, 15819)` for a 1404x1872 portrait, where `11864 =
+1404 * 8.45` (the width-range) and `15819 = 1872 * 8.45` (the
+height-range), whereas the doc lists `15819` under `maxX` and `11864`
+under `maxY`. That swap is the "axis transform" the doc says `PointUtils`
+applies, not a contradiction: the invariant is the per-device EMR-to-pixel
+ratio, `8.45` units/px, identical on both axes for current Nomad/Manta --
+which is exactly what `scale = screenHeight / pageHeight` recovers, since
+`screen_height` *is* the page's own EMR max. The per-stroke field and the
+doc's page-size table are two routes to the same scale.
+
+The doc's table is **not** a complete substitute for the per-stroke field.
+Old A5X firmware (`SN_FILE_VER_20220011` / `20230015`, e.g.
+`demo-a5x-20230015-1to10.note`, `ink-a5x-2.14.28-old-pen-width.note`,
+`test-a5x-20220011-old-pen-ids.note`) reads `(maxX, maxY) = (15725, 20967)`
+for a 1404x1872 page -- ~`11.20` units/px, a different, larger EMR range
+not present in the doc's current-device table. So `screen_height` stays
+authoritative; the doc confirms it for current devices but does not cover
+the older generation.
+
+One record reads as neither field: `sticker-n5-20260016-plugin-artwork.note`
+page 1 stroke #5 decodes to `(maxX, maxY) = (3628222536, 120)` with
+`pen = 4` and zero points. It is not a real StrokeConfig (it is the
+record the existing `LASSO_PEN_ID = 4` guard exists to catch), and it has
+no points to transform regardless, so it renders nothing. The doc's table
+would be a plausible page-size fallback here, but the existing guard is
+cleaner and the record carries no geometry to recover either way.
 
 ### `pen` field — confirmed values
 

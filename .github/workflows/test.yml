@@ -16,6 +16,11 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
+      # poppler-utils provides pdftoppm, used by the vectorInk visual-diff
+      # suite (tests/pdf-visual-diff.test.ts) to rasterise PDFs to PNG. It
+      # ships on the GitHub Ubuntu runner, but pinning it explicitly avoids a
+      # silent skip if a future runner image drops it.
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run lint
       - run: npm run build

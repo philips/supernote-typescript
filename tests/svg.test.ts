@@ -6,7 +6,7 @@ import { parseStrokes } from "../src/strokes"
 import { recognitionCoordinateScale } from "../src/pdf"
 import { toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
-import { buildRenderNoteForVectorInk, parseDisabledInkRects, prepareVectorInkPages } from "../src/vector-ink"
+import { parseDisabledInkRects, prepareVectorInkPages, rasterInkOverlayPage } from "../src/vector-ink"
 import { describe, test, expect } from 'vitest'
 
 function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
@@ -531,29 +531,30 @@ describe("svg", () => {
 
       const vectorPages = prepareVectorInkPages(sn, [pageNumber], 1)
       expect(vectorPages[0].useVectorInk).toBe(true)
-      const original = (await toImage(sn, [pageNumber]))[0].getRawImage().data
-      const vectorBase = (await toImage(buildRenderNoteForVectorInk(sn, vectorPages), [pageNumber]))[0].getRawImage().data
-
-      // The base raster beneath the vector paths retains every source pixel
-      // in the disabled rectangle. Before this, clearing MAINLAYER made the
-      // entire text box (and the Digest regions on page 5) disappear.
+      // Raster-only pixels are rendered separately, rather than being part
+      // of the background image that vector paths paint over.
+      const overlay = (await toImage({
+        pageWidth: sn.pageWidth,
+        pageHeight: sn.pageHeight,
+        pages: [rasterInkOverlayPage(sn.pages[pageNumber - 1], sn.pageWidth, sn.pageHeight)],
+      }))[0].getRawImage().data
       const { x, y, width, height } = rects[0]
-      let differingBytes = 0
+      let overlayPixels = 0
       for (let row = y; row < y + height; row++) {
-        const start = (row * sn.pageWidth + x) * 4
-        const end = start + width * 4
-        for (let i = start; i < end; i += 4) {
-          // The source can use either transparent white or transparent black
-          // for blank pixels; alpha makes both visually identical.
-          if (original[i + 3] || vectorBase[i + 3]) {
-            for (let channel = 0; channel < 4; channel++) differingBytes += Number(original[i + channel] !== vectorBase[i + channel])
-          }
+        for (let column = x; column < x + width; column++) {
+          overlayPixels += Number(overlay[(row * sn.pageWidth + column) * 4 + 3] > 0)
         }
       }
-      expect(differingBytes).toBe(0)
+      expect(overlayPixels).toBeGreaterThan(0)
 
       const [svg] = await toSvg(sn, { pageNumbers: [pageNumber], vectorInk: true })
-      expect(svg).toContain("<path ")
+      const background = svg.indexOf('data-page-background="true"')
+      const path = svg.indexOf("<path ")
+      const rasterOverlay = svg.indexOf('data-raster-ink-overlay="true"')
+      expect(background).toBeGreaterThanOrEqual(0)
+      expect(path).toBeGreaterThan(background)
+      // A grey highlighter crossing the text box must stay behind the glyphs.
+      expect(rasterOverlay).toBeGreaterThan(path)
     }, { timeout: 30000 })
 
     test("erase-n6-20230015-horizontal-1270.note now crosses the coverage threshold and vectorizes (issue #56)", { timeout: 30000 }, async () => {

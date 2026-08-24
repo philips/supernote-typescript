@@ -9,6 +9,8 @@ import {
 	buildVectorInkPrimitives,
 	prepareVectorInkPages,
 	buildRenderNoteForVectorInk,
+	parseDisabledInkRects,
+	rasterInkOverlayPage,
 } from './vector-ink.js';
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -180,6 +182,9 @@ export interface AddSvgPageOptions {
 	 * (i.e. no upscale), which is correct for non-upscaled renders.
 	 * `toSvg()` always passes `note.pageWidth`. */
 	nativePageWidth?: number;
+	/** Transparent bitmap-only ink (currently text boxes/Digests) painted
+	 * after vector strokes. */
+	rasterInkOverlay?: Image | Uint8Array;
 }
 
 /**
@@ -203,10 +208,13 @@ export function addSvgPage(
 	pageHeight: number,
 	options: AddSvgPageOptions = {},
 ): string {
-	const { dpi, includeText = true, strokes, strokeStyles, equipment, nativePageWidth } = options;
+	const { dpi, includeText = true, strokes, strokeStyles, equipment, nativePageWidth, rasterInkOverlay } = options;
 
 	const pngBytes = image instanceof Uint8Array ? image : encodePng(image);
 	const base64 = encodeBase64(pngBytes);
+	const overlayBase64 = rasterInkOverlay
+		? encodeBase64(rasterInkOverlay instanceof Uint8Array ? rasterInkOverlay : encodePng(rasterInkOverlay))
+		: '';
 
 	const widthAttr = dpi ? `${pageWidth / dpi}in` : `${pageWidth}`;
 	const heightAttr = dpi ? `${pageHeight / dpi}in` : `${pageHeight}`;
@@ -219,8 +227,11 @@ export function addSvgPage(
 		`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
 		`width="${widthAttr}" height="${heightAttr}" viewBox="0 0 ${pageWidth} ${pageHeight}">` +
 		(defs ? `<defs>${defs}</defs>` : '') +
-		`<image x="0" y="0" width="${pageWidth}" height="${pageHeight}" xlink:href="data:image/png;base64,${base64}"/>` +
+		`<image data-page-background="true" x="0" y="0" width="${pageWidth}" height="${pageHeight}" xlink:href="data:image/png;base64,${base64}"/>` +
 		strokeElements +
+		(overlayBase64
+			? `<image data-raster-ink-overlay="true" x="0" y="0" width="${pageWidth}" height="${pageHeight}" xlink:href="data:image/png;base64,${overlayBase64}"/>`
+			: '') +
 		textElements +
 		`</svg>`
 	);
@@ -283,8 +294,26 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 
 	const vectorInkPages = vectorInk ? prepareVectorInkPages(note, pageNumbers, upscale) : [];
 	const renderNote = vectorInk ? buildRenderNoteForVectorInk(note, vectorInkPages) : note;
-
-	const images = await toImage(renderNote, pageNumbers, { upscale });
+	const overlayPageNumbers = vectorInkPages
+		.filter((vectorPage) => vectorPage.useVectorInk && parseDisabledInkRects(note.pages[vectorPage.pageNumber - 1].DISABLE).length > 0)
+		.map((vectorPage) => vectorPage.pageNumber);
+	const [images, overlayImages] = await Promise.all([
+		toImage(renderNote, pageNumbers, { upscale }),
+		overlayPageNumbers.length
+			? toImage(
+					{
+						pageWidth: note.pageWidth,
+						pageHeight: note.pageHeight,
+						pages: overlayPageNumbers.map((pageNumber) =>
+							rasterInkOverlayPage(note.pages[pageNumber - 1], note.pageWidth, note.pageHeight),
+						),
+					},
+					undefined,
+					{ upscale },
+				)
+			: Promise.resolve([]),
+	]);
+	const overlaysByPage = new Map(overlayPageNumbers.map((pageNumber, i) => [pageNumber, overlayImages[i]]));
 
 	// Scale dpi along with the raster so widthAttr/heightAttr (pageWidth /
 	// dpi) come out the same physical size regardless of upscale.
@@ -302,6 +331,7 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 			strokeStyles,
 			equipment: note.header.APPLY_EQUIPMENT,
 			nativePageWidth: note.pageWidth,
+			rasterInkOverlay: overlaysByPage.get(pageNumber),
 		});
 	});
 }

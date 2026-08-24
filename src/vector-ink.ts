@@ -291,15 +291,29 @@ function retainRasterInkInRects(
 	return encodeRattaRuns(colors);
 }
 
-/** Returns `page` with vectorizable ink layers cleared. `DISABLE` text-box
- * and Digest rectangles remain as a compact raster overlay because the file
- * has no vector representation for their contents. */
-export function withoutInkLayers(page: IPage, pageWidth: number, pageHeight: number): IPage {
+/** Returns `page` with every vectorizable ink layer cleared. */
+export function withoutInkLayers(page: IPage): IPage {
+	return {
+		...page,
+		MAINLAYER: { ...page.MAINLAYER, bitmapBuffer: null },
+		LAYER1: { ...page.LAYER1, bitmapBuffer: null },
+		LAYER2: { ...page.LAYER2, bitmapBuffer: null },
+		LAYER3: { ...page.LAYER3, bitmapBuffer: null },
+	};
+}
+
+/**
+ * Returns the bitmap-only portion of a text-box/Digest page as a transparent
+ * overlay. It must be painted *after* vector ink: a grey highlighter path can
+ * cross a text box, but the device leaves the box's rasterized glyphs on top.
+ */
+export function rasterInkOverlayPage(page: IPage, pageWidth: number, pageHeight: number): IPage {
 	const rasterInkRects = parseDisabledInkRects(page.DISABLE);
 	const retain = (name: ILayerNames) =>
 		retainRasterInkInRects(page[name].bitmapBuffer, rasterInkRects, pageWidth, pageHeight);
 	return {
 		...page,
+		BGLAYER: { ...page.BGLAYER, bitmapBuffer: null },
 		MAINLAYER: { ...page.MAINLAYER, bitmapBuffer: retain('MAINLAYER') },
 		LAYER1: { ...page.LAYER1, bitmapBuffer: retain('LAYER1') },
 		LAYER2: { ...page.LAYER2, bitmapBuffer: retain('LAYER2') },
@@ -759,7 +773,7 @@ export function buildRenderNoteForVectorInk(note: ISupernote, vectorInkPages: Ve
 	return {
 		...note,
 		pages: note.pages.map((page, i) =>
-			useVectorInkByPage.get(i + 1) ? withoutInkLayers(page, note.pageWidth, note.pageHeight) : page,
+			useVectorInkByPage.get(i + 1) ? withoutInkLayers(page) : page,
 		),
 	};
 }

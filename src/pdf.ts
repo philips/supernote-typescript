@@ -27,6 +27,8 @@ import {
 	buildVectorInkPrimitives,
 	prepareVectorInkPages,
 	buildRenderNoteForVectorInk,
+	parseDisabledInkRects,
+	rasterInkOverlayPage,
 } from './vector-ink.js';
 
 // Recognized word bounding boxes are stored in raster-pixel units divided by
@@ -177,6 +179,9 @@ export interface AddPdfPageOptions {
 	 * no upscale), which is correct for non-upscaled renders.
 	 * `toPdf()` always passes `note.pageWidth`. */
 	nativePageWidth?: number;
+	/** Transparent bitmap-only ink (currently text boxes/Digests) painted
+	 * after vector strokes. */
+	rasterInkOverlay?: Image | Uint8Array;
 }
 
 // Draws the recognized handwriting (RTR) text invisibly onto `pdfPage` at
@@ -397,7 +402,7 @@ export async function addPdfPage(
 	image: Image | Uint8Array,
 	options: AddPdfPageOptions = {},
 ): Promise<void> {
-	const { dpi = 300, strokes, strokeStyles, equipment, nativePageWidth } = options;
+	const { dpi = 300, strokes, strokeStyles, equipment, nativePageWidth, rasterInkOverlay } = options;
 	const { pdfDoc, font } = ctx;
 	const pointsPerPixel = 72 / dpi;
 
@@ -414,6 +419,11 @@ export async function addPdfPage(
 
 	if (strokes && strokes.length) {
 		drawVectorInkPrimitives(pdfPage, buildVectorInkPrimitives(strokes, strokeStyles), heightPts, pointsPerPixel);
+	}
+	if (rasterInkOverlay) {
+		const overlayBytes = rasterInkOverlay instanceof Uint8Array ? rasterInkOverlay : encodePng(rasterInkOverlay);
+		const overlayImage = await pdfDoc.embedPng(overlayBytes);
+		pdfPage.drawImage(overlayImage, { x: 0, y: 0, width: widthPts, height: heightPts });
 	}
 
 	drawRecognitionText(pdfPage, fontKey, font, page, pngImage.width, pointsPerPixel, heightPts, equipment, nativePageWidth);
@@ -477,7 +487,26 @@ export async function toPdf(note: ISupernote, options: ToPdfOptions = {}): Promi
 	const pages = pageNumbers ? pageNumbers.map((n) => note.pages[n - 1]) : note.pages;
 	const vectorInkPages = vectorInk ? prepareVectorInkPages(note, pageNumbers, upscale) : [];
 	const renderNote = vectorInk ? buildRenderNoteForVectorInk(note, vectorInkPages) : note;
-	const images = await toImage(renderNote, pageNumbers, { upscale });
+	const overlayPageNumbers = vectorInkPages
+		.filter((vectorPage) => vectorPage.useVectorInk && parseDisabledInkRects(note.pages[vectorPage.pageNumber - 1].DISABLE).length > 0)
+		.map((vectorPage) => vectorPage.pageNumber);
+	const [images, overlayImages] = await Promise.all([
+		toImage(renderNote, pageNumbers, { upscale }),
+		overlayPageNumbers.length
+			? toImage(
+					{
+						pageWidth: note.pageWidth,
+						pageHeight: note.pageHeight,
+						pages: overlayPageNumbers.map((pageNumber) =>
+							rasterInkOverlayPage(note.pages[pageNumber - 1], note.pageWidth, note.pageHeight),
+						),
+					},
+					undefined,
+					{ upscale },
+				)
+			: Promise.resolve([]),
+	]);
+	const overlaysByPage = new Map(overlayPageNumbers.map((pageNumber, i) => [pageNumber, overlayImages[i]]));
 
 	const ctx = await createPdfContext({ fontBytes });
 	for (let i = 0; i < pages.length; i++) {
@@ -489,6 +518,7 @@ export async function toPdf(note: ISupernote, options: ToPdfOptions = {}): Promi
 			strokeStyles: vip?.useVectorInk ? vip.styles : undefined,
 			equipment: note.header.APPLY_EQUIPMENT,
 			nativePageWidth: note.pageWidth,
+			rasterInkOverlay: overlaysByPage.get(pageNumber),
 		});
 	}
 

@@ -16,7 +16,6 @@ import * as path from 'node:path';
 import { SupernoteX } from '../src/parsing.js';
 import { toSvg } from '../src/svg.js';
 import { toPdf } from '../src/pdf.js';
-import { parseDisabledInkRects, RasterInkRect } from '../src/vector-ink.js';
 import { extractPageForms, pdfPageToSvg, devicePageToSvgDocument } from './pdf-vector.js';
 
 const INPUT_DIR = 'tests/input';
@@ -174,13 +173,11 @@ function svgInkArea(svg: string): number {
 	return total;
 }
 
-/** Our SVG with its normal background raster removed, while retaining the
- * clipped bitmap-only objects that vector ink cannot represent as paths. */
-function inkOnly(svg: string, rasterInkRects: RasterInkRect[] = []): string {
-	if (rasterInkRects.length === 0) return svg.replace(/<image\b[^>]*\/>/g, '');
-	const clipId = 'raster-ink-regions';
-	const clip = `<defs><clipPath id="${clipId}" clipPathUnits="userSpaceOnUse">${rasterInkRects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.width}" height="${r.height}"/>`).join('')}</clipPath></defs>`;
-	return svg.replace(/<image\b([^>]*)\/>/g, `${clip}<image clip-path="url(#${clipId})"$1/>`);
+/** Our SVG with the normal template/background raster removed. Bitmap-only
+ * text-box/Digest ink is emitted as a separately marked image after vectors,
+ * so it remains in this ink-only comparison. */
+function inkOnly(svg: string): string {
+	return svg.replace(/<image data-page-background="true"[^>]*\/>/g, '');
 }
 
 interface PageComparison {
@@ -229,7 +226,7 @@ async function buildFixture(noteFile: string): Promise<FixtureComparison | null>
 	for (let i = 0; i < Math.min(forms.length, ours.length); i++) {
 		const pageNumber = i + 1;
 		const device = pdfPageToSvg(forms[i], note.pageHeight);
-		const oursSvg = inkOnly(ours[i], parseDisabledInkRects(note.pages[i].DISABLE));
+		const oursSvg = inkOnly(ours[i]);
 		const libraryPdf = await toPdf(note, { vectorInk: true, pageNumbers: [pageNumber] });
 		pages.push({
 			pageNumber,

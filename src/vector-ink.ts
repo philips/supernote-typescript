@@ -260,6 +260,19 @@ function encodeRattaRuns(colors: Uint8Array): Uint8Array {
 	return new Uint8Array(encoded);
 }
 
+/** A valid all-transparent Ratta bitmap, used to give `toImage` a canvas
+ * for pages that have no bitmap-only overlay. */
+function transparentRattaBitmap(pageWidth: number, pageHeight: number): Uint8Array {
+	const pixelCount = pageWidth * pageHeight;
+	const output = new Uint8Array(Math.ceil(pixelCount / 128) * 2);
+	const background = new RattaRLEDecoder().encodedPalette.background;
+	for (let run = 0, start = 0; start < pixelCount; run++, start += 128) {
+		output[run * 2] = background;
+		output[run * 2 + 1] = Math.min(128, pixelCount - start) - 1;
+	}
+	return output;
+}
+
 /** Returns a Ratta bitmap retaining only pixels inside `rects`. The decoder's
  * palette translation supplies the reverse RGB-to-code lookup, so this keeps
  * the source layer's exact rendered colours rather than guessing a palette. */
@@ -294,8 +307,13 @@ function retainRasterInkInRects(
 /** Returns `page` with vectorizable ink layers cleared. `DISABLE` text-box
  * and Digest rectangles remain as a compact raster overlay because the file
  * has no vector representation for their contents. */
-export function withoutInkLayers(page: IPage, pageWidth: number, pageHeight: number): IPage {
-	const rasterInkRects = parseDisabledInkRects(page.DISABLE);
+export function withoutInkLayers(
+	page: IPage,
+	pageWidth: number,
+	pageHeight: number,
+	retainRasterInk = true,
+): IPage {
+	const rasterInkRects = retainRasterInk ? parseDisabledInkRects(page.DISABLE) : [];
 	const retain = (name: ILayerNames) =>
 		retainRasterInkInRects(page[name].bitmapBuffer, rasterInkRects, pageWidth, pageHeight);
 	return {
@@ -761,5 +779,41 @@ export function buildRenderNoteForVectorInk(note: ISupernote, vectorInkPages: Ve
 		pages: note.pages.map((page, i) =>
 			useVectorInkByPage.get(i + 1) ? withoutInkLayers(page, note.pageWidth, note.pageHeight) : page,
 		),
+	};
+}
+
+/** The template/background raster beneath vector ink. Raster-only text-box
+ * and Digest pixels are deliberately excluded here so callers can paint them
+ * over vector paths at their original layer order. */
+export function buildVectorInkBackgroundNote(note: ISupernote, vectorInkPages: VectorInkPage[]): ISupernote {
+	const useVectorInkByPage = new Map(vectorInkPages.map((p) => [p.pageNumber, p.useVectorInk]));
+	return {
+		...note,
+		pages: note.pages.map((page, i) =>
+			useVectorInkByPage.get(i + 1) ? withoutInkLayers(page, note.pageWidth, note.pageHeight, false) : page,
+		),
+	};
+}
+
+/** A transparent raster containing only bitmap-only text-box/Digest ink for
+ * vectorized pages. It must be painted after vector paths: some text lies on
+ * top of a decoded marker/highlighter stroke in the original layer stack. */
+export function buildRasterInkOverlayNote(note: ISupernote, vectorInkPages: VectorInkPage[]): ISupernote {
+	const useVectorInkByPage = new Map(vectorInkPages.map((p) => [p.pageNumber, p.useVectorInk]));
+	const transparentBitmap = transparentRattaBitmap(note.pageWidth, note.pageHeight);
+	const clear = (page: IPage): IPage => ({
+		...page,
+		MAINLAYER: { ...page.MAINLAYER, bitmapBuffer: transparentBitmap },
+		LAYER1: { ...page.LAYER1, bitmapBuffer: null },
+		LAYER2: { ...page.LAYER2, bitmapBuffer: null },
+		LAYER3: { ...page.LAYER3, bitmapBuffer: null },
+		BGLAYER: { ...page.BGLAYER, bitmapBuffer: null },
+	});
+	return {
+		...note,
+		pages: note.pages.map((page, i) => {
+			if (!useVectorInkByPage.get(i + 1) || parseDisabledInkRects(page.DISABLE).length === 0) return clear(page);
+			return { ...withoutInkLayers(page, note.pageWidth, note.pageHeight), BGLAYER: { ...page.BGLAYER, bitmapBuffer: null } };
+		}),
 	};
 }

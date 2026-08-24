@@ -554,6 +554,10 @@ describe("svg", () => {
 
       const [svg] = await toSvg(sn, { pageNumbers: [pageNumber], vectorInk: true })
       expect(svg).toContain("<path ")
+      // The bitmap overlay follows paths, preserving text painted over the
+      // page's decoded grey highlighter rather than covering it with vector ink.
+      expect(svg).toContain('data-raster-ink-overlay="true"')
+      expect(svg.indexOf("<path ")).toBeLessThan(svg.indexOf('data-raster-ink-overlay="true"'))
     }, { timeout: 30000 })
 
     test("erase-n6-20230015-horizontal-1270.note now crosses the coverage threshold and vectorizes (issue #56)", { timeout: 30000 }, async () => {

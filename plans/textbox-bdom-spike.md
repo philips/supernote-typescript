@@ -45,6 +45,16 @@ this project's dependencies or was found in the MyScript web client source.
 The current open-source iink TypeScript client sends ink to a service; it does
 not read BDOM packages locally.
 
+A concrete decoder route exists for Android: MyScript publishes the native
+`com.myscript:iink` Android artifact to Maven Central. Its 3.0.2 API (the note
+says 3.0.3) exposes `Engine.openPackage()`, `ContentPackage`/`ContentPart`,
+and `Editor.export()` with TEXT, HTML, SVG, JIIX, PDF, and image MIME types.
+That is an excellent proof-of-concept target for this package. It is **not** a
+drop-in library dependency: it ships Android ABI-specific native libraries and
+`Engine.create()` requires a non-empty MyScript certificate. Its license,
+certificate provisioning, and Node/browser redistribution suitability remain
+unknown.
+
 ## What the existing `.note` fields provide
 
 * `DISABLE` identifies the raster-only regions, but has only rectangles.
@@ -68,14 +78,16 @@ or be used as the primary source.
 ### 1. Obtain/use a MyScript decoder — recommended investigation
 
 Ask Ratta/MyScript whether their licensed iink SDK can load this `Raw Content`
-package and export it to JIIX, SVG, HTML, or text-with-boxes. A proof of
-concept should load `RECOGNFILE` from this fixture and verify that page 4's
-body text and its rectangle can be exported without using the Ratta bitmap.
+package and export it to JIIX, SVG, HTML, or text-with-boxes. The Maven Central
+Android SDK supplies a concrete proof-of-concept route: open the extracted ZIP
+with `Engine.openPackage()`, attach its part to an editor, then request JIIX or
+SVG through `Editor.export()`. Verify that page 4's body text and its rectangle
+are exported without using the Ratta bitmap.
 
-This is likely the lowest-risk route, but the SDK may be native, licensed, and
-not suitable for this library's browser/Node distribution. It must be assessed
-for redistribution, offline operation, output fidelity, and version
-compatibility before adopting it.
+This is likely the lowest-risk route, but the SDK is native, certificate-gated,
+and not suitable as-is for this library's browser/Node distribution. Assess
+certificate provisioning, redistribution terms, offline operation, output
+fidelity, and version compatibility before adopting it.
 
 ### 2. Reverse engineer the BDOM/BINK pair
 

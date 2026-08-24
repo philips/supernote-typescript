@@ -527,6 +527,11 @@ export class SupernoteX implements ISupernote {
 					recognitionElements: recognitionElements,
 					paragraphs: this._extractParagraphs(recognitionElements),
 					text: this._extractText(recognitionElements),
+					recognitionFileBuffer: getContentAtAddress(
+						buffer,
+						parseInt((data.RECOGNFILE as string) ?? '0'),
+						this.lengthFieldSize,
+					),
 					totalPathBuffer: getContentAtAddress(
 						buffer,
 						parseInt((data.TOTALPATH as string) ?? '0'),

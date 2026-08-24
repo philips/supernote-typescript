@@ -217,6 +217,8 @@ export interface IPage {
 	RECOGNTEXT: string;
 	/** Address of recognition file */
 	RECOGNFILE: string;
+	/** MyScript iink recognition package (the raw ZIP at `RECOGNFILE`), when present. */
+	recognitionFileBuffer: Uint8Array | null;
 	/** Status of text recognition */
 	RECOGNFILESTATUS: RecognitionStatuses;
 	/** An indicator of device and file orientation */

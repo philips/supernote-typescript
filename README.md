@@ -23,6 +23,20 @@ The default font (Helvetica) only supports Latin text. Pass `fontBytes` with a U
 const pdfBytes = await toPdf(note, { fontBytes: await fs.readFile('NotoSans-Regular.ttf') });
 ```
 
+### Reading MyScript text-box candidates
+
+Recent notes with text boxes or Digests can include a MyScript iink `RECOGNFILE` package. `extractIinkText` reads the currently understood BDOM v2 text-candidate subset from one parsed page:
+
+```ts
+import { SupernoteX, extractIinkText } from 'supernote-typescript';
+
+const note = new SupernoteX(buffer);
+const fields = await extractIinkText(note.pages[pageNumber - 1]); // pageNumber is 1-indexed
+console.log(fields.map((field) => field.text));
+```
+
+This is experimental reverse-engineering support, not a replacement for the raster text-box rendering. It exposes the stored selected candidates only; it does not yet expose geometry/styles, and a Digest can contain rendered content that has no text field in the currently understood BDOM subset. Pages without an iink package return `[]`.
+
 #### Rendering pages in parallel across Workers
 
 `toPdf` is a convenience wrapper around three lower-level pieces, exported so applications can render pages in parallel (across Web Workers or Node `worker_threads`) instead of one at a time on the main thread:

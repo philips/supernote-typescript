@@ -39,11 +39,43 @@ dictionary including `textBlock`, `textField`, `textResult`, `word`, `line`,
 text-family, size, weight, and line-height rules. This is strong evidence that
 the source model can express both text and layout.
 
-The contents are a proprietary MyScript binary DOM/BINK pair. The text is not
-plain UTF-8 or UTF-16 in `page.bdom`, and no public TypeScript decoder is in
-this project's dependencies or was found in the MyScript web client source.
-The current open-source iink TypeScript client sends ink to a service; it does
-not read BDOM packages locally.
+The contents are a proprietary MyScript binary DOM/BINK pair, and no public
+TypeScript decoder is in this project's dependencies or was found in the
+MyScript web client source. The current open-source iink TypeScript client
+sends ink to a service; it does not read BDOM packages locally.
+
+### Confirmed BDOM v2 subset
+
+The initial `BDOM` header has a two-byte version (`2` in this fixture), followed
+by a length-prefixed printable schema dictionary. The remainder is a binary
+event stream whose element names are dictionary indexes. This is enough to
+reliably locate `textField` and `charCandidate` elements without decoding the
+whole object graph.
+
+A `charCandidate` stores its selected Unicode label as binary token `0x01`, a
+little-endian `uint32` byte length, then UTF-8 bytes. It is **not** a plain-text
+file, which is why a strings search misses most content. Unlabelled candidates
+are line breaks in the inspected fields. Grouping candidates by their enclosing
+`textField` extracts these fixture values directly from BDOM:
+
+| Page | Extracted BDOM text fields |
+| --- | --- |
+| 2 | `a.`; `=`; `M`; `aids`; `smishing → Sms-Phishing\nWuling (Whale-Phishing) → c- Level Phishing\nWishing → Phone-Phishing\nCEO-Fraud` |
+| 4 | `'odcast\nScale-Up 360°` |
+| 5 | `Test. [n P von Digest`; `Digest mit Link zum Buch` |
+
+The missing first `P` on page 4 and the imperfect German strings are the
+stored recognition candidates, not a decoding error. More importantly, page
+4's large rendered Digest body is absent from these BDOM text fields. It cannot
+currently be reproduced as selectable text from this known BDOM subset; its
+source may be another object kind, BINK-only recognition data, or an embedded
+raster payload.
+
+`scripts/inspect-bdom.ts` records this reproducible, intentionally narrow
+reverse-engineering result. It accepts a decompressed `page.bdom`, lists the
+schema size, and prints extracted `textField` candidates. It is a research
+inspector, not a production BDOM parser: it does not yet associate bounds,
+styles, or every possible unlabelled candidate type.
 
 A concrete decoder route exists for Android: MyScript publishes the native
 `com.myscript:iink` Android artifact to Maven Central. Its 3.0.2 API (the note

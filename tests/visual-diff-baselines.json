@@ -1,0 +1,330 @@
+{
+  "blank-a6x-3.15.27-shapes-rtr": {
+    "1": {
+      "inkAreaRatio": 0.9144807415019147,
+      "iouSvgVsDevice": 0.8818879222572809,
+      "pdfDiffFrac": 0.0309962226361799,
+      "pdfMae": 5.3384309482065895,
+      "ourInkPixels": 445856,
+      "deviceInkPixels": 487551
+    }
+  },
+  "blank-a6x-3.26.40-two-pages": {
+    "1": {
+      "inkAreaRatio": null,
+      "iouSvgVsDevice": 1,
+      "pdfDiffFrac": 0,
+      "pdfMae": 0,
+      "ourInkPixels": 0,
+      "deviceInkPixels": 0
+    },
+    "2": {
+      "inkAreaRatio": null,
+      "iouSvgVsDevice": 1,
+      "pdfDiffFrac": 0,
+      "pdfMae": 0,
+      "ourInkPixels": 0,
+      "deviceInkPixels": 0
+    }
+  },
+  "caligraphy-n5-20260016-widths-erase": {
+    "1": {
+      "inkAreaRatio": 0.7044995767402488,
+      "iouSvgVsDevice": 0.6881751636516075,
+      "pdfDiffFrac": 0.003184611002604167,
+      "pdfMae": 0.41809672037760415,
+      "ourInkPixels": 21638,
+      "deviceInkPixels": 30714
+    },
+    "2": {
+      "inkAreaRatio": 0.7719706461428316,
+      "iouSvgVsDevice": 0.7583744804802671,
+      "pdfDiffFrac": 0.013116658528645833,
+      "pdfMae": 1.9775628662109375,
+      "ourInkPixels": 21565,
+      "deviceInkPixels": 27935
+    },
+    "3": {
+      "inkAreaRatio": 0.8257000383582662,
+      "iouSvgVsDevice": 0.8168261400651465,
+      "pdfDiffFrac": 0.01641845703125,
+      "pdfMae": 2.5059521484375,
+      "ourInkPixels": 32289,
+      "deviceInkPixels": 39105
+    },
+    "4": {
+      "inkAreaRatio": 0.8657573582196698,
+      "iouSvgVsDevice": 0.8614811631571409,
+      "pdfDiffFrac": 0.008719278971354166,
+      "pdfMae": 1.5059547932942707,
+      "ourInkPixels": 6030,
+      "deviceInkPixels": 6965
+    }
+  },
+  "erase-n5-20260016-all-mechanisms": {
+    "1": {
+      "inkAreaRatio": null,
+      "iouSvgVsDevice": 1,
+      "pdfDiffFrac": 0,
+      "pdfMae": 0.044404703776041665,
+      "ourInkPixels": 0,
+      "deviceInkPixels": 0
+    }
+  },
+  "erase-n5-20260016-mixed-colors": {
+    "1": {
+      "inkAreaRatio": 0.9739931262611836,
+      "iouSvgVsDevice": 0.9678644584676716,
+      "pdfDiffFrac": 0.002136433919270833,
+      "pdfMae": 0.3413108317057292,
+      "ourInkPixels": 211413,
+      "deviceInkPixels": 217058
+    },
+    "2": {
+      "inkAreaRatio": 0.9638037714599827,
+      "iouSvgVsDevice": 0.9573480773727993,
+      "pdfDiffFrac": 0.09418558756510417,
+      "pdfMae": 13.298054606119791,
+      "ourInkPixels": 287547,
+      "deviceInkPixels": 298346
+    }
+  },
+  "erase-n5-20260016-no-white-pen": {
+    "1": {
+      "inkAreaRatio": null,
+      "iouSvgVsDevice": 1,
+      "pdfDiffFrac": 0,
+      "pdfMae": 0,
+      "ourInkPixels": 0,
+      "deviceInkPixels": 0
+    }
+  },
+  "erase-n5-20260016-white-pen-cover": {
+    "1": {
+      "inkAreaRatio": 0.8678644895860118,
+      "iouSvgVsDevice": 0.8425174381737476,
+      "pdfDiffFrac": 0.0016794840494791666,
+      "pdfMae": 0.26074422200520836,
+      "ourInkPixels": 27001,
+      "deviceInkPixels": 31112
+    },
+    "2": {
+      "inkAreaRatio": 0.9756188696870621,
+      "iouSvgVsDevice": 0.9707219799470722,
+      "pdfDiffFrac": 0.016029459635416667,
+      "pdfMae": 3.935401814778646,
+      "ourInkPixels": 52220,
+      "deviceInkPixels": 53525
+    },
+    "3": {
+      "inkAreaRatio": 0.8815685499802449,
+      "iouSvgVsDevice": 0.8460837710542127,
+      "pdfDiffFrac": 0.0154681396484375,
+      "pdfMae": 3.672197265625,
+      "ourInkPixels": 44625,
+      "deviceInkPixels": 50620
+    },
+    "4": {
+      "inkAreaRatio": 1.0093691216900593,
+      "iouSvgVsDevice": 0.900277103075502,
+      "pdfDiffFrac": 0.012076416015625,
+      "pdfMae": 2.8687925211588543,
+      "ourInkPixels": 27903,
+      "deviceInkPixels": 27644
+    }
+  },
+  "erase-n6-20230015-horizontal-1270": {
+    "1": {
+      "inkAreaRatio": 0.9876726376191827,
+      "iouSvgVsDevice": 0.8457564276597038,
+      "pdfDiffFrac": 0.007228279397082816,
+      "pdfMae": 0.9155050740253732,
+      "ourInkPixels": 45268,
+      "deviceInkPixels": 45833
+    }
+  },
+  "heading-n5-20260016-backgrounds-marker": {
+    "1": {
+      "inkAreaRatio": 0.9748005571736102,
+      "iouSvgVsDevice": 0.862534336557984,
+      "pdfDiffFrac": 0.0010194905598958333,
+      "pdfMae": 0.11738362630208334,
+      "ourInkPixels": 15396,
+      "deviceInkPixels": 15794
+    },
+    "2": {
+      "inkAreaRatio": 1.033017742563317,
+      "iouSvgVsDevice": 0.8971386053923579,
+      "pdfDiffFrac": 0.0434112548828125,
+      "pdfMae": 6.498640950520834,
+      "ourInkPixels": 164537,
+      "deviceInkPixels": 159278
+    },
+    "3": {
+      "inkAreaRatio": 0.9779551826723455,
+      "iouSvgVsDevice": 0.972018123492969,
+      "pdfDiffFrac": 0.04253499348958333,
+      "pdfMae": 6.290022786458334,
+      "ourInkPixels": 137079,
+      "deviceInkPixels": 140169
+    }
+  },
+  "ink-a5x-2.14.28-old-pen-width": {
+    "1": {
+      "inkAreaRatio": 0.8254452522931236,
+      "iouSvgVsDevice": 0.8172011201830158,
+      "pdfDiffFrac": 0.005993635400686682,
+      "pdfMae": 0.7522451877419826,
+      "ourInkPixels": 41666,
+      "deviceInkPixels": 50477
+    }
+  },
+  "line-n5-20260016-ruler-tool": {
+    "1": {
+      "inkAreaRatio": 1.132088736134979,
+      "iouSvgVsDevice": 0.8230697301629709,
+      "pdfDiffFrac": 0.002212320963541667,
+      "pdfMae": 0.2609708658854167,
+      "ourInkPixels": 28986,
+      "deviceInkPixels": 25604
+    },
+    "2": {
+      "inkAreaRatio": 1.1074399260628467,
+      "iouSvgVsDevice": 0.9017931609674729,
+      "pdfDiffFrac": 0.007190348307291667,
+      "pdfMae": 1.7073118082682293,
+      "ourInkPixels": 9586,
+      "deviceInkPixels": 8656
+    },
+    "3": {
+      "inkAreaRatio": null,
+      "iouSvgVsDevice": 1,
+      "pdfDiffFrac": 0.00527099609375,
+      "pdfMae": 1.2582645670572916,
+      "ourInkPixels": 0,
+      "deviceInkPixels": 0
+    }
+  },
+  "link-n6-3.26.40-partial-erase-3p": {
+    "1": {
+      "inkAreaRatio": 0.7232233488686844,
+      "iouSvgVsDevice": 0.7119373692029103,
+      "pdfDiffFrac": 0.01289622750627024,
+      "pdfMae": 2.16271732778143,
+      "ourInkPixels": 66261,
+      "deviceInkPixels": 91619
+    },
+    "2": {
+      "inkAreaRatio": 0.812510134200662,
+      "iouSvgVsDevice": 0.8090849806981051,
+      "pdfDiffFrac": 0.09879434826016023,
+      "pdfMae": 23.002699856332335,
+      "ourInkPixels": 170372,
+      "deviceInkPixels": 209686
+    },
+    "3": {
+      "inkAreaRatio": 0.9721010527613793,
+      "iouSvgVsDevice": 0.8352434913576705,
+      "pdfDiffFrac": 0.06095070251053157,
+      "pdfMae": 12.993607625952711,
+      "ourInkPixels": 63067,
+      "deviceInkPixels": 64877
+    }
+  },
+  "sticker-n5-20260016-plugin-artwork": {
+    "1": {
+      "inkAreaRatio": 0.8646971935007386,
+      "iouSvgVsDevice": 0.8646971935007386,
+      "pdfDiffFrac": 0.0001959228515625,
+      "pdfMae": 0.022370402018229166,
+      "ourInkPixels": 2927,
+      "deviceInkPixels": 3385
+    },
+    "2": {
+      "inkAreaRatio": 0.9735057963301479,
+      "iouSvgVsDevice": 0.958010973621984,
+      "pdfDiffFrac": 0.008263142903645833,
+      "pdfMae": 2.0583591715494793,
+      "ourInkPixels": 42072,
+      "deviceInkPixels": 43217
+    },
+    "3": {
+      "inkAreaRatio": null,
+      "iouSvgVsDevice": 1,
+      "pdfDiffFrac": 0.0007000732421875,
+      "pdfMae": 0.16409566243489584,
+      "ourInkPixels": 0,
+      "deviceInkPixels": 0
+    }
+  },
+  "stroke-n5-20260016-isolation-tools-colors-widths": {
+    "1": {
+      "inkAreaRatio": 1.0038015930485156,
+      "iouSvgVsDevice": 0.882803197822759,
+      "pdfDiffFrac": 0.0003279622395833333,
+      "pdfMae": 0.03553120930989583,
+      "ourInkPixels": 5545,
+      "deviceInkPixels": 5524
+    },
+    "2": {
+      "inkAreaRatio": 0.950322637673473,
+      "iouSvgVsDevice": 0.9451644185841488,
+      "pdfDiffFrac": 0.011904703776041666,
+      "pdfMae": 2.8915777587890625,
+      "ourInkPixels": 53755,
+      "deviceInkPixels": 56565
+    },
+    "3": {
+      "inkAreaRatio": 0.8615489394823895,
+      "iouSvgVsDevice": 0.8414821944177093,
+      "pdfDiffFrac": 0.0036875406901041665,
+      "pdfMae": 0.5994478352864583,
+      "ourInkPixels": 8855,
+      "deviceInkPixels": 10278
+    },
+    "4": {
+      "inkAreaRatio": 1.0015573214071796,
+      "iouSvgVsDevice": 0.9179261526688349,
+      "pdfDiffFrac": 0.00599609375,
+      "pdfMae": 1.4131459554036458,
+      "ourInkPixels": 25082,
+      "deviceInkPixels": 25043
+    },
+    "5": {
+      "inkAreaRatio": 0.9739219565683774,
+      "iouSvgVsDevice": 0.9696025497704731,
+      "pdfDiffFrac": 0.009366048177083334,
+      "pdfMae": 2.330916341145833,
+      "ourInkPixels": 40857,
+      "deviceInkPixels": 41951
+    }
+  },
+  "test-a5x-20220011-old-pen-ids": {
+    "1": {
+      "inkAreaRatio": 0.8071450740807292,
+      "iouSvgVsDevice": 0.7533560504001902,
+      "pdfDiffFrac": 0.014259091849903816,
+      "pdfMae": 1.553194322692186,
+      "ourInkPixels": 49411,
+      "deviceInkPixels": 61217
+    },
+    "2": {
+      "inkAreaRatio": 1.052470100281242,
+      "iouSvgVsDevice": 0.8599304929849402,
+      "pdfDiffFrac": 0.07209103416368373,
+      "pdfMae": 9.77464608140356,
+      "ourInkPixels": 37048,
+      "deviceInkPixels": 35201
+    }
+  },
+  "turkish-a6x-20230015-handwriting-erase": {
+    "1": {
+      "inkAreaRatio": 0.8429862272112093,
+      "iouSvgVsDevice": 0.8403307066270508,
+      "pdfDiffFrac": 0.00868816507171208,
+      "pdfMae": 1.10158437735895,
+      "ourInkPixels": 84710,
+      "deviceInkPixels": 100488
+    }
+  }
+}

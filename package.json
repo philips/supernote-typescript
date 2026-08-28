@@ -21,7 +21,8 @@
     "test-mirror": "vitest --watch -t mirror",
     "coverage": "vitest run --coverage",
     "prettier-format": "prettier --config .prettierrc 'src/**/*.ts' --write",
-    "build:site": "tsc -p tsconfig.scripts.json && node .scripts-dist/scripts/build-fixture-site.js"
+    "build:site": "tsc -p tsconfig.scripts.json && node .scripts-dist/scripts/build-fixture-site.js",
+    "visual-diff:baseline": "tsc -p tsconfig.scripts.json && node .scripts-dist/scripts/generate-visual-diff-baselines.js"
   },
   "repository": {
     "type": "git",
@@ -40,6 +41,7 @@
   "homepage": "https://gitlab.com/philips/supernote-typescript",
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/fs-extra": "11.0.4",
     "@types/node": "26.1.1",
     "@types/sql.js": "^1.4.11",

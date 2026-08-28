@@ -68,6 +68,21 @@ const SURFACE_TABLE_PATTERN = /^surface_\d+$/;
  * tiles happen to sit. */
 const TILE_ID_STRIDE = 4096;
 
+/** Hard ceiling on a composited image's total pixel count. `toImage()` sizes
+ * its output against the tile-grid bounding box across *every* tile in the
+ * file (see its doc comment) with no other check - a single tile whose `tid`
+ * is far from the rest (a corrupted file, or a stray mark placed far off on
+ * Atelier's much larger virtual canvas, see `TILE_ID_STRIDE`'s doc comment)
+ * blows that bounding box out arbitrarily far, and `toImage()` would
+ * otherwise allocate accordingly. On a memory-constrained host (verified:
+ * this is what caused supernote-obsidian-plugin#147, a hard iOS crash on
+ * open, not a catchable one - WKWebView's per-process memory ceiling is far
+ * stricter than desktop's) that's an out-of-memory crash rather than a slow
+ * tab. Real device-generated files observed so far top out around
+ * 1920x2560 (~4.9 megapixels; see atelier.test.ts) - this leaves generous
+ * headroom above that while still keeping the worst case bounded. */
+const MAX_COMPOSITE_PIXELS = 32_000_000;
+
 /** Parsed Supernote Atelier `.spd` file. */
 export class SupernoteAtelier {
 	declare fmtVer?: number;
@@ -207,7 +222,17 @@ export class SupernoteAtelier {
 
 		const tileWidth = decoded[0].image.width;
 		const tileHeight = decoded[0].image.height;
-		const output = new Image((maxCol - minCol + 1) * tileWidth, (maxRow - minRow + 1) * tileHeight, {
+		const width = (maxCol - minCol + 1) * tileWidth;
+		const height = (maxRow - minRow + 1) * tileHeight;
+		if (width * height > MAX_COMPOSITE_PIXELS) {
+			throw new Error(
+				`Refusing to composite "${surfaceName}": computed size ${width}x${height} ` +
+				`(${(width * height).toLocaleString()} px) exceeds the ${MAX_COMPOSITE_PIXELS.toLocaleString()}px ` +
+				'safety limit. This usually means one tile is positioned far from the rest ' +
+				'(a corrupted or out-of-range tile id) rather than a genuinely huge canvas.',
+			);
+		}
+		const output = new Image(width, height, {
 			colorModel: ImageColorModel.RGBA,
 		});
 		// image-js defaults a new image's alpha channel to fully opaque (and

@@ -15,6 +15,17 @@ export type StrokePen = 'needlePoint' | 'inkPen' | 'marker' | 'calligraphy' | 'u
  * from a page's `TOTALPATH` data -- including its real color, tool, and
  * thickness, not just geometry (see `parseStrokes`'s doc comment). */
 export interface IStroke {
+	/** Zero-based index of this record in the page's raw `TOTALPATH` array.
+	 * Unlike the stroke's index in `parseStrokes()`'s return value, this keeps
+	 * gaps for filtered non-ink records such as lasso and link-tag paths, so
+	 * consumers can recover the device's exact write order. */
+	writeOrder: number;
+	/** Optional real page-relative stroke start time in milliseconds. The
+	 * current TOTALPATH decoder does not synthesize timing when the source
+	 * record cannot be mapped to one; scene exporters omit this field then. */
+	t0Ms?: number;
+	/** Optional real stroke duration in milliseconds. See `t0Ms`. */
+	durationMs?: number;
 	points: IStrokePoint[];
 	/** CSS `rgb(...)` color this stroke was actually drawn in on-device --
 	 * exact, not sampled from a raster. For an eraser stroke (`isEraser`),
@@ -686,6 +697,7 @@ export function parseStrokes(
 			// 255 this never touches.
 			const grey = LEGACY_GREY_IDS[raw.color] ?? raw.color;
 			strokes.push({
+				writeOrder: i,
 				points: raw.points.map(([y, x]) => ({ x: -x / scale + pageWidth, y: y / scale })),
 				color: `rgb(${grey},${grey},${grey})`,
 				// A star mark's `pen` was overwritten by the device and names

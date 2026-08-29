@@ -7,7 +7,21 @@ import { recognitionCoordinateScale } from "../src/pdf"
 import { RattaRLEDecoder, toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import { buildRasterInkOverlayNote, buildVectorInkBackgroundNote } from "../src/index"
-import { buildRenderNoteForVectorInk, parseDisabledInkRects, prepareVectorInkPages, rasterInkRectsForPage } from "../src/vector-ink"
+import {
+  buildOrderedVectorInkPrimitives,
+  buildRenderNoteForVectorInk,
+  parseDisabledInkRects,
+  prepareVectorInkPages,
+  rasterInkRectsForPage,
+} from "../src/vector-ink"
+import {
+  OI_VECTOR_SCENE_METADATA_ID,
+  OI_VECTOR_SCENE_MIME_TYPE,
+  OI_VECTOR_SCENE_NAMESPACE,
+  OI_VECTOR_SCENE_VERSION,
+  buildOiVectorSceneV1,
+  type OiVectorSceneV1,
+} from "../src/svg-scene"
 import { describe, test, expect } from 'vitest'
 
 function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
@@ -205,6 +219,11 @@ function svgInkArea(svg: string): number {
   return svgInkPaths(svg)
     .filter((path) => path.color !== "rgb(255,255,255)")
     .reduce((total, path) => total + path.area, 0)
+}
+
+function embeddedScene(svg: string): OiVectorSceneV1 | undefined {
+  const match = /<metadata id="oi-scene" type="application\/vnd\.olaink\.vector-scene\+json">([^<]+)<\/metadata>/.exec(svg)
+  return match ? JSON.parse(match[1]) as OiVectorSceneV1 : undefined
 }
 
 describe("svg", () => {
@@ -464,6 +483,261 @@ describe("svg", () => {
     expect(dpiSvg).toContain(`width="${sn.pageWidth / 300}in"`)
     expect(pixelSvg).toContain(`viewBox="0 0 ${sn.pageWidth} ${sn.pageHeight}"`)
     expect(dpiSvg).toContain(`viewBox="0 0 ${sn.pageWidth} ${sn.pageHeight}"`)
+  })
+
+  describe("embedScene", () => {
+    test("requires vectorInk", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"))
+      await expect(toSvg(sn, { pageNumbers: [1], embedScene: true })).rejects.toThrow(
+        "embedScene requires vectorInk: true",
+      )
+    })
+
+    test("requires a caller-owned documentId", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"))
+      await expect(toSvg(sn, { pageNumbers: [1], vectorInk: true, embedScene: true })).rejects.toThrow(
+        "embedScene requires a caller-owned documentId",
+      )
+    })
+
+    test("embeds a versioned scene whose references preserve TOTALPATH write order and final z-order", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"))
+      const [plain] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const [svg] = await toSvg(sn, {
+        pageNumbers: [1],
+        vectorInk: true,
+        embedScene: true,
+        documentId: "ink-a5x-2.14.28-old-pen-width",
+      })
+      const scene = embeddedScene(svg)
+
+      expect(scene).toBeDefined()
+      expect(svg).toContain(`xmlns:oi="${OI_VECTOR_SCENE_NAMESPACE}"`)
+      expect(svg).toContain(`oi:scene-version="${OI_VECTOR_SCENE_VERSION}"`)
+      expect(svg).toContain(`<metadata id="${OI_VECTOR_SCENE_METADATA_ID}" type="${OI_VECTOR_SCENE_MIME_TYPE}">`)
+      expect(scene!.version).toBe(OI_VECTOR_SCENE_VERSION)
+      expect(scene!.strokes.length).toBeGreaterThan(100)
+      expect(new Set(scene!.strokes.map((stroke) => stroke.id)).size).toBe(scene!.strokes.length)
+      expect(scene!.strokes.map((stroke) => stroke.zOrder)).toEqual(
+        [...scene!.strokes.map((stroke) => stroke.zOrder)].sort((a, b) => a - b),
+      )
+
+      const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+        includeErasers: true,
+        includeContours: true,
+      })
+      const byWriteOrder = new Map(decoded.map((stroke) => [stroke.writeOrder, stroke]))
+      for (const item of scene!.strokes) {
+        expect(item.id).toBe(`s${item.writeOrder}`)
+        expect(byWriteOrder.has(item.writeOrder)).toBe(true)
+
+        expect(item.centerline).toBeDefined()
+        const finalPath = new RegExp(`<path d="([^"]+)"[^>]* id="${item.contour}" oi:role="final-contour"/>`).exec(svg)
+        const centerline = new RegExp(
+          `<path id="${item.centerline!}"[^>]*visibility="hidden" oi:role="centerline" d="([^"]+)"/>`,
+        ).exec(svg)
+        expect(finalPath).not.toBeNull()
+        expect(centerline).not.toBeNull()
+
+        const source = byWriteOrder.get(item.writeOrder)!
+        expect(centerline![1]).toContain(`M${source.points[0].x.toFixed(2)},${source.points[0].y.toFixed(2)}`)
+        expect(centerline![1]).toMatch(/^M-?\d+\.\d{2},-?\d+\.\d{2}(?: L-?\d+\.\d{2},-?\d+\.\d{2})*$/)
+        expect(finalPath![1]).toMatch(/^M-?\d+\.\d{2},-?\d+\.\d{2}(?: [ML]-?\d+\.\d{2},-?\d+\.\d{2}| Z)*$/)
+      }
+
+      // The profile only adds metadata/attributes and hidden centerlines;
+      // ordinary SVG viewers still see exactly the same final ink.
+      expect(svgInkPaths(svg)).toEqual(svgInkPaths(plain))
+      expect(svg).not.toMatch(/<(?:script|style|animate|animateMotion|set)\b/)
+      expect(svg).not.toMatch(/\son\w+=/)
+    })
+
+    test("keeps exact raw record positions when filtered non-ink records leave write-order gaps", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"))
+      const decoded = parseStrokes(sn.pages[2].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+        includeErasers: true,
+        includeContours: true,
+      })
+      expect(decoded.some((stroke, index) => stroke.writeOrder !== index)).toBe(true)
+
+      const [svg] = await toSvg(sn, {
+        pageNumbers: [3],
+        vectorInk: true,
+        embedScene: true,
+        documentId: "link-n6-3.26.40-partial-erase-3p",
+      })
+      const scene = embeddedScene(svg)!
+      const decodedOrders = new Set(decoded.map((stroke) => stroke.writeOrder))
+      expect(scene.strokes.every((stroke) => decodedOrders.has(stroke.writeOrder))).toBe(true)
+      expect(scene.strokes.some((stroke) => stroke.writeOrder !== scene.strokes.indexOf(stroke))).toBe(true)
+    })
+
+    test("marks real eraser records as erase-cover while retaining their white browser rendering", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n6-20230015-horizontal-1270.note"))
+      const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, {
+        includeErasers: true,
+        includeContours: true,
+      })
+      const eraserOrders = new Set(decoded.filter((stroke) => stroke.isEraser).map((stroke) => stroke.writeOrder))
+      expect(eraserOrders.size).toBeGreaterThan(0)
+
+      const [plain, sceneSvg] = await Promise.all([
+        toSvg(sn, { pageNumbers: [1], vectorInk: true }).then(([svg]) => svg),
+        toSvg(sn, {
+          pageNumbers: [1],
+          vectorInk: true,
+          embedScene: true,
+          documentId: "erase-n6-20230015-horizontal-1270",
+        }).then(([svg]) => svg),
+      ])
+      const svg = sceneSvg
+      const scene = embeddedScene(svg)!
+      const sceneErasers = scene.strokes.filter((stroke) => eraserOrders.has(stroke.writeOrder))
+      expect(sceneErasers.length).toBeGreaterThan(0)
+      for (const stroke of sceneErasers) {
+        const element = new RegExp(`<path d="[^"]+"[^>]*stroke="rgb\\(255,255,255\\)"[^>]* id="${stroke.contour}" oi:role="erase-cover"/>`).exec(svg)
+        expect(element).not.toBeNull()
+      }
+      expect(svgInkPaths(svg).some((path) => path.color === "rgb(255,255,255)")).toBe(true)
+      expect(svgInkPaths(svg)).toEqual(svgInkPaths(plain))
+    })
+
+    test("references contour-only survivors without emitting an empty centerline path", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"))
+      const [svg] = await toSvg(sn, {
+        pageNumbers: [2],
+        vectorInk: true,
+        embedScene: true,
+        documentId: "link-n6-3.26.40-partial-erase-3p",
+      })
+      const scene = embeddedScene(svg)!
+      const fadeInStrokes = scene.strokes.filter((stroke) => stroke.centerline === undefined)
+
+      expect(fadeInStrokes.length).toBeGreaterThan(0)
+      expect(svg).not.toContain('d=""')
+      for (const stroke of fadeInStrokes) {
+        const finalPath = new RegExp(`<path d="([^"]+)"[^>]* id="${stroke.contour}" oi:role="final-contour"/>`).exec(svg)
+        expect(finalPath).not.toBeNull()
+        expect(finalPath![1].length).toBeGreaterThan(0)
+      }
+    })
+
+    test("keeps every referenced v1 path in the frozen absolute M/L/Z grammar without transforms", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"))
+      const [svg] = await toSvg(sn, {
+        pageNumbers: [2],
+        vectorInk: true,
+        embedScene: true,
+        documentId: "link-n6-3.26.40-partial-erase-3p",
+      })
+      const scene = embeddedScene(svg)!
+      const allowedPath = /^M-?\d+\.\d{2},-?\d+\.\d{2}(?: [ML]-?\d+\.\d{2},-?\d+\.\d{2}| Z)*$/
+
+      for (const stroke of scene.strokes) {
+        for (const id of [stroke.contour, stroke.centerline].filter((value): value is string => value !== undefined)) {
+          const element = new RegExp(`<path ([^>]*\\bid="${id}"[^>]*)/>`).exec(svg)
+          expect(element).not.toBeNull()
+          expect(element![1]).not.toContain("transform=")
+          const d = /\bd="([^"]+)"/.exec(element![1])?.[1]
+          expect(d).toBeDefined()
+          expect(d).not.toBe("")
+          expect(d).toMatch(allowedPath)
+        }
+      }
+    })
+
+    test("groups selected pages by document ID and original zero-based page index", { timeout: 60000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("link-n6-3.26.40-partial-erase-3p.note"))
+      const [page3, page1] = await toSvg(sn, {
+        pageNumbers: [3, 1],
+        vectorInk: true,
+        embedScene: true,
+        documentId: "link-n6-3.26.40-partial-erase-3p",
+      })
+
+      for (const svg of [page3, page1]) {
+        expect(svg).toContain('oi:document-id="link-n6-3.26.40-partial-erase-3p"')
+        expect(svg).toContain('oi:page-count="3"')
+      }
+      expect(page3).toContain('oi:page-index="2"')
+      expect(page1).toContain('oi:page-index="0"')
+
+      // The oldest fixture predates FILE_ID but still gets one stable ID.
+      const legacy = new SupernoteX(await readFileToUint8Array("test-a5x-20220011-old-pen-ids.note"))
+      expect(legacy.header.FILE_ID).toBeUndefined()
+      const [legacySvg] = await toSvg(legacy, {
+        pageNumbers: [1],
+        vectorInk: true,
+        embedScene: true,
+        documentId: "test-a5x-20220011-old-pen-ids",
+      })
+      expect(legacySvg).toContain('oi:document-id="test-a5x-20220011-old-pen-ids"')
+    })
+
+    test("caller-owned IDs separate copied notes that reuse Supernote FILE_ID", { timeout: 60000 }, async () => {
+      const collisionPairs = [
+        ["blank-a6x-3.15.27-two-pages.note", "blank-a6x-3.26.40-two-pages.note"],
+        ["blank-n5-20230015-manta.note", "layout-n5-20230015-vertical-1000.note"],
+      ]
+      for (const [leftFile, rightFile] of collisionPairs) {
+        const [left, right] = await Promise.all([
+          readFileToUint8Array(leftFile).then((bytes) => new SupernoteX(bytes)),
+          readFileToUint8Array(rightFile).then((bytes) => new SupernoteX(bytes)),
+        ])
+        expect(left.header.FILE_ID).toBe(right.header.FILE_ID)
+
+        const leftId = leftFile.replace(/\.note$/, "")
+        const rightId = rightFile.replace(/\.note$/, "")
+        const [leftSvg, rightSvg] = await Promise.all([
+          toSvg(left, { pageNumbers: [1], vectorInk: true, embedScene: true, documentId: leftId }).then(([svg]) => svg),
+          toSvg(right, { pageNumbers: [1], vectorInk: true, embedScene: true, documentId: rightId }).then(([svg]) => svg),
+        ])
+        expect(leftSvg).toContain(`oi:document-id="${leftId}"`)
+        expect(rightSvg).toContain(`oi:document-id="${rightId}"`)
+        expect(leftId).not.toBe(rightId)
+      }
+    })
+
+    test("emits optional real timing values without inventing missing timing", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("ink-a5x-2.14.28-old-pen-width.note"))
+      const [page] = prepareVectorInkPages(sn, [1], 1)
+      const timedIndex = page.styles.findIndex((style, index) => style.shape === "path" && page.strokes[index].points.length > 0)
+      expect(timedIndex).toBeGreaterThanOrEqual(0)
+
+      const strokes = page.strokes.map((stroke, index) =>
+        index === timedIndex ? { ...stroke, t0Ms: 125, durationMs: 480 } : stroke,
+      )
+      const built = buildOiVectorSceneV1(
+        buildOrderedVectorInkPrimitives(strokes, page.styles),
+        strokes,
+        page.styles,
+      )!
+      const timed = built.scene.strokes.find((stroke) => stroke.writeOrder === strokes[timedIndex].writeOrder)!
+      expect(timed.t0Ms).toBe(125)
+      expect(timed.durationMs).toBe(480)
+      expect(built.scene.strokes.filter((stroke) => stroke.writeOrder !== timed.writeOrder).every(
+        (stroke) => stroke.t0Ms === undefined && stroke.durationMs === undefined,
+      )).toBe(true)
+    })
+
+    test("omits scene metadata on a page that falls back to raster ink but keeps document grouping", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("render-n6-20230015-moonchild-user-bg.note"))
+      const [plain] = await toSvg(sn, { pageNumbers: [1], vectorInk: true })
+      const [withScene] = await toSvg(sn, {
+        pageNumbers: [1],
+        vectorInk: true,
+        embedScene: true,
+        documentId: "render-n6-20230015-moonchild-user-bg",
+      })
+
+      expect(embeddedScene(withScene)).toBeUndefined()
+      expect(withScene).toContain(`xmlns:oi="${OI_VECTOR_SCENE_NAMESPACE}"`)
+      expect(withScene).toContain('oi:document-id="render-n6-20230015-moonchild-user-bg"')
+      expect(withScene).toContain('oi:page-index="0"')
+      expect(withScene).toContain(`oi:page-count="${sn.pages.length}"`)
+      expect(withScene).toContain(`oi:scene-version="${OI_VECTOR_SCENE_VERSION}"`)
+      expect(withScene.replace(/ xmlns:oi="[^"]+" oi:scene-version="1" oi:document-id="[^"]+" oi:page-index="0" oi:page-count="1"/, "")).toBe(plain)
+    })
   })
 
   describe("vectorInk", () => {
@@ -1696,6 +1970,16 @@ describe("svg", () => {
       .filter((name) => name.endsWith(".note"))
       .sort()
 
+    test("native scene probe corpus retains the device-validated regression families", () => {
+      expect(allNoteFixtures).toEqual(expect.arrayContaining([
+        "erase-n5-20260016-white-pen-cover.note",
+        "heading-n5-20260016-backgrounds-marker.note",
+        "caligraphy-n5-20260016-widths-erase.note",
+        "erase-n6-20230015-horizontal-1270.note", // landscape
+        "blank-n5-20230015-manta.note", // background-only
+      ]))
+    })
+
     test.each(allNoteFixtures)(
       "%s: vectorInk produces well-formed output on every page without dropping ink",
       { timeout: 60000 },
@@ -1703,22 +1987,31 @@ describe("svg", () => {
         const sn = new SupernoteX(await readFileToUint8Array(file))
 
         const rasterSvgs = await toSvg(sn)
-        const vectorSvgs = await toSvg(sn, { vectorInk: true })
+        const fixture = file.replace(/\.note$/, "")
+        const vectorSvgs = await toSvg(sn, { vectorInk: true, embedScene: true, documentId: fixture })
 
         expect(vectorSvgs.length).toBe(sn.pages.length)
 
         await Promise.all(
           vectorSvgs.flatMap((svg, i) => {
+            // Always keep an Ola Ink handoff artifact, including raster-only
+            // fallback pages (which intentionally contain no scene metadata).
+            // Filenames remain convenient and unique for manual probing, but
+            // document/page grouping comes from the SVG root's oi: attributes.
+            const sceneName = sn.pages.length === 1
+              ? `${fixture}-embed-scene.svg`
+              : `${fixture}-page-${i + 1}-embed-scene.svg`
+            const sceneOutput = fs.writeFile(`tests/output/${sceneName}`, svg)
+
             // Keep every page vectorInk actually handled -- which is the
             // ones whose strokes decoded, the same test toSvg itself uses.
             // Deliberately not "has <path>": a page whose strokes were all
             // erased renders blank *on purpose* (erase-n5-20260016-no-white-pen.note),
             // and that is exactly the output worth being able to look at.
-            // Pages with nothing to decode fall back to the plain raster
-            // and would just duplicate a toSvg() render.
+            // Pages with nothing to decode fall back to the plain raster.
             const vectorized =
               parseStrokes(sn.pages[i].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true }).length > 0
-            if (!vectorized) return []
+            if (!vectorized) return [sceneOutput]
             // Save the device's own rendering of the same page beside it, so
             // every vector output has the thing it's supposed to look like
             // sitting next to it. main.test.ts also writes page rasters, but
@@ -1728,6 +2021,7 @@ describe("svg", () => {
             // to be unwrapped rather than rendered again.
             const embeddedPng = /xlink:href="data:image\/png;base64,([^"]+)"/.exec(rasterSvgs[i])
             return [
+              sceneOutput,
               fs.writeFile(`tests/output/${file}.${i}.vector.svg`, svg),
               ...(embeddedPng ? [fs.writeFile(`tests/output/${file}.${i}.device.png`, Buffer.from(embeddedPng[1], "base64"))] : []),
             ]
@@ -1740,13 +2034,17 @@ describe("svg", () => {
           expect(svg).toContain("<image ")
 
           const hasPaths = svg.includes("<path ")
-          // A page vectorInk didn't (fully) decode must fall back to
-          // exactly the plain raster render for that page, not some
-          // in-between state missing ink. This holds for an all-erased
-          // page too: its ink layers are empty, so stripping them changes
-          // nothing and the blank vector render *is* the raster render.
+          // A page vectorInk didn't (fully) decode must fall back to the
+          // plain raster render plus only the document/page root identity,
+          // not some in-between state missing ink. This holds for an
+          // all-erased page too: its ink layers are empty, so the blank
+          // vector render is the raster render after those attrs are removed.
           if (!hasPaths) {
-            expect(svg).toBe(rasterSvgs[i])
+            const withoutPageIdentity = svg.replace(
+              / xmlns:oi="[^"]+" oi:scene-version="1" oi:document-id="[^"]+" oi:page-index="\d+" oi:page-count="\d+"/,
+              "",
+            )
+            expect(withoutPageIdentity).toBe(rasterSvgs[i])
           }
 
           for (const [, d] of svg.matchAll(/<path d="([^"]+)"/g)) {

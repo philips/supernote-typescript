@@ -5,13 +5,22 @@ import { ISupernote } from './format.js';
 import { IStroke } from './strokes.js';
 import {
 	StrokeStyle,
+	OrderedVectorInkPrimitive,
 	VectorInkPrimitive,
-	buildVectorInkPrimitives,
+	buildOrderedVectorInkPrimitives,
 	prepareVectorInkPages,
 	buildVectorInkBackgroundNote,
 	buildRasterInkOverlayNote,
 	rasterInkRectsForPage,
 } from './vector-ink.js';
+import {
+	OI_VECTOR_SCENE_METADATA_ID,
+	OI_VECTOR_SCENE_MIME_TYPE,
+	OI_VECTOR_SCENE_NAMESPACE,
+	OI_VECTOR_SCENE_VERSION,
+	buildOiVectorSceneV1,
+	serializeOiVectorSceneMetadata,
+} from './svg-scene.js';
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
@@ -106,8 +115,17 @@ function buildHatchPatternDef(color: string): string {
 	);
 }
 
+function buildPolylinePath(points: IStroke['points']): string {
+	return points
+		.map((point, i) => `${i === 0 ? 'M' : 'L'}${point.x.toFixed(2)},${point.y.toFixed(2)}`)
+		.join(' ');
+}
+
 /** Renders one `VectorInkPrimitive` as an SVG element. */
-function renderPrimitiveToSvg(primitive: VectorInkPrimitive): { element: string; hatchColor?: string } {
+function renderPrimitiveToSvg(
+	primitive: VectorInkPrimitive,
+	profileAttributes = '',
+): { element: string; hatchColor?: string } {
 	if (primitive.kind === 'rect') {
 		const fill = primitive.fill === 'hatch' ? `url(#${hatchPatternId(primitive.color)})` : primitive.color;
 		const element =
@@ -116,34 +134,64 @@ function renderPrimitiveToSvg(primitive: VectorInkPrimitive): { element: string;
 		return primitive.fill === 'hatch' ? { element, hatchColor: primitive.color } : { element };
 	}
 	if (primitive.kind === 'filledPath') {
-		const d = primitive.rings
-			.map((ring) =>
-				ring.map((point, i) => `${i === 0 ? 'M' : 'L'}${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ') + ' Z',
-			)
-			.join(' ');
-		return { element: `<path d="${d}" fill="${primitive.color}"/>` };
+		const d = primitive.rings.map((ring) => `${buildPolylinePath(ring)} Z`).join(' ');
+		return { element: `<path d="${d}" fill="${primitive.color}"${profileAttributes}/>` };
 	}
-	const d = primitive.points
-		.map((point, i) => `${i === 0 ? 'M' : 'L'}${point.x.toFixed(2)},${point.y.toFixed(2)}`)
-		.join(' ');
+	const d = buildPolylinePath(primitive.points);
 	return {
 		element:
 			`<path d="${d}" fill="none" stroke="${primitive.color}" stroke-width="${primitive.width}" ` +
-			`stroke-linecap="round" stroke-linejoin="round"/>`,
+			`stroke-linecap="round" stroke-linejoin="round"${profileAttributes}/>`,
 	};
 }
 
-/** Renders an ordered list of vector-ink primitives to SVG markup. */
-function buildSvgElements(primitives: VectorInkPrimitive[]): { defs: string; elements: string } {
+interface BuiltSvgElements {
+	defs: string;
+	elements: string;
+	sceneMetadata: string;
+	hiddenCenterlines: string;
+	hasScene: boolean;
+}
+
+/** Renders an ordered list of vector-ink primitives to SVG markup, optionally
+ * annotating final paths and embedding their real sampled centerlines. */
+function buildSvgElements(
+	entries: OrderedVectorInkPrimitive[],
+	strokes: IStroke[],
+	strokeStyles: StrokeStyle[] | undefined,
+	embedScene: boolean,
+): BuiltSvgElements {
 	const elements: string[] = [];
 	const hatchColors = new Set<string>();
-	for (const primitive of primitives) {
-		const { element, hatchColor } = renderPrimitiveToSvg(primitive);
+	const builtScene = embedScene ? buildOiVectorSceneV1(entries, strokes, strokeStyles) : undefined;
+	const bindingByStroke = new Map(builtScene?.bindings.map((binding) => [binding.strokeIndex, binding]));
+
+	for (const entry of entries) {
+		const binding = bindingByStroke.get(entry.strokeIndex);
+		const profileAttributes = binding ? ` id="${binding.contour}" oi:role="${binding.role}"` : '';
+		const { element, hatchColor } = renderPrimitiveToSvg(entry.primitive, profileAttributes);
 		elements.push(element);
 		if (hatchColor) hatchColors.add(hatchColor);
 	}
 	const defs = [...hatchColors].map(buildHatchPatternDef).join('');
-	return { defs, elements: elements.join('') };
+	if (!builtScene) return { defs, elements: elements.join(''), sceneMetadata: '', hiddenCenterlines: '', hasScene: false };
+
+	const sceneMetadata =
+		`<metadata id="${OI_VECTOR_SCENE_METADATA_ID}" type="${OI_VECTOR_SCENE_MIME_TYPE}">` +
+		serializeOiVectorSceneMetadata(builtScene.scene) +
+		`</metadata>`;
+	const hiddenCenterlines = builtScene.bindings
+		.flatMap((binding) => {
+			if (!binding.centerline) return [];
+			const d = buildPolylinePath(strokes[binding.strokeIndex].points);
+			return [
+				`<path id="${binding.centerline}" fill="none" stroke="${escapeXml(binding.color)}" ` +
+					`stroke-width="${binding.width}" stroke-linecap="round" stroke-linejoin="round" ` +
+					`visibility="hidden" oi:role="centerline" d="${d}"/>`,
+			];
+		})
+		.join('');
+	return { defs, elements: elements.join(''), sceneMetadata, hiddenCenterlines, hasScene: true };
 }
 
 export interface AddSvgPageOptions {
@@ -168,6 +216,15 @@ export interface AddSvgPageOptions {
 	 * straight from its stroke's own already-upscaled points, so it needs no
 	 * separate scaling). */
 	strokeStyles?: StrokeStyle[];
+	/** Embed the experimental Ola Ink v1 animation scene in this SVG. The
+	 * caller must also provide `strokes` and matching `strokeStyles`. */
+	embedScene?: boolean;
+	/** Stable ID shared by every page SVG from the source document. Together
+	 * with zero-based `pageIndex` and `pageCount`, emitted as `oi:` root
+	 * attributes whenever `embedScene` is true. */
+	documentId?: string;
+	pageIndex?: number;
+	pageCount?: number;
 	/** A transparent bitmap-only ink overlay painted after vector strokes.
 	 * Used for text boxes/Digests that have no TOTALPATH representation. */
 	overlayImage?: Image | Uint8Array;
@@ -208,7 +265,19 @@ export function addSvgPage(
 	pageHeight: number,
 	options: AddSvgPageOptions = {},
 ): string {
-	const { dpi, includeText = true, strokes, strokeStyles, overlayImage, equipment, nativePageWidth } = options;
+	const {
+		dpi,
+		includeText = true,
+		strokes,
+		strokeStyles,
+		embedScene = false,
+		documentId,
+		pageIndex,
+		pageCount,
+		overlayImage,
+		equipment,
+		nativePageWidth,
+	} = options;
 
 	const pngBytes = image instanceof Uint8Array ? image : encodePng(image);
 	const base64 = encodeBase64(pngBytes);
@@ -220,19 +289,38 @@ export function addSvgPage(
 	const heightAttr = dpi ? `${pageHeight / dpi}in` : `${pageHeight}`;
 
 	const textElements = includeText ? buildRecognitionTextElements(page, pageWidth, equipment, nativePageWidth ?? pageWidth) : '';
-	const { defs, elements: strokeElements } =
-		strokes && strokes.length ? buildSvgElements(buildVectorInkPrimitives(strokes, strokeStyles)) : { defs: '', elements: '' };
+	const builtElements =
+		strokes && strokes.length
+			? buildSvgElements(buildOrderedVectorInkPrimitives(strokes, strokeStyles), strokes, strokeStyles, embedScene)
+			: { defs: '', elements: '', sceneMetadata: '', hiddenCenterlines: '', hasScene: false };
+	const hasPageIdentity =
+		embedScene &&
+		documentId !== undefined &&
+		pageIndex !== undefined &&
+		Number.isInteger(pageIndex) &&
+		pageIndex >= 0 &&
+		pageCount !== undefined &&
+		Number.isInteger(pageCount) &&
+		pageCount > 0;
+	const sceneRootAttributes = builtElements.hasScene || hasPageIdentity
+		? ` xmlns:oi="${OI_VECTOR_SCENE_NAMESPACE}" oi:scene-version="${OI_VECTOR_SCENE_VERSION}"` +
+			(hasPageIdentity
+				? ` oi:document-id="${escapeXml(documentId)}" oi:page-index="${pageIndex}" oi:page-count="${pageCount}"`
+				: '')
+		: '';
 
 	return (
-		`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
+		`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"${sceneRootAttributes} ` +
 		`width="${widthAttr}" height="${heightAttr}" viewBox="0 0 ${pageWidth} ${pageHeight}">` +
-		(defs ? `<defs>${defs}</defs>` : '') +
+		(builtElements.defs ? `<defs>${builtElements.defs}</defs>` : '') +
+		builtElements.sceneMetadata +
 		`<image data-page-background="true" x="0" y="0" width="${pageWidth}" height="${pageHeight}" xlink:href="data:image/png;base64,${base64}"/>` +
-		strokeElements +
+		builtElements.elements +
 		(overlayBase64
 			? `<image data-raster-ink-overlay="true" x="0" y="0" width="${pageWidth}" height="${pageHeight}" xlink:href="data:image/png;base64,${overlayBase64}"/>`
 			: '') +
 		textElements +
+		builtElements.hiddenCenterlines +
 		`</svg>`
 	);
 }
@@ -269,6 +357,15 @@ export interface ToSvgOptions {
 	 * style) are always rasterized either way, since they aren't stored as
 	 * vector data. Default false. */
 	vectorInk?: boolean;
+	/** Embed the experimental Ola Ink v1 vector-animation profile alongside
+	 * the final static SVG geometry. Requires `vectorInk: true`; pages that
+	 * cannot be vectorized keep their normal raster fallback without scene
+	 * metadata. Default false. */
+	embedScene?: boolean;
+	/** Caller-owned document grouping ID embedded in every page root. Required
+	 * with `embedScene`: neither Supernote's reusable `header.FILE_ID` nor file
+	 * content can distinguish every copied note in a collection. */
+	documentId?: string;
 }
 
 /**
@@ -289,7 +386,9 @@ export interface ToSvgOptions {
  * others inside the Worker, since none of it needs the main thread).
  */
 export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promise<string[]> {
-	const { pageNumbers, dpi, includeText, upscale = 1, vectorInk = false } = options;
+	const { pageNumbers, dpi, includeText, upscale = 1, vectorInk = false, embedScene = false, documentId } = options;
+	if (embedScene && !vectorInk) throw new RangeError('embedScene requires vectorInk: true');
+	if (embedScene && !documentId) throw new RangeError('embedScene requires a caller-owned documentId');
 	const pages = pageNumbers ? pageNumbers.map((n) => note.pages[n - 1]) : note.pages;
 
 	const vectorInkPages = vectorInk ? prepareVectorInkPages(note, pageNumbers, upscale) : [];
@@ -313,6 +412,10 @@ export async function toSvg(note: ISupernote, options: ToSvgOptions = {}): Promi
 			includeText,
 			strokes,
 			strokeStyles,
+			embedScene,
+			documentId,
+			pageIndex: pageNumber - 1,
+			pageCount: note.pages.length,
 			overlayImage: vip?.useVectorInk && rasterInkRectsForPage(note, pageNumber).length ? overlayImages?.[i] : undefined,
 			equipment: note.header.APPLY_EQUIPMENT,
 			nativePageWidth: note.pageWidth,

@@ -8,13 +8,21 @@ export { toPdf, createPdfContext, addPdfPage, addTextOnlyPdfPage } from './pdf.j
 export type { ToPdfOptions, PdfContext, AddPdfPageOptions } from './pdf.js';
 export { toSvg, addSvgPage } from './svg.js';
 export type { ToSvgOptions, AddSvgPageOptions } from './svg.js';
-export type { StrokeStyle, VectorInkPrimitive, VectorInkPage } from './vector-ink.js';
+export type { StrokeStyle, VectorInkPrimitive, OrderedVectorInkPrimitive, VectorInkPage } from './vector-ink.js';
 export {
 	prepareVectorInkPages,
+	buildOrderedVectorInkPrimitives,
 	buildRenderNoteForVectorInk,
 	buildVectorInkBackgroundNote,
 	buildRasterInkOverlayNote,
 } from './vector-ink.js';
+export {
+	OI_VECTOR_SCENE_NAMESPACE,
+	OI_VECTOR_SCENE_VERSION,
+	OI_VECTOR_SCENE_METADATA_ID,
+	OI_VECTOR_SCENE_MIME_TYPE,
+} from './svg-scene.js';
+export type { OiVectorSceneStrokeV1, OiVectorSceneV1 } from './svg-scene.js';
 export { parseStrokes } from './strokes.js';
 export type { IStroke, IStrokePoint, StrokePen } from './strokes.js';
 export { SupernoteAtelier } from './atelier.js';

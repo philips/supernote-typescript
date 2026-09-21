@@ -101,6 +101,9 @@ export interface IHeader {
 	APP_VERSION: string;
 	/** Handwriting recognition and text enabled */
 	FILE_RECOGN_TYPE: string;
+	/** Stable document identifier assigned by Supernote firmware. Older files
+	 * may omit it; exporters must provide a deterministic fallback. */
+	FILE_ID?: string;
 }
 
 export interface IKeyword {

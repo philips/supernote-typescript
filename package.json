@@ -33,7 +33,7 @@
     "library"
   ],
   "author": "Brandon Philips",
-  "license": "GPL-3.0-or-later",
+  "license": "Apache-2.0",
   "bugs": {
     "url": "https://github.com/philips/supernote-typescript/issues"
   },

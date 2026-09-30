@@ -19,6 +19,9 @@ const bytes = createTextNote({ text, fontBytes /* TTF/OTF */ });
 // Lower level: pages of MAINLAYER pixels (one Ratta color byte per pixel)
 // plus text boxes.
 writeNote({ pages: [{ mainLayer, textBoxes: [{ x, y, width, height, text }] }] });
+
+// Reading: the editable text boxes on a parsed page.
+extractTextBoxes(note.pages[0].totalPathBuffer); // [{ x, y, width, height, text, fontSize }]
 ```
 
 `src/writer.ts` holds the file serializer, the Ratta RLE encoder, and the

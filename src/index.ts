@@ -25,8 +25,8 @@ export {
 	WRITER_PAGE_HEIGHT,
 } from './writer.js';
 export type { IRect, WritablePage, WritableTextBox, WriteNoteOptions } from './writer.js';
-export { createTextNote, layoutTextPages } from './textbox.js';
-export type { TextBoxOptions, CreateTextNoteOptions } from './textbox.js';
+export { createTextNote, layoutTextPages, extractTextBoxes } from './textbox.js';
+export type { TextBoxOptions, CreateTextNoteOptions, ITextBox } from './textbox.js';
 export { parseStrokes } from './strokes.js';
 export type { IStroke, IStrokePoint, StrokePen } from './strokes.js';
 export { SupernoteAtelier } from './atelier.js';

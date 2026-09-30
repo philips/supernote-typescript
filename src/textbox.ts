@@ -289,3 +289,89 @@ export function createTextNote(options: CreateTextNoteOptions): Uint8Array {
 	const pages = layoutTextPages(options.text, options);
 	return writeNote({ pages, now: options.now, random: options.random, fileId: options.fileId });
 }
+
+/** A text box read back from a page's `TOTALPATH`. */
+export interface ITextBox {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	text: string;
+	fontSize: number;
+}
+
+const decodeBase64Utf8 = (value: string): string => {
+	const binary = atob(value);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return new TextDecoder().decode(bytes);
+};
+
+/**
+ * Reads the editable text boxes (`stroke_kind` `"0000"` records carrying a
+ * base64 CSV, see `plans/note-writer.md`) out of a page's `totalPathBuffer`.
+ * Records of any other kind, and malformed ones, are skipped.
+ */
+export function extractTextBoxes(totalPathBuffer: Uint8Array | null): ITextBox[] {
+	if (!totalPathBuffer || totalPathBuffer.length < 4) return [];
+	const view = new DataView(totalPathBuffer.buffer, totalPathBuffer.byteOffset, totalPathBuffer.byteLength);
+	const boxes: ITextBox[] = [];
+	const count = view.getUint32(0, true);
+	let offset = 4;
+	for (let i = 0; i < count && offset + 4 <= view.byteLength; i++) {
+		const length = view.getUint32(offset, true);
+		const start = offset + 4;
+		offset = start + length;
+		if (offset > view.byteLength) break;
+		try {
+			const box = readTextBoxRecord(new DataView(totalPathBuffer.buffer, totalPathBuffer.byteOffset + start, length));
+			if (box) boxes.push(box);
+		} catch {
+			// Not a well-formed text-box record; skip it.
+		}
+	}
+	return boxes;
+}
+
+function readTextBoxRecord(record: DataView): ITextBox | undefined {
+	const kind = new TextDecoder('latin1')
+		.decode(new Uint8Array(record.buffer, record.byteOffset + 48, 52))
+		.replace(/\0.*$/s, '');
+	if (kind !== '0000') return undefined;
+	let at = 208;
+	const u32 = () => {
+		const value = record.getUint32(at, true);
+		at += 4;
+		return value;
+	};
+	const skipArray = (size: number) => {
+		const count = u32();
+		at += count * size;
+	};
+	skipArray(24); // disableAreaList
+	skipArray(8); // points
+	skipArray(2); // pressures
+	skipArray(4); // tilts
+	skipArray(1); // flagDraw
+	skipArray(8); // epaPoints
+	skipArray(4); // epaGrays
+	at += 52; // section_1
+	skipArray(4); // controlNums
+	at += 10; // section_2
+	const contours = u32();
+	for (let i = 0; i < contours; i++) skipArray(8);
+	skipArray(16); // unk_17
+	at += 17; // section_3
+	skipArray(4); // unk_22
+	at += 13; // section_4
+	const csvLength = u32();
+	if (at + csvLength > record.byteLength) return undefined;
+	const csv = new TextDecoder('latin1').decode(new Uint8Array(record.buffer, record.byteOffset + at, csvLength));
+	const fields = csv.split(',').map((field) => (field ? decodeBase64Utf8(field) : ''));
+	const rect = fields[4]?.split(',').map(Number);
+	if (!rect || rect.length !== 4 || rect.some((value) => !Number.isFinite(value)) || fields[12] === undefined) {
+		return undefined;
+	}
+	const [x, y, width, height] = rect;
+	return { x, y, width, height, text: fields[12], fontSize: Number(fields[10]) || 0 };
+}

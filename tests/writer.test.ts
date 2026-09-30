@@ -11,7 +11,7 @@ import {
 	generateNoteId,
 	writeNote,
 } from '../src/writer';
-import { createTextNote, layoutTextPages } from '../src/textbox';
+import { createTextNote, extractTextBoxes, layoutTextPages } from '../src/textbox';
 
 const input = (name: string) => new Uint8Array(fs.readFileSync(`tests/input/${name}`));
 const PIXELS = WRITER_PAGE_WIDTH * WRITER_PAGE_HEIGHT;
@@ -223,5 +223,26 @@ describe('createTextNote', () => {
 		expect(pages.length).toBe(Math.ceil(120 / Math.floor((2560 - 300) / 63)));
 		const joined = pages.map((page) => page.textBoxes?.[0].text).join('\n');
 		expect(joined).toBe(long);
+	});
+});
+
+describe('extractTextBoxes', () => {
+	test('reads a device-created text box', () => {
+		const note = new SupernoteX(input('textbox-n5-20260016-device-record.note'));
+		const [box] = extractTextBoxes(note.pages[0].totalPathBuffer);
+		expect(box).toMatchObject({ x: 960, y: 1272, width: 940, height: 253, fontSize: 48 });
+		expect(box.text).toMatch(/^A device-created text box .*\nCaf/s);
+	});
+
+	test('round-trips text written by createTextNote', () => {
+		const text = 'First line\nSecond line — ünïcødé';
+		const note = new SupernoteX(createTextNote({ text, fontBytes: testFont(), random: seeded() }));
+		expect(extractTextBoxes(note.pages[0].totalPathBuffer).map((box) => box.text)).toEqual([text]);
+	});
+
+	test('ignores ink and missing paths', () => {
+		expect(extractTextBoxes(null)).toEqual([]);
+		const ink = new SupernoteX(input('stroke-n5-20260016-isolation-tools-colors-widths.note'));
+		expect(extractTextBoxes(ink.pages[0].totalPathBuffer)).toEqual([]);
 	});
 });

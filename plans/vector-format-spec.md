@@ -394,6 +394,22 @@ approximates a true per-pixel erase, and can leave thin slivers of the
 original ink visible at its edges), but a large, direct improvement over
 leaving the erased ink fully legible.
 
+**Superseded: `vectorInk` no longer draws eraser strokes at all.** That
+overlay was a stand-in for knowing which strokes were erased. Once
+`m_trailStatus` was decoded (Part 1.4) the removed strokes were skipped
+outright and the overlay became redundant — but it kept being drawn, and
+white ink on a transparent page is a visible phantom on any dark
+background or under a dark-mode invert filter (the Obsidian plugin's
+"random black lines", supernote-obsidian-plugin#238, pinned by
+`erase-n5-20260016-phantom-eraser-dark-mode.note`). Supernote's own export
+draws no eraser either (86 live strokes and no white paint on that
+fixture). `parseStrokes` still returns the gestures under
+`includeErasers`, since the records are real and a caller may want them.
+Note an eraser comes out as a *stroked* path on older exports and as a
+*filled* contour once `contour` is present
+(`erase-n5-20260016-non-rtr-marker-partial.note`), so any check for it has
+to look at both.
+
 ### Erase and selection records — the 2026-08 erase-fixture investigation
 
 `erase-n5-20260016-all-mechanisms.note`/`erase-n5-20260016-all-mechanisms.pdf` (one page exercising every erase mechanism, with
@@ -470,8 +486,9 @@ Findings, each confirmed against device ground truth:
 4. **What ships**: `pen=4` selection paths are excluded from
    `parseStrokes` unconditionally (they rendered as phantom black loops;
    never visible on-device in any fixture, whatever the selection did),
-   alongside the existing `color=255` filtering + `includeErasers` white
-   overlay.
+   alongside the existing `color=255` filtering. (The `includeErasers` white
+   overlay this once paired with is gone from `vectorInk` — see the
+   superseded note under the partial-erase paragraph above.)
 5. **Erase-exact output: the record says whether, on its own.**
    `src/svg.ts`'s `vectorInk` drops every stroke carrying a
    `m_trailStatus`, with no reference to the raster at all. That is the
@@ -503,8 +520,8 @@ Findings, each confirmed against device ground truth:
    so colour-matching drops Heading backgrounds outright.
 
    A page whose ink layers are empty is the same statement at page scale —
-   everything on it was erased — so nothing renders at all, including the
-   white eraser overlays, which is exactly `erase-n5-20260016-no-white-pen.note`.
+   everything on it was erased — so nothing renders at all, which is exactly
+   `erase-n5-20260016-no-white-pen.note`.
 
    **What's still approximate.** On firmware that splits a partially
    erased stroke (the `m_copy = 602` eraser, `-4` in Part 1.4), nothing is:

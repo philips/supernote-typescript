@@ -1054,3 +1054,28 @@ describe("parseStrokes", () => {
     });
   });
 });
+
+describe("partial erase and Real-Time Recognition", () => {
+  // Only a non-RTR note (FILE_RECOGN_TYPE 0) can split a stroke; an RTR note
+  // erases whole strokes. See the partial-erase section of
+  // plans/vector-format-spec.md, which also records the exception pinned here.
+  const RTR_NOTE_WITH_SPLIT_STROKES = "link-n6-3.26.40-partial-erase-3p.note"
+
+  test("every fixture holding a partially erased (-4) stroke is non-RTR, bar one documented exception", async () => {
+    const withSplits: { file: string; rtr: string }[] = []
+    for (const file of fs.readdirSync("tests/input").filter((f) => f.endsWith(".note")).sort()) {
+      const sn = new SupernoteX(await readFileToUint8Array(file))
+      const hasSplit = sn.pages.some((page) =>
+        parseStrokes(page.totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true }).some((s) => s.trailStatus === -4),
+      )
+      if (hasSplit) withSplits.push({ file, rtr: sn.header.FILE_RECOGN_TYPE })
+    }
+
+    expect(withSplits.map((f) => f.file)).toEqual([
+      "blank-a6x-3.15.27-two-pages.note",
+      "erase-n5-20260016-non-rtr-marker-partial.note",
+      RTR_NOTE_WITH_SPLIT_STROKES,
+    ])
+    expect(withSplits.filter((f) => f.rtr !== "0").map((f) => f.file)).toEqual([RTR_NOTE_WITH_SPLIT_STROKES])
+  })
+})

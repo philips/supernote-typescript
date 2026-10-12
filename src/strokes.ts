@@ -71,7 +71,16 @@ export interface IStroke {
 	 * record carrying a status and draw the fragments instead. That is what
 	 * the device itself does: its export of `link-n6-3.26.40-partial-erase-3p`
 	 * page 2 draws each erased line as exactly its own fragments, matching
-	 * their extents to the pixel, and never the line. */
+	 * their extents to the pixel, and never the line.
+	 *
+	 * `-4` only appears in notes recorded with Real-Time Recognition *off*
+	 * (`FILE_RECOGN_TYPE` `0`): an RTR note ties recognised text to whole
+	 * strokes, so its eraser removes them whole (`-99`) instead of cutting
+	 * them. Confirmed on `erase-n5-20260016-non-rtr-marker-partial.note`
+	 * (an N5, so not a firmware quirk of the Nomad). The one wrinkle is
+	 * `link-n6-3.26.40-partial-erase-3p.note`, whose header says RTR yet
+	 * whose page 2 holds `-4` records -- so don't use the header flag to
+	 * decide whether to expect fragments; just handle the records. */
 	trailStatus?: number;
 	/** True when this record is a filled rectangle -- a Heading or badge
 	 * background -- rather than a pen path, so its two points are opposite

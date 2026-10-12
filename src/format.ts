@@ -99,7 +99,17 @@ export interface IHeader {
 	RATTA_ETMD: string;
 	/** Supernote app version. Currently unused (0). */
 	APP_VERSION: string;
-	/** Handwriting recognition and text enabled */
+	/** Handwriting recognition and text enabled: `'1'` when Real-Time
+	 * Recognition (RTR) is on, `'0'` when off (with `FILE_RECOGN_LANGUAGE`
+	 * `'none'`).
+	 *
+	 * It matters to rendering because RTR notes cannot partially erase: the
+	 * eraser removes whole strokes there, while a non-RTR note splits a stroke
+	 * and stores the survivors as point-less contour records (see
+	 * `IStroke.trailStatus`, code `-4`). It is the notebook's setting when the
+	 * file was saved, not a guarantee about every page -- one fixture
+	 * (`link-n6-3.26.40-partial-erase-3p.note`) reads `'1'` and still holds
+	 * split strokes -- so decode the records rather than trusting this. */
 	FILE_RECOGN_TYPE: string;
 }
 

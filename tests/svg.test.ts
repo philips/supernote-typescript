@@ -4,6 +4,7 @@ import { encodePng } from "image-js"
 import { toSvg, addSvgPage } from "../src/svg"
 import { parseStrokes } from "../src/strokes"
 import { recognitionCoordinateScale } from "../src/pdf"
+import { extractPageForms, pdfPageToSvg } from "../scripts/pdf-vector"
 import { RattaRLEDecoder, toImage } from "../src/conversion"
 import { SupernoteX } from "../src/parsing"
 import { buildRasterInkOverlayNote, buildVectorInkBackgroundNote } from "../src/index"
@@ -643,6 +644,125 @@ describe("svg", () => {
         expect(strokes.length).toBeGreaterThan(0)
         expect(strokes.some((s) => s.color === "rgb(255,255,255)")).toBe(false)
       }
+    })
+
+    test("erase-n5-20260016-phantom-eraser-dark-mode: the eraser gesture is emitted as a white path over a transparent page (supernote-obsidian-plugin#238)", { timeout: 30000 }, async () => {
+      // Diagnosis of the plugin's "random black lines in dark mode". The
+      // page holds one eraser record (color=255) that follows three
+      // already-removed records (trailStatus -99, skipped by vectorInk) and
+      // precedes the rewritten bracket. The only live stroke drawn *before*
+      // it that it touches at all is the final "e" of "Supernote" (index
+      // 46), which it merely grazes (~2.6px) -- the device still renders
+      // that "e" whole. Everything the eraser really removed is already
+      // skipped, yet the gesture is emitted as pure white ink on a
+      // transparent page. A light page hides that; a dark page (or the
+      // plugin's invert filter) shows it.
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-phantom-eraser-dark-mode.note"))
+      const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
+      const erasers = strokes.map((s, i) => ({ s, i })).filter(({ s }) => s.isEraser)
+      expect(erasers.length).toBe(1)
+      expect(strokes.filter((s) => s.trailStatus === -99).length).toBe(3)
+
+      const [{ s: eraser, i: eraserIndex }] = erasers
+      // within 15px (~ eraser half-width plus ink half-width) of the eraser's path
+      const near = (p: { x: number; y: number }) => eraser.points.some((e) => Math.hypot(e.x - p.x, e.y - p.y) < 15)
+      const liveUnderEraser = strokes.filter(
+        (s, i) => i < eraserIndex && !s.isEraser && s.trailStatus === undefined && s.points.some(near),
+      )
+      expect(liveUnderEraser.length).toBe(1)
+      expect(strokes.indexOf(liveUnderEraser[0])).toBe(46)
+
+      const [svg] = await toSvg(sn, { vectorInk: true })
+      expect(svgInkPaths(svg).filter((path) => path.color === "rgb(255,255,255)").length).toBe(1)
+    })
+
+    test("erase-n5-20260016-phantom-eraser-dark-mode: our live ink matches the device's own PDF export stroke for stroke (baseline)", { timeout: 30000 }, async () => {
+      // erase-n5-20260016-phantom-eraser-dark-mode.pdf is Supernote's own
+      // vector export (older stroked-polyline style). It draws exactly the 86
+      // records whose trailStatus is clear and nothing else: not the 3
+      // records the device marked erased (-99), and not the eraser gesture.
+      // In particular it contains no white paint, which is what vectorInk's
+      // eraser overlay adds on top.
+      const pdfStreams = extractPdfFormXObjectStreams(await fs.readFile("tests/input/erase-n5-20260016-phantom-eraser-dark-mode.pdf"))
+      expect(pdfStreams.length).toBe(1)
+      const deviceContent = pdfStreams[0].toString("latin1")
+      const drawnByDevice = (deviceContent.match(/(?:^|\s)S(?:\s|$)/g) ?? []).length
+      expect(drawnByDevice).toBe(86)
+      expect(extractPdfColors(pdfStreams[0])).toEqual([[0, 0, 0]])
+
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-phantom-eraser-dark-mode.note"))
+      const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
+      expect(decoded.length).toBe(90)
+      expect(decoded.filter((s) => s.isEraser).length).toBe(1)
+      expect(decoded.filter((s) => !s.isEraser && s.trailStatus !== undefined).length).toBe(3)
+      expect(decoded.filter((s) => !s.isEraser && s.trailStatus === undefined).length).toBe(drawnByDevice)
+
+      const [svg] = await toSvg(sn, { vectorInk: true })
+      const inkPaths = svgInkPaths(svg).filter(({ color }) => color !== "rgb(255,255,255)")
+      expect(inkPaths.length).toBe(drawnByDevice)
+      expect(new Set(inkPaths.map(({ color }) => color))).toEqual(new Set(["rgb(0,0,0)"]))
+    })
+
+    test("erase-n5-20260016-phantom-eraser-dark-mode: ink area is within range of the device export (baseline)", { timeout: 30000 }, async () => {
+      const forms = extractPageForms(await fs.readFile("tests/input/erase-n5-20260016-phantom-eraser-dark-mode.pdf"))
+      expect(forms.length).toBe(1)
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-phantom-eraser-dark-mode.note"))
+      const device = pdfPageToSvg(forms[0], sn.pageHeight)
+      expect(device.paths.length).toBe(86)
+
+      const [svg] = await toSvg(sn, { vectorInk: true })
+      const ratio = svgInkArea(svg) / device.inkArea
+      // Measured at 0.965 (the fixture site's "match" tone is 0.9-1.1); a band rather than a point so an unrelated width tweak does not
+      // trip it, but an erased stroke coming back (or a live one lost) does.
+      expect(ratio).toBeGreaterThan(0.9)
+      expect(ratio).toBeLessThan(1.1)
+    })
+
+    test("erase-n5-20260016-non-rtr-marker-partial: a non-RTR note's partial erase is decoded as fragments, matching the device export (baseline)", { timeout: 30000 }, async () => {
+      // One black marker stroke, cut by two top-to-bottom erase sweeps. The
+      // note is non-RTR (FILE_RECOGN_TYPE 0), which is what lets a stroke be
+      // split: the stroke is marked -4 and the survivors follow as point-less
+      // contour-only records. The second sweep re-cuts a piece of the
+      // first, so one fragment is itself -4.
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-non-rtr-marker-partial.note"))
+      expect(sn.header.FILE_RECOGN_TYPE).toBe("0")
+      expect(sn.pages.length).toBe(1)
+
+      const decoded = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true, includeContours: true })
+      expect(decoded.length).toBe(7)
+      expect(decoded.filter((s) => s.isEraser).length).toBe(2)
+      const ink = decoded.filter((s) => !s.isEraser)
+      expect(ink.map((s) => s.trailStatus)).toEqual([-4, undefined, -4, undefined, undefined])
+      expect(ink.map((s) => s.points.length > 0)).toEqual([true, false, false, false, false]) // only the original has points
+      expect(ink.every((s) => s.contour && s.contour.length > 0)).toBe(true) // every record carries an outline
+      expect(ink.every((s) => s.pen === "marker" && s.color === "rgb(1,1,1)" && s.thickness === 3800)).toBe(true)
+
+      // The device draws exactly the three live fragments, as fills.
+      const forms = extractPageForms(await fs.readFile("tests/input/erase-n5-20260016-non-rtr-marker-partial.pdf"))
+      expect(forms.length).toBe(1)
+      const device = pdfPageToSvg(forms[0], sn.pageHeight)
+      const liveFragments = ink.filter((s) => s.trailStatus === undefined)
+      expect(device.paths.length).toBe(liveFragments.length)
+      expect(device.paths.length).toBe(3)
+
+      const [svg] = await toSvg(sn, { vectorInk: true })
+      const inkPaths = svgInkPaths(svg).filter(({ color }) => color !== "rgb(255,255,255)")
+      expect(inkPaths.length).toBe(3)
+      expect(new Set(inkPaths.map(({ color }) => color))).toEqual(new Set(["rgb(1,1,1)"]))
+
+      // and it covers what they do: 0.976 when measured.
+      const ratio = svgInkArea(svg) / device.inkArea
+      expect(ratio).toBeGreaterThan(0.9)
+      expect(ratio).toBeLessThan(1.1)
+    })
+
+    // Known bug (supernote-obsidian-plugin#238). Remove `.fails` once vectorInk
+    // stops emitting eraser overlays as white paint (skip them when
+    // trailStatus already accounts for the erase, or render them as a mask).
+    test.fails("vectorInk emits no white eraser path over a transparent page (supernote-obsidian-plugin#238)", { timeout: 30000 }, async () => {
+      const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-phantom-eraser-dark-mode.note"))
+      const [svg] = await toSvg(sn, { vectorInk: true })
+      expect(svgInkPaths(svg).filter((path) => path.color === "rgb(255,255,255)").length).toBe(0)
     })
 
     test("a stroke fully removed with the stroke eraser leaves no phantom path (issue #56 follow-up)", { timeout: 30000 }, async () => {

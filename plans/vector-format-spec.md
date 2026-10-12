@@ -407,6 +407,7 @@ what can and cannot be recovered from the stroke log:
 | `color=255, pen=3, thickness≈300–400` | eraser (drag and/or region mode; N5/A5X-era id) | never |
 | `color=255, pen=9, thickness=1400` | eraser, another mode/size — also seen on gestures that erased nothing (below) | never |
 | `color=255, pen=1, thickness 400–2200` | eraser on Nomad-era firmware (id reuses the old ink-pen id; `color=255` is the reliable discriminator, not `pen`) | never |
+| `color=255, pen=16, thickness=2500` | eraser on N5 `SN_FILE_VER_20260016` (id reuses the *new* ink-pen id, `record_class=-1`) — `erase-n5-20260016-non-rtr-marker-partial.note`, whose two sweeps partially erase a marker stroke | never |
 | `pen=4, color=0, thickness=200` | lasso/selection *path* — the loop drawn to select content for delete, move, or Keyword/Tag creation; frequently stored as two byte-identical consecutive records | never |
 | `color=254` (any pen) | real white ink (paint-over cover-ups) | yes, as white |
 
@@ -447,9 +448,9 @@ Findings, each confirmed against device ground truth:
 
    (A stroke's *own* outline is never clipped by an erase. What records the
    erase is `m_trailStatus` on the stroke — finding 3 — and, where the
-   firmware splits a stroke rather than removing it whole, the surviving
-   geometry is a *separate* point-less record whose only content is its
-   contour. So `point_contour` does carry the survivors; just never in the
+   note is non-RTR and the erase cuts across a stroke (the partial-erase
+   section below), the surviving geometry is a *separate* point-less record
+   whose only content is its contour. So `point_contour` does carry the survivors; just never in the
    erased stroke's own record.)
 
 3. **`m_trailStatus` — the per-stroke visibility field.** `section_1`'s
@@ -1146,6 +1147,54 @@ and the parent's area *minus* the fragments holds 0–4% (`link-tag`) or
 drawn and the fragments must be: drawing both paints the erased part back
 in. `src/svg.ts` skips every record carrying a status, which does both at
 once, since the fragments themselves read `0`.
+
+**Partial erase is a property of non-RTR notes.** A note with Real-Time
+Recognition (RTR) on cannot cut a stroke in two: the eraser removes whole
+strokes instead (`-99`, with no fragment records). A note with RTR off
+splits the stroke and records the pieces as above. That is as observed on
+the device; *why* is not in the files (presumably because RTR ties each
+recognised word to the strokes that wrote it). The corpus agrees with it, and it corrects an earlier reading here that put the splitting down to
+firmware (the 3.26.40 Nomad):
+
+| Fixture | `FILE_RECOGN_TYPE` | `-4` records |
+|---|---|---|
+| `erase-n5-20260016-non-rtr-marker-partial.note` (N5, `SN_FILE_VER_20260016`) | `0` | 2, with 4 fragment records |
+| `blank-a6x-3.15.27-two-pages.note` p2 (Nomad 3.15.27) | `0` | 10, with 38 fragment records |
+| `link-n6-3.26.40-partial-erase-3p.note` p2 | **`1`** | 10, with 38 fragment records — see below |
+| every other note with `FILE_RECOGN_TYPE` `1` (`blank-a6x-3.15.27-shapes-rtr`, `color-n6-20230015-unknown-palette`, `demo-a5x-20230015-1to10`, `erase-n5-20260016-white-pen-cover`, `heading-n5-20260016-backgrounds-marker`, `ink-a5x-2.14.28-old-pen-width`, `line-n5-20260016-ruler-tool`, `stroke-n5-20260016-isolation-tools-colors-widths`) | `1` | none |
+
+`erase-n5-20260016-non-rtr-marker-partial.note` isolates it: a single black
+marker stroke drawn left to right, then two eraser sweeps top to bottom
+across it, one left of centre and one right (`pen=16`, `color=255`,
+`record_class=-1`). The records are the stroke itself (`-4`, with its 223
+points), then four point-less fragments, then the two eraser gestures. The
+second sweep re-cuts a piece of the first: record 2 is a fragment that is
+itself marked `-4`, and records 3 and 4 replace it. Three records read `0`,
+and `erase-n5-20260016-non-rtr-marker-partial.pdf` draws exactly three fills
+and never the stroke — the same per-piece ground truth as the Nomad pages,
+now on an N5, with the marker's black stored as `color=1` (`MarkerBlack`).
+Our live ink covers 0.98x of the export's.
+
+Two cautions on what this does and does not establish:
+
+- **`link-n6-3.26.40-partial-erase-3p.note` is the exception.** Its header
+  reads `FILE_RECOGN_TYPE:1` and its pages carry recognition data
+  (`RECOGNFILE`, `RECOGNSTATUS: 1`), yet page 2 holds the same 10 `-4`
+  records and 38 fragments as the non-RTR `blank-a6x-3.15.27-two-pages.note`
+  p2. The likeliest reading is that the header records the notebook's
+  *current* setting and that page was drawn with RTR off before it was
+  switched on — but that is an inference, not something the file shows. The
+  consequence for a reader is that `FILE_RECOGN_TYPE` is not a reliable
+  predictor of what a page contains; the records are, and the `-4` handling
+  does not consult the flag.
+- **Non-RTR is necessary, not sufficient.** Several non-RTR fixtures were
+  erased with no `-4` at all (`erase-n6-20230015-horizontal-1270`,
+  `turkish-a6x-20230015-handwriting-erase`, `erase-n5-20260016-all-mechanisms`
+  and `erase-n5-20260016-no-white-pen`): their strokes were removed whole
+  (per those fixtures' own READMEs: by lasso delete, the stroke-select
+  eraser, or sweeps that cleared what they hit). Nothing here shows a
+  non-RTR sweep that crossed only part of a stroke and did *not* split it,
+  but nothing rules one out either.
 
 ### `m_copy` — an operation id, not a copy counter
 

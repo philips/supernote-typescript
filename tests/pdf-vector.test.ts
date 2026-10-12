@@ -78,6 +78,10 @@ describe('extractPageForms on the shipped exports', () => {
 		// four pens, every stroke erased: a vector export that draws nothing
 		'erase-n5-20260016-no-white-pen.pdf': [0],
 		'blank-a6x-3.26.40-two-pages.pdf': [0, 0],
+		// one page, 86 stroked polylines; the erased strokes and the eraser gesture are not exported
+		'erase-n5-20260016-phantom-eraser-dark-mode.pdf': [1],
+		// three filled fragments of one partially erased marker stroke, and not the stroke itself
+		'erase-n5-20260016-non-rtr-marker-partial.pdf': [1],
 		// and a couple that do draw on every page
 		'caligraphy-n5-20260016-widths-erase.pdf': [1, 1, 1, 1],
 		'stroke-n5-20260016-isolation-tools-colors-widths.pdf': [1, 1, 1, 1, 1],

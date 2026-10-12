@@ -89,7 +89,7 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 		note: 'Long read as the case no cutoff could get right, because survival measured across its erased strokes runs smoothly from 0% to 95%. It was measuring the replacement: the device draws 152 paths for the 152 records reading m_trailStatus 0, and none of the 37 marked ones.',
 	},
 	'link-n6-3.26.40-partial-erase-3p': {
-		isolates: 'Partial erasing — the one firmware that splits a stroke instead of removing it, and stores what it left behind.',
+		isolates: 'Partial erasing on a Nomad — a stroke split by the eraser, with what it left stored as separate records. Its header says RTR, unlike the other partial-erase fixtures.',
 		note: 'Page 2 settles what a partial erase looks like: each erased line is marked and the pieces the eraser left are written as separate records carrying only an outline. The device draws exactly those pieces — 5, 4, 4, 5, 5, 5, 5 of them across its seven lines, at the same positions to the pixel — and never the line they came from. Page 3 erases and rewrites in place, where a stroke\'s own ink and its replacement\'s sit on top of each other; the export draws 113 paths for its 113 live records.',
 	},
 	'blank-a6x-3.15.27-shapes-rtr': { isolates: 'Shapes, patterns, Headings and keyword highlighting.' },
@@ -100,6 +100,14 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 	'textbox-n5-20260016-digest': {
 		isolates: 'Text boxes and a Digest, whose content is raster-only rather than TOTALPATH ink.',
 		note: 'The page DISABLE rectangles identify text-box/Digest pixels that have no vector stroke records. Vector ink remains vectorized around those rectangles while preserving their bitmap content as a raster overlay.',
+	},
+	'erase-n5-20260016-non-rtr-marker-partial': {
+		isolates: 'The minimal partial erase: one marker stroke cut twice. Only a non-RTR note (FILE_RECOGN_TYPE 0) can split a stroke; RTR notes erase whole strokes.',
+		note: 'The stroke is marked -4 and replaced by point-less fragment records; the second sweep re-cuts a piece of the first, so one fragment is itself -4. The device draws the three live fragments and never the stroke, and we match (0.98x). Our SVG also adds the two eraser gestures as white filled contours, which the device export does not draw.',
+	},
+	'erase-n5-20260016-phantom-eraser-dark-mode': {
+		isolates: 'A single eraser gesture whose erasures are already recorded via trailStatus — the source of the phantom black scribble in the Obsidian plugin (issue #238).',
+		note: 'vectorInk emits the eraser record as a white path over a transparent page, so it only shows once the page sits on (or is inverted against) a dark background. The three records it erased already carry trailStatus -99 and are skipped, so the eraser overlay adds nothing here. The device export draws exactly the 86 live strokes and no white paint at all; our SVG adds one white eraser path, which is invisible against this page background, so view it on a dark one to see the bug.',
 	},
 	'erase-partial2': { isolates: 'A page erased by selecting and deleting, which removes the records outright.' },
 };

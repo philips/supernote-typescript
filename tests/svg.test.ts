@@ -656,8 +656,8 @@ describe("svg", () => {
       // that "e" whole. Everything the eraser really removed is already
       // skipped, so painting it only adds a white scribble on a transparent
       // page: invisible over white, but a dark page (or the plugin's
-      // invert filter) shows it. vectorInk therefore no longer draws
-      // erasers at all, as Supernote's own export doesn't.
+      // invert filter) shows it. vectorInk therefore draws no eraser,
+      // as Supernote's own export doesn't.
       const sn = new SupernoteX(await readFileToUint8Array("erase-n5-20260016-phantom-eraser-dark-mode.note"))
       const strokes = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })
       const erasers = strokes.map((s, i) => ({ s, i })).filter(({ s }) => s.isEraser)
@@ -1081,11 +1081,10 @@ describe("svg", () => {
       // real content ("writing" corrected to "note") was partially erased,
       // which -- unlike a whole-stroke select-and-delete -- leaves a separate
       // real eraser-tool stroke (TOTALPATH color 255) tracing where it was
-      // dragged. Before `m_trailStatus` was decoded the only way to hide the
-      // erased ink was to paint that eraser stroke over it as white ink; the
-      // erased strokes now carry their own status and are skipped, so the
-      // eraser is not drawn at all (as in Supernote's own export, and so it
-      // leaves no white mark on a dark page -- supernote-obsidian-plugin#238).
+      // dragged. The erased strokes carry their own status (`trailStatus`)
+      // and are skipped, so the eraser is not drawn at all: as in Supernote's
+      // own export, and so it leaves no white mark on a dark page
+      // (supernote-obsidian-plugin#238).
       const sn = new SupernoteX(await readFileToUint8Array("erase-n6-20230015-horizontal-1270.note"))
       const inkOnly = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight)
       const withErasers = parseStrokes(sn.pages[0].totalPathBuffer, sn.pageWidth, sn.pageHeight, { includeErasers: true })

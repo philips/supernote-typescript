@@ -622,7 +622,15 @@ export function deriveStrokeStyle(
 	pageWidth: number,
 	pageHeight: number,
 ): StrokeStyle {
-	if (stroke.isFilledRect && stroke.points.length >= 2 && !stroke.isEraser) {
+	// An eraser gesture is never drawn. What it removed is already recorded on
+	// the removed strokes themselves (`trailStatus`, see `IStroke`), and
+	// painting it as white ink puts a visible mark on a transparent page --
+	// invisible over white, but a phantom scribble on any dark background or
+	// under a dark-mode invert filter (supernote-obsidian-plugin#238).
+	// Supernote's own vector export draws none either.
+	if (stroke.isEraser) return { shape: 'skip' };
+
+	if (stroke.isFilledRect && stroke.points.length >= 2) {
 		const [p0, p1] = stroke.points;
 		const titleStyle = findMatchingTitleStyle(titleIndex, p0, p1);
 		if (titleStyle) return { shape: 'rect', color: titleStyle.backgroundColor, fill: titleStyle.fill };
@@ -743,7 +751,6 @@ export function prepareVectorInkPages(
 
 	const strokesPerPage = pages.map((page) =>
 		parseStrokes(page.totalPathBuffer, note.pageWidth * upscale, note.pageHeight * upscale, {
-			includeErasers: true,
 			includeContours: true,
 		}).map((stroke) => withUpscaledContour(stroke, upscale)),
 	);
@@ -752,7 +759,6 @@ export function prepareVectorInkPages(
 	pages.forEach((page, i) => {
 		const pageNumber = pageNumbers ? pageNumbers[i] : i + 1;
 		const nativeStrokes = parseStrokes(page.totalPathBuffer, note.pageWidth, note.pageHeight, {
-			includeErasers: true,
 			includeContours: true,
 		});
 		if (nativeStrokes.length === 0) {

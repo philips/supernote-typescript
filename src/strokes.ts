@@ -244,7 +244,18 @@ const LEGACY_GREY_IDS: Record<number, number> = {
  * `link-n6-3.26.40-partial-erase-3p.note` (whose "ERASER on MARKER"/"ERASER on PEN
  * LINES" fixture rows exist specifically to exercise this): each eraser
  * stroke's own record sits immediately after, and closely traces the
- * shape/bounds of, the ink it was dragged over. */
+ * shape/bounds of, the ink it was dragged over.
+ *
+ * **`vectorInk` no longer does this**, though the option still exists for a
+ * caller that wants the gestures. Painting an eraser as white ink was how
+ * erased ink was hidden before `m_trailStatus` was decoded; it is now
+ * redundant, because the removed strokes carry their own status (see
+ * `IStroke.trailStatus`) and the pieces a partial erase leaves are separate
+ * records. What it still did was put a white scribble on a transparent
+ * page -- invisible over white, a phantom mark on a dark background or
+ * under a dark-mode invert filter (supernote-obsidian-plugin#238, pinned by
+ * `erase-n5-20260016-phantom-eraser-dark-mode.note`). Supernote's own vector
+ * export draws no eraser either. */
 const ERASER_COLOR = 255;
 
 /** Reserved `stroke_kind` value (see `STROKE_CONFIG.STROKE_KIND_OFFSET`)

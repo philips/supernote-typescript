@@ -103,11 +103,11 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 	},
 	'erase-n5-20260016-non-rtr-marker-partial': {
 		isolates: 'The minimal partial erase: one marker stroke cut twice. Only a non-RTR note (FILE_RECOGN_TYPE 0) can split a stroke; RTR notes erase whole strokes.',
-		note: 'The stroke is marked -4 and replaced by point-less fragment records; the second sweep re-cuts a piece of the first, so one fragment is itself -4. The device draws the three live fragments and never the stroke, and we match (0.98x). Our SVG also adds the two eraser gestures as white filled contours, which the device export does not draw.',
+		note: 'The stroke is marked -4 and replaced by point-less fragment records; the second sweep re-cuts a piece of the first, so one fragment is itself -4. The device draws the three live fragments and never the stroke, and we match (0.98x). The two eraser gestures carry contours; they used to be drawn as white filled paths, which the device export never does, and are now skipped.',
 	},
 	'erase-n5-20260016-phantom-eraser-dark-mode': {
 		isolates: 'A single eraser gesture whose erasures are already recorded via trailStatus — the source of the phantom black scribble in the Obsidian plugin (issue #238).',
-		note: 'vectorInk emits the eraser record as a white path over a transparent page, so it only shows once the page sits on (or is inverted against) a dark background. The three records it erased already carry trailStatus -99 and are skipped, so the eraser overlay adds nothing here. The device export draws exactly the 86 live strokes and no white paint at all; our SVG adds one white eraser path, which is invisible against this page background, so view it on a dark one to see the bug.',
+		note: 'vectorInk used to emit the eraser record as a white path over a transparent page, so it only showed once the page sat on (or was inverted against) a dark background. The three records it erased already carry trailStatus -99 and are skipped, so the overlay added nothing. The device export draws exactly the 86 live strokes and no white paint, and so do we now.',
 	},
 	'erase-partial2': { isolates: 'A page erased by selecting and deleting, which removes the records outright.' },
 };
@@ -137,10 +137,10 @@ const slug = (s: string) => s.replace(/[^a-zA-Z0-9-]/g, '_');
  * add -- the gap inside an `e` or an `o` is stored as its own
  * oppositely-wound ring.
  *
- * Pure white (255) is skipped: those are the overlays drawn along an
- * eraser's own path to cover what it took out, so counting them would add
- * ink where the point was to remove it -- on a page erased with a wide
- * eraser they swamp everything else. White *ink* is a different thing and
+ * Pure white (255) is skipped. `vectorInk` used to draw an eraser's own path
+ * as white overlays, which counting would have turned into ink where the
+ * point was to remove it; it no longer emits them, and the skip stays so a
+ * stray 255 can never count as ink. White *ink* is a different thing and
  * still counts, which is why the test is exact rather than "near white":
  * the white pen records 254, and the device's export draws it too. */
 function svgInkArea(svg: string): number {

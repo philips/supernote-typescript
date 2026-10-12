@@ -373,26 +373,23 @@ own physical motion just like any other pen tool, distinguishable only by
 this one reserved value — not a decode bug, and not something that ever
 needed raster cross-checking to detect.
 
-**A *partial* (drag) erase's own visual effect is now reproduced, not just
-its phantom-stroke symptom silently fixed.** Excluding eraser strokes
-correctly stops them rendering as their own phantom ink, but on its own
-left a different, subtler bug: the real ink an eraser stroke was dragged
-over stays in TOTALPATH completely unmarked (the erase is its own later,
-separate record, not an edit to the covered ink), so simply dropping the
-eraser stroke left that now-erased ink fully, incorrectly visible —
-confirmed directly on `erase-n6-20230015-horizontal-1270.note` (corrected text left as a
-faint ghost underneath the correction) and `link-n6-3.26.40-partial-erase-3p.note`
-(a "eraser on marker"/"eraser on pen lines" test page, whose erased gaps
-didn't render at all). `parseStrokes`' `includeErasers` option keeps these
-strokes instead, as ordinary opaque white ink (`ERASER_COLOR`'s value of
-255 already *is* a valid white grey level, so no extra color logic is
-needed) — `src/svg.ts`'s `vectorInk` path draws every stroke it decodes in
-`TOTALPATH`'s own order, so a white eraser stroke drawn at its own real
-position paints back over the ink it was meant to erase, the same way the
-device itself does. Not pixel-perfect (a stroke-shaped white overlay only
-approximates a true per-pixel erase, and can leave thin slivers of the
-original ink visible at its edges), but a large, direct improvement over
-leaving the erased ink fully legible.
+**An erase is recorded on the erased strokes, not drawn.** The ink an
+eraser stroke was dragged over stays in TOTALPATH exactly as originally
+drawn (the erase is its own later record, not an edit to the covered ink),
+so what says it is gone is `m_trailStatus` on that stroke (Part 1.4), and a
+partial erase leaves its surviving pieces as separate records.
+`src/svg.ts`'s `vectorInk` therefore draws no eraser stroke: it skips every
+record carrying a status and draws the rest. Painting the eraser as white
+ink adds nothing, and on a transparent page it is a visible mark on any dark
+background or under a dark-mode invert filter (the Obsidian plugin's "random
+black lines", supernote-obsidian-plugin#238, pinned by
+`erase-n5-20260016-phantom-eraser-dark-mode.note`). Supernote's own export
+draws no eraser either (86 live strokes and no white paint on that
+fixture). `parseStrokes` still returns the gestures under `includeErasers`,
+since the records are real. An eraser decodes as a *stroked* path on older
+exports and as a *filled* contour once `contour` is present
+(`erase-n5-20260016-non-rtr-marker-partial.note`), so a check for one has to
+look at both.
 
 ### Erase and selection records — the 2026-08 erase-fixture investigation
 
@@ -470,8 +467,7 @@ Findings, each confirmed against device ground truth:
 4. **What ships**: `pen=4` selection paths are excluded from
    `parseStrokes` unconditionally (they rendered as phantom black loops;
    never visible on-device in any fixture, whatever the selection did),
-   alongside the existing `color=255` filtering + `includeErasers` white
-   overlay.
+   alongside the existing `color=255` filtering.
 5. **Erase-exact output: the record says whether, on its own.**
    `src/svg.ts`'s `vectorInk` drops every stroke carrying a
    `m_trailStatus`, with no reference to the raster at all. That is the
@@ -503,8 +499,8 @@ Findings, each confirmed against device ground truth:
    so colour-matching drops Heading backgrounds outright.
 
    A page whose ink layers are empty is the same statement at page scale —
-   everything on it was erased — so nothing renders at all, including the
-   white eraser overlays, which is exactly `erase-n5-20260016-no-white-pen.note`.
+   everything on it was erased — so nothing renders at all, which is exactly
+   `erase-n5-20260016-no-white-pen.note`.
 
    **What's still approximate.** On firmware that splits a partially
    erased stroke (the `m_copy = 602` eraser, `-4` in Part 1.4), nothing is:
@@ -1153,8 +1149,8 @@ Recognition (RTR) on cannot cut a stroke in two: the eraser removes whole
 strokes instead (`-99`, with no fragment records). A note with RTR off
 splits the stroke and records the pieces as above. That is as observed on
 the device; *why* is not in the files (presumably because RTR ties each
-recognised word to the strokes that wrote it). The corpus agrees with it, and it corrects an earlier reading here that put the splitting down to
-firmware (the 3.26.40 Nomad):
+recognised word to the strokes that wrote it). The corpus agrees with it, and it is not a firmware property: the splitting
+appears on a Nomad (3.15.27) and an N5 alike:
 
 | Fixture | `FILE_RECOGN_TYPE` | `-4` records |
 |---|---|---|

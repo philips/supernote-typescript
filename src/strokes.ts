@@ -19,8 +19,7 @@ export interface IStroke {
 	/** CSS `rgb(...)` color this stroke was actually drawn in on-device --
 	 * exact, not sampled from a raster. For an eraser stroke (`isEraser`),
 	 * this is always `rgb(255,255,255)` (white): `ERASER_COLOR`'s numeric
-	 * value happens to already be a valid (if reserved) grey level, so no
-	 * special-casing is needed to turn it into "paint over with white". */
+	 * value happens to already be a valid (if reserved) grey level. */
 	color: string;
 	pen: StrokePen;
 	/** Raw on-device thickness setting, in the same arbitrary device units
@@ -32,10 +31,8 @@ export interface IStroke {
 	/** True for a real eraser-tool motion (`TOTALPATH`'s reserved
 	 * `color === 255`), only ever present when `parseStrokes` was called
 	 * with `includeErasers: true` -- see that option's doc comment. Lets a
-	 * caller that draws strokes in order (`vectorInk` does) tell an
-	 * intentional "paint over with background" stroke apart from real ink
-	 * sharing the same white color (e.g. a white pen on a dark page), even
-	 * though both render identically. */
+	 * caller tell an eraser gesture apart from real ink, including the white
+	 * pen (`color` 254), which is real ink and not an eraser. */
 	isEraser?: boolean;
 	/** The record's own `m_trailStatus` (`section_1`'s first `i32`, Ratta's
 	 * own name for what https://github.com/Walnut356/snlib calls `unk_8`),
@@ -77,7 +74,7 @@ export interface IStroke {
 	 * (`FILE_RECOGN_TYPE` `0`): an RTR note ties recognised text to whole
 	 * strokes, so its eraser removes them whole (`-99`) instead of cutting
 	 * them. Confirmed on `erase-n5-20260016-non-rtr-marker-partial.note`
-	 * (an N5, so not a firmware quirk of the Nomad). The one wrinkle is
+	 * (an N5, as well as the Nomad fixtures). The one wrinkle is
 	 * `link-n6-3.26.40-partial-erase-3p.note`, whose header says RTR yet
 	 * whose page 2 holds `-4` records -- so don't use the header flag to
 	 * decide whether to expect fragments; just handle the records. */
@@ -219,32 +216,31 @@ const LEGACY_GREY_IDS: Record<number, number> = {
 
 /** Reserved `color` value meaning "this isn't ink at all, it's an eraser
  * stroke" -- confirmed against https://github.com/Walnut356/snlib's `Color`
- * enum (`Eraser = 255`) and directly against real fixtures: the exact
- * strokes that used to decode as smooth-but-nonexistent phantom ink in
- * `erase-n6-20230015-horizontal-1270.note` (see issue #56) carry this color. By default,
+ * enum (`Eraser = 255`) and directly against real fixtures: the strokes in
+ * `erase-n6-20230015-horizontal-1270.note` that decode as smooth-but-
+ * nonexistent phantom ink (see issue #56) carry this color. By default,
  * `parseStrokes` filters these out entirely -- they're real,
  * correctly-decoded pen motions, just not strokes that were ever meant to
  * render as visible ink themselves (Supernote's eraser tool is itself a
  * physical pen motion the digitizer records like any other).
  *
- * That default is right for "give me this page's real ink", but wrong for
- * reproducing what the page actually *looks like*: dropping these strokes
- * silently un-does every *partial* erase (dragging the eraser tool over
- * part of some real ink, as opposed to a whole-stroke select-and-delete,
- * which leaves no TOTALPATH trace at all and needs no special handling
- * here) -- the ink an eraser stroke was meant to cover stays in TOTALPATH
- * exactly as originally drawn, at its real pre-erase color, since the erase
- * is recorded as its own later, separate stroke rather than as an edit to
- * the ink it covers. `parseStrokes`' `includeErasers` option keeps these
- * strokes instead (as ordinary white `isEraser: true` ink, since
- * `ERASER_COLOR` already *is* a valid white grey level), so a caller that
- * draws every stroke in `TOTALPATH`'s own order paints over the erased ink
- * with white the same way the real device does, rather than leaving it
- * fully visible. Confirmed directly against `erase-n6-20230015-horizontal-1270.note` and
- * `link-n6-3.26.40-partial-erase-3p.note` (whose "ERASER on MARKER"/"ERASER on PEN
- * LINES" fixture rows exist specifically to exercise this): each eraser
- * stroke's own record sits immediately after, and closely traces the
- * shape/bounds of, the ink it was dragged over. */
+ * `parseStrokes`' `includeErasers` option keeps them, as `isEraser: true`
+ * strokes in `TOTALPATH`'s own order, for a caller that wants the gestures.
+ * Their color is white, since `ERASER_COLOR` already *is* a valid grey
+ * level. Each eraser record sits immediately after, and closely traces the
+ * shape/bounds of, the ink it was dragged over (confirmed against
+ * `erase-n6-20230015-horizontal-1270.note` and the "ERASER on MARKER"/
+ * "ERASER on PEN LINES" rows of `link-n6-3.26.40-partial-erase-3p.note`).
+ *
+ * Don't paint them to reproduce what a page looks like. What an eraser
+ * removed is recorded on the removed strokes themselves (see
+ * `IStroke.trailStatus`), and a partial erase leaves its surviving pieces
+ * as separate records, so `vectorInk` draws no eraser at all. Painting one
+ * as white ink adds nothing, and on a transparent page it is a visible mark
+ * on any dark background or under a dark-mode invert filter
+ * (supernote-obsidian-plugin#238, pinned by
+ * `erase-n5-20260016-phantom-eraser-dark-mode.note`). Supernote's own vector
+ * export draws no eraser either. */
 const ERASER_COLOR = 255;
 
 /** Reserved `stroke_kind` value (see `STROKE_CONFIG.STROKE_KIND_OFFSET`)
@@ -620,9 +616,9 @@ function tryParseStroke(
  * phantom scribbles actually were: real eraser strokes, exactly identifiable
  * by this one field, not a decode bug and not something raster
  * cross-checking ever needed to guess at. Pass `includeErasers: true` (see
- * `ERASER_COLOR`'s doc comment) to keep them instead, as ordinary white
- * `isEraser: true` strokes, needed to reproduce a *partial* erase's visual
- * effect when drawing strokes in `TOTALPATH`'s own order.
+ * `ERASER_COLOR`'s doc comment) to keep them instead, as white
+ * `isEraser: true` strokes in `TOTALPATH`'s own order. They are not needed
+ * to reproduce an erase: see `IStroke.trailStatus`.
  *
  * Strokes whose `stroke_kind` is `"0000"` are excluded unconditionally (no
  * `includeErasers`-style opt-in) -- see `LINK_TAG_STROKE_KIND`'s doc

@@ -111,6 +111,9 @@ export interface IHeader {
 	 * (`link-n6-3.26.40-partial-erase-3p.note`) reads `'1'` and still holds
 	 * split strokes -- so decode the records rather than trusting this. */
 	FILE_RECOGN_TYPE: string;
+	/** Stable document identifier assigned by Supernote firmware. Older files
+	 * may omit it; exporters must provide a deterministic fallback. */
+	FILE_ID?: string;
 }
 
 export interface IKeyword {

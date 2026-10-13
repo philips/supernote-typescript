@@ -154,6 +154,20 @@ export type VectorInkPrimitive =
 	| { kind: 'filledPath'; rings: IStrokePoint[][]; color: string }
 	| { kind: 'strokedPath'; points: IStrokePoint[]; color: string; width: number };
 
+/** A vector primitive together with the source record that produced it and
+ * its final paint position. `writeOrder` comes from the raw `TOTALPATH`
+ * record index; `zOrder` is assigned after the renderer's rect/highlighter
+ * reordering, so consumers can animate in write order without losing the
+ * final page's compositing order. */
+export interface OrderedVectorInkPrimitive {
+	primitive: VectorInkPrimitive;
+	strokeIndex: number;
+	writeOrder: number;
+	zOrder: number;
+}
+
+type UnorderedVectorInkPrimitive = Omit<OrderedVectorInkPrimitive, 'zOrder'>;
+
 /** Builds the ordered list of vector-ink primitives for a page. Strokes are
  * drawn in `TOTALPATH` buffer order, with two exceptions:
  *
@@ -165,10 +179,13 @@ export type VectorInkPrimitive =
  *   later -- see `isHighlighterPass`.
  *
  * Relative order within each group still follows `strokes`. */
-export function buildVectorInkPrimitives(strokes: IStroke[], styles: StrokeStyle[] | undefined): VectorInkPrimitive[] {
-	const rects: VectorInkPrimitive[] = [];
-	const highlighters: VectorInkPrimitive[] = [];
-	const ink: VectorInkPrimitive[] = [];
+export function buildOrderedVectorInkPrimitives(
+	strokes: IStroke[],
+	styles: StrokeStyle[] | undefined,
+): OrderedVectorInkPrimitive[] {
+	const rects: UnorderedVectorInkPrimitive[] = [];
+	const highlighters: UnorderedVectorInkPrimitive[] = [];
+	const ink: UnorderedVectorInkPrimitive[] = [];
 
 	const boundsList = strokes.map(strokeBounds);
 	const greys = strokes.map((_, i) => {
@@ -186,13 +203,17 @@ export function buildVectorInkPrimitives(strokes: IStroke[], styles: StrokeStyle
 			if (stroke.points.length < 2) continue;
 			const [p0, p1] = stroke.points;
 			rects.push({
-				kind: 'rect',
-				x: Math.min(p0.x, p1.x),
-				y: Math.min(p0.y, p1.y),
-				width: Math.abs(p1.x - p0.x),
-				height: Math.abs(p1.y - p0.y),
-				color: style.color,
-				fill: style.fill,
+				strokeIndex: i,
+				writeOrder: stroke.writeOrder,
+				primitive: {
+					kind: 'rect',
+					x: Math.min(p0.x, p1.x),
+					y: Math.min(p0.y, p1.y),
+					width: Math.abs(p1.x - p0.x),
+					height: Math.abs(p1.y - p0.y),
+					color: style.color,
+					fill: style.fill,
+				},
 			});
 			continue;
 		}
@@ -208,10 +229,15 @@ export function buildVectorInkPrimitives(strokes: IStroke[], styles: StrokeStyle
 
 		const bucket =
 			style.tier === 'marker' && isHighlighterPass(i, boundsList, greys, drawable) ? highlighters : ink;
-		bucket.push(primitive);
+		bucket.push({ primitive, strokeIndex: i, writeOrder: stroke.writeOrder });
 	}
 
-	return [...rects, ...highlighters, ...ink];
+	return [...rects, ...highlighters, ...ink].map((entry, zOrder) => ({ ...entry, zOrder }));
+}
+
+/** Backend-independent primitives without source-order annotations. */
+export function buildVectorInkPrimitives(strokes: IStroke[], styles: StrokeStyle[] | undefined): VectorInkPrimitive[] {
+	return buildOrderedVectorInkPrimitives(strokes, styles).map((entry) => entry.primitive);
 }
 
 /** A rectangle occupied by an object the file stores only in the ink bitmap,

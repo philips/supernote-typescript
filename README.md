@@ -108,6 +108,36 @@ await fs.writeFile('page-1.svg', svgs[0]);
 
 Pass `{ dpi }` to size the SVG's `width`/`height` attributes in physical inches (the `viewBox`, and so the coordinate space the image and text sit in, always stays in raw pixels); pass `{ includeText: false }` to skip the text overlay and just embed the image.
 
+#### Experimental native animation scene
+
+An Ola Ink native Canvas consumer can receive the final static SVG and the
+stroke-animation handoff in the same file:
+
+```ts
+const svgs = await toSvg(note, {
+  vectorInk: true,
+  embedScene: true,
+  documentId: fileNameWithoutExtension,
+});
+```
+
+`embedScene` requires `vectorInk: true`. It adds version 1 to both the root and
+`oi-scene` JSON, deterministic final-path IDs, each stroke's raw `TOTALPATH`
+write order, final paint order, and hidden real centerline paths. Root
+`oi:document-id`/`oi:page-index`/`oi:page-count` attributes group separately
+saved pages. `documentId` is required and caller-owned: `header.FILE_ID` is not
+safe because copied notes reuse it, and byte-identical files cannot be
+separated from content alone. Use a library/database ID or canonical filename.
+Real eraser records are explicit
+`oi:role="erase-cover"` elements while retaining their white browser rendering.
+A stroke with final geometry but no real centerline omits that reference so a
+native consumer can fade its contour in; an empty `d` is never emitted.
+Ordinary SVG viewers ignore the profile and continue to display the final
+contours. A page whose vector ink cannot be decoded retains the existing raster
+fallback and page-grouping attributes but has no scene metadata. The exact
+frozen M/L/Z-only v1 grammar and native-parser constraints are documented in
+[plans/ola-ink-svg-scene-v1.md](plans/ola-ink-svg-scene-v1.md).
+
 Like `toPdf`, `toSvg` is a convenience wrapper around lower-level pieces — `extractPdfPageData`, `toImage`/`encodePng`, and `addSvgPage` — for rendering pages in parallel across Workers. Unlike `addPdfPage`, `addSvgPage` doesn't touch any non-structured-clone-safe objects, so the whole per-page pipeline (`toImage` + `encodePng` + `addSvgPage`) can run inside a Worker, with only the resulting strings posted back to the main thread.
 
 ### Cheap thumbnails: rendering at a reduced resolution

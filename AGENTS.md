@@ -22,6 +22,7 @@ A TypeScript library for reading Ratta Supernote `.note` and Atelier `.spd` file
 | Format | `npm run prettier-format` |
 | Clean artifacts | `npm run clean` |
 | Build fixture comparison site | `npm run build:site` (outputs `site/`, type-checked via `tsconfig.scripts.json`) |
+| Regenerate visual-diff baselines | `npm run visual-diff:baseline` (rewrites `tests/visual-diff-baselines.json`) |
 
 **Test framework:** vitest (not jest anymore — README still mentions `npx jest` historically but use vitest).
 
@@ -40,7 +41,7 @@ src/
   mirror.ts      — test helpers / page mirroring
 ```
 
-`scripts/` holds standalone build scripts (e.g. `build-fixture-site.ts`, `pdf-vector.ts`) compiled by `tsconfig.scripts.json`.
+`scripts/` holds standalone build scripts (e.g. `build-fixture-site.ts`, `pdf-vector.ts`, `visual-diff.ts`, `generate-visual-diff-baselines.ts`) compiled by `tsconfig.scripts.json`.
 
 ## Key Architectural Concepts
 
@@ -82,6 +83,10 @@ Binary `.note` files and corresponding device-exported `.pdf` files live in `tes
 `npm run build:site` renders `toSvg({ vectorInk: true })` side-by-side with the device PDF export, page by page. The per-page "ink ratio" is a coarse area-based metric (not unioned), so overlapping strokes from our side read artificially high against merged-device paths — look at the image, not just the number. `sticker-n5-20260016-plugin-artwork` page 2 is the canonical example of this skew.
 
 CI builds the site on PRs as a downloadable artifact; merges to `main` publish to GitHub Pages via `.github/workflows/pages.yml`.
+
+### vectorInk visual-diff suite
+
+`tests/pdf-visual-diff.test.ts` rasterises the library's `toPdf({ vectorInk: true })` output and Supernote's own device PDF per fixture page and compares them with three baselined metrics (`scripts/visual-diff.ts`): an ink-area ratio, an ink-mask IoU (spatial), and a full-page pixel-diff fraction (the one that rasterises the actual PDF and sees colour, including white ink). CI fails on *drift* beyond tolerance, not on absolute correctness — the baselines in `tests/visual-diff-baselines.json` are measurements of the known-good render. Requires `pdftoppm` (poppler-utils); the CI workflow installs it. After an intentional rendering change, regenerate and commit the baselines: `npm run visual-diff:baseline`.
 
 ### Smoke tests
 

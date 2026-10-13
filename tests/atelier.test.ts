@@ -1,5 +1,6 @@
 import * as fs from "fs-extra"
 import * as imagejs from "image-js"
+import initSqlJs from "sql.js"
 import { describe, test, expect } from 'vitest'
 import { SupernoteAtelier } from "../src/atelier"
 
@@ -13,6 +14,31 @@ function readFileToUint8Array(filePath: string): Promise<Uint8Array> {
       }
     });
   });
+}
+
+// Minimal `.spd` SQLite database, built directly (not via a real device
+// export) so a test can place a tile wherever it wants - including
+// positions no real file would ever have, to exercise toImage()'s size
+// guard. Only what `_parseConfig`/`_parseSurfaces` actually read: a `config`
+// table (left empty here - canvasSize/layers/etc. are all optional) and one
+// `tid`/`tile` table per surface named in `tiles`.
+async function buildSpdBuffer(tiles: { surface: string; tid: number }[]): Promise<Uint8Array> {
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run("CREATE TABLE config (name TEXT, value BLOB)");
+
+  const tilePng = imagejs.encodePng(new imagejs.Image(4, 4, { colorModel: imagejs.ImageColorModel.RGBA }));
+  const surfaceNames = new Set(tiles.map((t) => t.surface));
+  for (const surface of surfaceNames) {
+    db.run(`CREATE TABLE ${surface} (tid INTEGER, tile BLOB)`);
+  }
+  for (const { surface, tid } of tiles) {
+    db.run(`INSERT INTO ${surface} (tid, tile) VALUES (?, ?)`, [tid, tilePng]);
+  }
+
+  const buffer = db.export();
+  db.close();
+  return buffer;
 }
 
 describe("atelier", () => {
@@ -221,5 +247,37 @@ describe("atelier real device file", () => {
     const composite = await note.toCompositeImage(["surface_9999", "surface_no_such_layer"]);
     expect(composite).not.toBeNull();
     expect(composite!.getPixel(0, 0)).toEqual(background!.getPixel(0, 0));
+  })
+
+  // Regression test for supernote-obsidian-plugin#147: a tile positioned far
+  // from the rest (tid encodes grid column in its upper bits, see
+  // TILE_ID_STRIDE's doc comment in atelier.ts) used to make toImage() size
+  // its output against that outlier with no check at all, allocating
+  // gigabytes for what should be a tiny image - fine on desktop, a hard OOM
+  // crash on a memory-constrained mobile WebView.
+  test("toImage refuses to composite when a tile sits far outside the rest", async () => {
+    // tid = col * 4096 + row (TILE_ID_STRIDE). One ordinary tile at the
+    // origin, one 10 million columns away - a stand-in for a corrupted/
+    // out-of-range tid, since no real device drawing spans that far. With
+    // these 4x4 tiles that's a (10,000,001 * 4) x 4 output, comfortably over
+    // the 32-megapixel safety limit.
+    const buffer = await buildSpdBuffer([
+      { surface: "surface_1", tid: 0 },
+      { surface: "surface_1", tid: 10_000_000 * 4096 },
+    ]);
+    const note = await SupernoteAtelier.open(buffer);
+    await expect(note.toImage("surface_1")).rejects.toThrow(/exceeds the .* safety limit/);
+  })
+
+  test("toImage composites normally when tiles stay within the safety limit", async () => {
+    const buffer = await buildSpdBuffer([
+      { surface: "surface_1", tid: 0 },
+      { surface: "surface_1", tid: 1 * 4096 + 1 }, // one tile over, one down
+    ]);
+    const note = await SupernoteAtelier.open(buffer);
+    const image = await note.toImage("surface_1");
+    expect(image).not.toBeNull();
+    expect(image!.width).toEqual(4 * 2);
+    expect(image!.height).toEqual(4 * 2);
   })
 })

@@ -310,7 +310,8 @@ const decodeBase64Utf8 = (value: string): string => {
 /**
  * Reads the editable text boxes (`stroke_kind` `"0000"` records carrying a
  * base64 CSV, see `plans/note-writer.md`) out of a page's `totalPathBuffer`.
- * Records of any other kind, and malformed ones, are skipped.
+ * Records of any other kind, hidden records (superseded edits, deleted
+ * boxes), and malformed ones are skipped.
  */
 export function extractTextBoxes(totalPathBuffer: Uint8Array | null): ITextBox[] {
 	if (!totalPathBuffer || totalPathBuffer.length < 4) return [];
@@ -355,6 +356,10 @@ function readTextBoxRecord(record: DataView): ITextBox | undefined {
 	skipArray(1); // flagDraw
 	skipArray(8); // epaPoints
 	skipArray(4); // epaGrays
+	// section_1 starts with m_trailStatus: negative means the record is not
+	// drawn. Editing a box on the device hides the old record (-5) and
+	// appends a new one, so hidden versions must be skipped.
+	if (record.getInt32(at, true) < 0) return undefined;
 	at += 52; // section_1
 	skipArray(4); // controlNums
 	at += 10; // section_2

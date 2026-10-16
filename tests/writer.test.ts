@@ -240,6 +240,24 @@ describe('extractTextBoxes', () => {
 		expect(extractTextBoxes(note.pages[0].totalPathBuffer).map((box) => box.text)).toEqual([text]);
 	});
 
+	test('skips versions the device hid when the box was edited', () => {
+		const box = { x: 100, y: 100, width: 800, height: 64 };
+		const old = encodeTextBoxRecord({ ...box, text: 'before' }, { pageNumber: 1, trailNumber: 1, id: '1' });
+		const edited = encodeTextBoxRecord({ ...box, text: 'before, then edited' }, { pageNumber: 1, trailNumber: 2, id: '2' });
+		// m_trailStatus (first field of section_1, after the five-point
+		// arrays) = -5, as the device writes for a superseded box.
+		const section1 = 208 + 4 + 4 + 5 * 8 + 4 + 5 * 2 + 4 + 5 * 4 + 4 + 5 + 4 + 4;
+		new DataView(old.buffer, old.byteOffset).setInt32(section1, -5, true);
+		const totalPath = new Uint8Array(4 + 4 + old.length + 4 + edited.length);
+		const view = new DataView(totalPath.buffer);
+		view.setUint32(0, 2, true);
+		view.setUint32(4, old.length, true);
+		totalPath.set(old, 8);
+		view.setUint32(8 + old.length, edited.length, true);
+		totalPath.set(edited, 12 + old.length);
+		expect(extractTextBoxes(totalPath).map((b) => b.text)).toEqual(['before, then edited']);
+	});
+
 	test('ignores ink and missing paths', () => {
 		expect(extractTextBoxes(null)).toEqual([]);
 		const ink = new SupernoteX(input('stroke-n5-20260016-isolation-tools-colors-widths.note'));

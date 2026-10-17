@@ -15,6 +15,18 @@ export {
 	buildVectorInkBackgroundNote,
 	buildRasterInkOverlayNote,
 } from './vector-ink.js';
+export {
+	writeNote,
+	encodeRattaRle,
+	encodeTextBoxRecord,
+	generateNoteId,
+	RattaColor,
+	WRITER_PAGE_WIDTH,
+	WRITER_PAGE_HEIGHT,
+} from './writer.js';
+export type { IRect, WritablePage, WritableTextBox, WriteNoteOptions } from './writer.js';
+export { createTextNote, layoutTextPages, extractTextBoxes } from './textbox.js';
+export type { TextBoxOptions, CreateTextNoteOptions, ITextBox } from './textbox.js';
 export { parseStrokes } from './strokes.js';
 export type { IStroke, IStrokePoint, StrokePen } from './strokes.js';
 export { SupernoteAtelier } from './atelier.js';

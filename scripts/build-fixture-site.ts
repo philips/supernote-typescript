@@ -109,6 +109,14 @@ const FIXTURE_NOTES: Record<string, { isolates: string; note?: string }> = {
 		isolates: 'A single eraser gesture whose erasures are already recorded via trailStatus — the source of the phantom black scribble in the Obsidian plugin (issue #238).',
 		note: 'Drawn as white ink, the eraser record is a white path over a transparent page, so it only shows once the page sits on (or is inverted against) a dark background. The three records it erased already carry trailStatus -99 and are skipped, so drawing it would add nothing. The device export draws exactly the 86 live strokes and no white paint, and so does our SVG.',
 	},
+	'textbox-n5-20260016-device-record': {
+		isolates: 'An editable text box, as current firmware (Nomad, Chauvet 2608) saves one: a TOTALPATH record carrying the text.',
+		note: 'The record is a 5-point closed rectangle with stroke_kind "0000" whose trailing string holds the Unicode text, rect, font and style as base64 CSV. It is the ground truth tests/writer.test.ts pins the writer\'s text-box records against. The page\'s blank base was written by the writer; only the text box is device-authored.',
+	},
+	'blank-n5-20260016-nomad-fresh': {
+		isolates: 'A brand-new blank page exactly as the device first saves it.',
+		note: 'The first save of a device-created note (the later journaled appends trimmed off). writeNote() reproduces it byte for byte.',
+	},
 	'erase-partial2': { isolates: 'A page erased by selecting and deleting, which removes the records outright.' },
 };
 

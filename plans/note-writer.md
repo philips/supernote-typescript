@@ -116,6 +116,16 @@ This corrects the earlier conclusion of `textbox-bdom-spike.md` for this
 firmware. The older `textbox-n5-20260016-digest.note` genuinely has no
 text-box records, and on current firmware they exist.
 
+## PNG layers: background only (tested, Chauvet 2610)
+
+Custom page templates store a PNG in BGLAYER, even though the layer
+header says `RATTA_RLE`. I tried the same in MAINLAYER, using a 2-bit
+palette PNG that is about 3.7× smaller than the RLE. I tried it both under
+the `RATTA_RLE` label and under `LAYERPROTOCOL:PNG`. Both pages render as
+horizontal garbage: the device decodes MAINLAYER as Ratta RLE whatever the
+header says. Shrinking a note in transit is therefore done by gzipping the
+payload, not by changing the file format.
+
 ## Known gaps / next steps
 
 - **Text layout vs the device.** The device wraps slightly earlier than our
